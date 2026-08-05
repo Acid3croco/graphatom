@@ -133,6 +133,25 @@
 </section>
 
 <section>
+  <h2>Les six blocs livrés</h2>
+  <p>Un bloc est du code qui implémente l'interface d'exécution du noyau ; le catalogue est ouvert. Six blocs sont livrés, et couvrent l'essentiel :</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Bloc</th><th>Ce qu'il fait</th><th>Ce qu'il n'a pas le droit de faire</th></tr></thead>
+      <tbody>
+        <tr><td><strong>FETCH</strong></td><td>lit le monde extérieur, matérialise des preuves (logs, pages, diffs) sur l'item</td><td>modifier quoi que ce soit</td></tr>
+        <tr><td><strong>JUDGE</strong></td><td>appel modèle : lit le contenu, répond dans l'énuméré fermé de son schéma</td><td>modifier le contenu ; rejouable sans danger</td></tr>
+        <tr><td><strong>ACT</strong></td><td>appel modèle : travaille dans un workspace isolé, publie un checkpoint validé</td><td>toucher le monde extérieur ou son propre harnais (budgets, checks)</td></tr>
+        <tr><td><strong>CHECK</strong></td><td>vérification déterministe — tests, lint, règles — verdict <code>pass / fail</code></td><td>appeler un modèle ; c'est une porte, pas un avis</td></tr>
+        <tr><td><strong>EFFECT</strong></td><td>remet une intention à la passerelle : ouvrir une PR, déployer, notifier</td><td>agir lui-même ; seule la passerelle touche le monde</td></tr>
+        <tr><td><strong>WAIT</strong></td><td>attend une réponse humaine typée — responsable nommé, deadline obligatoire</td><td>poser une question ouverte ; l'expiration est une issue routée</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>La colonne de droite n'est pas une consigne : elle est appliquée par l'isolement et la passerelle. Un <code>ACT</code> ne <em>peut pas</em> déployer, même si son modèle le veut.</p>
+</section>
+
+<section>
   <h2>Un exemple complet</h2>
   <pre><code>graph supervision @rev 7c1f…            <span class="cm">— immuable, adressée par contenu</span>
   source      = failed_runs
