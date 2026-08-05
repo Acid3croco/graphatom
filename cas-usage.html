@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GraphAtom — le premier cas d'usage</title>
+<style>
+  :root {
+    --bg: #EDEFF1; --surface: #FBFCFC; --sunk: #E3E7EA;
+    --ink: #161C22; --muted: #59656F; --rule: #CBD3D9;
+    --accent: #2C3E8F; --hum: #96620F; --stop: #8E2F2F;
+    --display: ui-sans-serif, system-ui, "Segoe UI", Helvetica, Arial, sans-serif;
+    --body: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12171B; --surface: #1A2026; --sunk: #161B20;
+      --ink: #DFE5EA; --muted: #8C99A4; --rule: #2E3841;
+      --accent: #93A6F2; --hum: #DCA847; --stop: #DE8585;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: var(--body); font-size: 17px; line-height: 1.62;
+    margin: 0; padding: 0 1.25rem 6rem; -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 54rem; margin: 0 auto; display: flex; flex-direction: column; gap: 3rem; }
+  header.masthead { padding: 4rem 0 0; display: flex; flex-direction: column; gap: 1rem; }
+  .eyebrow { font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+  h1 {
+    font-family: var(--display); font-size: clamp(1.9rem, 4.4vw, 2.9rem);
+    line-height: 1.1; font-weight: 640; letter-spacing: -0.022em; margin: 0; text-wrap: balance;
+  }
+  .standfirst { font-size: 1.1rem; color: var(--muted); max-width: 42rem; margin: 0; }
+  section { display: flex; flex-direction: column; gap: 1.1rem; }
+  h2 {
+    font-family: var(--display); font-size: 1.42rem; font-weight: 620;
+    letter-spacing: -0.014em; margin: 0; padding-bottom: 0.6rem;
+    border-bottom: 1.5px solid var(--rule); text-wrap: balance;
+  }
+  p { margin: 0; max-width: 42rem; }
+  a { color: var(--accent); }
+  code { font-family: var(--mono); font-size: 0.86em; background: var(--sunk); padding: 0.1em 0.36em; border-radius: 3px; }
+  strong { font-weight: 700; }
+  ul.plain { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.5rem; max-width: 42rem; }
+  .tablewrap { overflow-x: auto; border: 1.5px solid var(--rule); border-radius: 4px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 0.775rem; min-width: 38rem; }
+  th {
+    text-align: left; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+    font-size: 0.68rem; color: var(--muted); padding: 0.72rem 0.85rem;
+    border-bottom: 1.5px solid var(--rule); white-space: nowrap;
+  }
+  td { padding: 0.62rem 0.85rem; border-bottom: 1px solid var(--rule); vertical-align: top; line-height: 1.45; }
+  tr:last-child td { border-bottom: none; }
+  .callout { border-left: 3px solid var(--accent); background: var(--surface); padding: 1rem 1.15rem; border-radius: 0 4px 4px 0; }
+  .callout p { max-width: none; }
+  .callout p + p { margin-top: 0.7rem; }
+  .callout .tag {
+    font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 0.4rem;
+  }
+  .callout.warn { border-left-color: var(--stop); }
+  .callout.warn .tag { color: var(--stop); }
+  .axiom {
+    font-family: var(--display); font-size: 1.24rem; font-weight: 620;
+    letter-spacing: -0.012em; line-height: 1.35; text-wrap: balance;
+    border-top: 1.5px solid var(--rule); border-bottom: 1.5px solid var(--rule);
+    padding: 1.25rem 0; margin: 0.4rem 0; max-width: 40rem;
+  }
+  footer { border-top: 1.5px solid var(--rule); padding-top: 1.4rem; font-family: var(--mono); font-size: 0.74rem; color: var(--muted); }
+  @media (max-width: 600px) { body { font-size: 16px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="masthead">
+  <div class="eyebrow">GraphAtom · cas d'usage pilote</div>
+  <h1>D'une carte Notion à la prod</h1>
+  <p class="standfirst">Le cas d'usage qui pilote GraphAtom : une tâche écrite dans un board Notion traverse le rail jusqu'au déploiement, et chaque statut de la carte reflète la réalité — jamais l'inverse. C'est ce scénario qui décide de tout : quels blocs existent, à quoi ressemble une question, et ce que « fini » veut dire.</p>
+</header>
+
+<section>
+  <h2>L'histoire heureuse</h2>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>#</th><th>Qui</th><th>Ce qui se passe</th><th>La carte Notion affiche</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>toi</td><td>tu écris une carte : cible, comportement actuel, comportement voulu, comment vérifier</td><td>Backlog</td></tr>
+        <tr><td>2</td><td>le rail</td><td>il admet la carte — ou te la renvoie avec un gabarit à trous précis, pas un « peux-tu préciser ? »</td><td>Admitted / Needs&nbsp;info</td></tr>
+        <tr><td>3</td><td>un agent</td><td>il produit le changement dans un espace isolé, vérifié par les checks avant d'aller plus loin</td><td>In&nbsp;progress</td></tr>
+        <tr><td>4</td><td>le rail</td><td>il ouvre la PR GitHub — c'est la PR qui fait foi, la carte n'est qu'un reflet</td><td>In&nbsp;review</td></tr>
+        <tr><td>5</td><td>toi</td><td>tu review sur GitHub, comme d'habitude — approve ou request changes</td><td>In&nbsp;review</td></tr>
+        <tr><td>6</td><td>le rail</td><td>merge ; Coolify déploie le commit ; le rail attend le verdict du déploiement — pas un « ça devrait être bon »</td><td>Deploying</td></tr>
+        <tr><td>7</td><td>le rail</td><td>il observe la prod, rejoue la vérification écrite à l'étape 1, puis ferme</td><td>Done</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Toi, tu fais trois choses : écrire la carte, répondre aux questions, review la PR. Tout le reste est le rail — et chaque passage d'étape est une porte enregistrée : qui a décidé quoi, sur quelles preuves, quand.</p>
+</section>
+
+<section>
+  <h2>Quand ça ne se passe pas comme prévu</h2>
+  <p>C'est là que le rail se distingue d'un script. Quatre scénarios, tous vécus d'avance :</p>
+  <ul class="plain">
+    <li><strong>La review dort trois jours.</strong> L'attente a une deadline. À l'expiration, la carte revient avec une question fermée — « on abandonne, on relance, ou tu review maintenant ? » — pas un ping vague qui redort trois jours.</li>
+    <li><strong>Coolify ne répond plus pendant le déploiement.</strong> Le rail ne devine pas. L'état devient « incertain », il vérifie ce que la prod dit vraiment, et si c'est indécidable, il te demande de constater — ta réponse est enregistrée comme une décision, avec ton nom.</li>
+    <li><strong>Le monde a bougé pendant l'attente.</strong> Quelqu'un a mergé autre chose entre la décision et le déploiement ? Le rail re-vérifie ses hypothèses avant d'agir. Une décision prise lundi ne s'exécute jamais aveuglément vendredi.</li>
+    <li><strong>La tâche tourne en rond.</strong> Chaque relance consomme un budget fini que rien ne régénère. Épuisé : clôture explicite, avec la trajectoire complète pour comprendre. Et rouvrir la même tâche n'offre pas un budget neuf.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Les règles du jeu</h2>
+  <ul class="plain">
+    <li><strong>La carte ne commande pas, elle reflète.</strong> Déplacer une carte à la main ne déclenche rien et ne trompe personne : la vérité vit dans le rail, la carte est une projection.</li>
+    <li><strong>La review se fait où elle a toujours eu lieu</strong> — sur GitHub. Le rail ne réinvente pas ton outil de review, il l'attend.</li>
+    <li><strong>Jamais de question ouverte.</strong> Toute question du rail est fermée, avec des options — parce qu'une question ouverte dort trois semaines et qu'un choix se fait en cinq secondes.</li>
+    <li><strong>Toute intervention manuelle est une décision signée.</strong> Débloquer, constater, abandonner : des verbes officiels, tracés. Rien ne se règle « à la main » en douce.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Ce que « ça marche » veut dire</h2>
+  <div class="callout">
+    <span class="tag">Critères de succès — figés avant de construire</span>
+    <p><strong>1.</strong> Une tâche réelle traverse de bout en bout sans autre intervention que les trois prévues (écrire, répondre, review).</p>
+    <p><strong>2.</strong> Zéro correction hors des verbes officiels : si un incident exige de toucher l'état autrement, c'est un échec du modèle, pas un dépannage.</p>
+    <p><strong>3.</strong> Chaque statut Notion est exact à tout moment — on doit pouvoir faire confiance au board sans jamais vérifier derrière.</p>
+    <p><strong>4.</strong> Quand quelque chose d'anormal arrive, la trajectoire enregistrée suffit à comprendre <em>quoi</em> et <em>pourquoi</em> — sans archéologie.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Ce que ce cas ne couvre pas</h2>
+  <p>Assumé et volontaire : une seule personne (toi) à toutes les portes humaines ; un seul repo cible à la fois ; pas d'orchestration multi-tâches coordonnées ; pas d'auto-amélioration. Chaque extension viendra quand ce scénario tournera pour de vrai — pas avant.</p>
+</section>
+
+<div class="axiom">Trois gestes humains — écrire, répondre, review. Tout le reste est le rail, et tout le rail se voit.</div>
+
+<footer>
+  <a href="index.html">← le noyau</a> · cas d'usage pilote : Notion → PR → déploiement
+</footer>
+
+</div>
+</body>
+</html>
