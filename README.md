@@ -24,6 +24,24 @@ L'idée : des portes successives dont l'exécution est certaine — du code atom
 
 Hors noyau, en modules : EVAL, ADMIT, dialogue durable, gouverneur de flotte.
 
+## Lancer le squelette (milestone 1)
+
+```sh
+docker run -d --name graphatom-pg -e POSTGRES_PASSWORD=graphatom \
+  -e POSTGRES_USER=graphatom -e POSTGRES_DB=graphatom \
+  -p 127.0.0.1:54321:5432 postgres:17
+
+uv run graphatom init-db
+uv run graphatom publish examples/supervision.json   # → révision
+uv run graphatom admit <révision> "pipeline-x:oom"
+uv run graphatom run                                 # l'ordonnanceur
+uv run graphatom journal 1                           # la trajectoire
+uv run graphatom questions && uv run graphatom answer 1 retry
+
+uv run python tests/crash_test.py                    # le critère du milestone :
+                                                     # SIGKILL en plein vol = cas nominal
+```
+
 ## Ce qu'on ne fera jamais
 
 Périmètre négatif, assumé — ces refus *sont* le design :
