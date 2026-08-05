@@ -1,0 +1,779 @@
+<!doctype html><html><head><!-- frame-runtime --><script>window.__FRAME_PREAMBLE={"capabilities":{"db":"db.CfOZ1CRq.js","downloads":"downloads.BXsoAvg9.js","mcp":"mcp.CjxgyTlr.js","permissions":"permissions.DdITF2Mk.js","self":"self.DtZoNC4q.js","user":"user.Cr_h1ETf.js"},"transforms":"_transforms.VaITkagF.js","comments":"_comments.XY398Yit.js","translate":"_translate.BOzFH2D9.js"}</script><script>(function(){"use strict";var re=["light","dark","system"];function ne(e){if(e===null||typeof e!="object")return!1;const t=e.__frame_init;return t!==null&&typeof t=="object"}function Y(e){return e!==null&&typeof e=="object"&&e.__frame_size_poke===!0}function se(e){if(e===null||typeof e!="object")return!1;const t=e.__frame_theme;if(t===null||typeof t!="object")return!1;const r=t.theme;return typeof r=="string"&&re.includes(r)}function oe(e){try{typeof reportError=="function"?reportError(e):setTimeout(()=>{throw e},0)}catch{}}var K=Object.freeze(Object.assign(Object.create(null),{user:Object.freeze(Object.assign(Object.create(null),{id:null,isOwner:!1,canEdit:!1,name:null,avatarUrl:null,email:null}))}));function x(e){if(window===top||e.type==="auxclick"&&e.button!==1)return;const t=e.composedPath?e.composedPath():[e.target];let r=null;for(let f=0;f<t.length;f++){const a=t[f];if(a&&a.matches&&a.matches("a[href],area[href]")){r=a;break}}if(!r&&e.target&&e.target.closest&&(r=e.target.closest("a[href],area[href]")),!r)return;const c=r.getAttribute("href");if(!c)return;let i,s;try{i=new URL(c,document.baseURI),s=new URL(document.baseURI).origin}catch{return}(i.protocol==="http:"||i.protocol==="https:")&&i.origin!==s&&(e.preventDefault(),parent.postMessage({__frame_nav:!0,url:i.href},"*"))}var J={};function I(e){if(window===top)return;const t=Date.now();t-(J[e]||0)<500||(J[e]=t,parent.postMessage({__frame_engaged:!0,kind:e},"*"))}var ie=2e3,G=["wheel","touchstart","touchmove","keydown","pointerdown"],X=0;function ae(e){e.isTrusted&&(X=Date.now())}function ce(){addEventListener("click",x,!0),addEventListener("auxclick",x,!0)}function le(){for(let e=0;e<G.length;e++)addEventListener(G[e],ae,{capture:!0,passive:!0});addEventListener("scroll",e=>{e.isTrusted&&Date.now()-X<ie&&I("scroll")},{capture:!0,passive:!0}),addEventListener("pointermove",e=>{e.isTrusted&&I("pointer")},{capture:!0,passive:!0}),addEventListener("click",e=>{e.isTrusted&&I("click")},{capture:!0,passive:!0})}var D="__frame_scroll",ue=150,fe=310,de=160,pe=3e4;function me(){let e=0,t=!1,r=!1,c=!1,i=0;const s=p=>{try{sessionStorage.setItem(D,JSON.stringify({y:p}))}catch{}},f=()=>{if(t){t=!1;return}r=!0,clearTimeout(e),e=setTimeout(()=>s(scrollY),ue)};try{addEventListener("scroll",f,{passive:!0}),addEventListener("pagehide",()=>{clearTimeout(e),s(scrollY)})}catch{}const a=()=>{let p;try{p=sessionStorage.getItem(D)}catch{return null}if(p===null)return null;let h;try{h=JSON.parse(p)}catch{h=null}const u=h?.y;if(!(typeof u=="number"&&Number.isFinite(u)&&u>=0)){try{sessionStorage.removeItem(D)}catch{}return null}return u};let _=!1;const y=p=>{try{const h=scrollY;scrollTo({top:p,left:0,behavior:"instant"}),i=p,c=!0,s(p);const u=scrollY;u!==h&&(t=!0),u!==p&&!_&&(_=!0,addEventListener("load",()=>{try{if(scrollY===u){const g=a();y(g!==null?g:i)}}catch{}},{once:!0}))}catch{}},o=()=>{try{return!!location.hash}catch{return!0}};let l=!1;const d=()=>{try{if(l||innerWidth>fe||innerHeight>de)return;l=!0;const p=Date.now(),h=()=>{try{removeEventListener("resize",h)}catch{}if(Date.now()-p>pe||r||o())return;const u=a();y(u!==null?u:i)};addEventListener("resize",h)}catch{}};let m=!1,v=!1;return{restore(){if(m||(m=!0,o()))return;const p=a();p!==null&&(y(p),d())},promoted(){if(v||(v=!0,o()))return;const p=a();p!==null?(y(p),d()):c&&y(i)}}}function he(e,t,r){const c=[...t.values()].filter(i=>i.targets.some(s=>s.startsWith(e+".")));return{wrap(i,s){const f=`${e}.${i}`,a=c.filter(_=>_.targets.includes(f));return a.length===0?(..._)=>{try{return s(..._)}catch(y){return Promise.reject(y)}}:(..._)=>{let y=_;for(const l of a){const d=l.module.parameters;if(d)try{y=d(y)}catch{return Promise.reject({code:"transform_error",id:l.id,scope:e,message:"parameters transform failed"})}}let o;try{o=s(...y)}catch(l){o=Promise.reject(l)}return o.then(l=>{for(let d=a.length-1;d>=0;d--){const m=a[d],v=m.module.returns;if(v)try{l=v(l)}catch{return r({id:m.id,scope:e,leg:"returns"}),l}}return l},l=>{for(let d=a.length-1;d>=0;d--){const m=a[d],v=m.module.throws;if(v)try{l=v(l)}catch{return r({id:m.id,scope:e,leg:"throws"}),Promise.reject(l)}}return Promise.reject(l)})}}}}function ge(e,t,r,c=()=>{}){const i=new Set(e.changes??[]),s=new Map;for(const f of i){const a=t[f];a&&s.set(f,a)}return{contract:e.contract,changes:i,flags:new Set(e.flags??[]),capabilities:e.capabilities??{},capBudgets:e.capBudgets??{},transforms:s,shellOrigin:r.shellOrigin,mount:r.mount,pipe:f=>he(f,s,c)}}var we="modulepreload",Oe=function(e){return"/"+e},Se={},ve=function(t,r,c){let i=Promise.resolve();function s(f){const a=new Event("vite:preloadError",{cancelable:!0});if(a.payload=f,window.dispatchEvent(a),!a.defaultPrevented)throw f}return i.then(f=>{for(const a of f||[])a.status==="rejected"&&s(a.reason);return t().catch(s)})};(function(){const e=Object.defineProperty,t=globalThis,r=["RTCPeerConnection","webkitRTCPeerConnection","RTCDataChannel","RTCIceCandidate","RTCSessionDescription","RTCRtpSender","RTCRtpReceiver"];let c=0;for(let i=0;i<r.length;i++){const s=r[i];try{e(t,s,{value:void 0,writable:!1,configurable:!1})}catch{try{delete t[s]}catch{}try{e(t,s,{value:void 0,writable:!1,configurable:!0})}catch{}}typeof t[s]=="function"&&c++}if(c&&window!==top)try{parent.postMessage({__frame_rtc_lockdown_failed:c},"*")}catch{}})();var _e=1e4,ye=Object.freeze([...window.__FRAME_PREAMBLE?.origins??["https://claude.ai","https://preview.claude.ai"]]);function Q(e){for(const t of ye)if(t.endsWith(":*"))try{const r=new URL(e);if(`${r.protocol}//${r.hostname}:*`===t)return!0}catch{}else if(e===t)return!0;return!1}var k=Object.freeze({...window.__FRAME_PREAMBLE?.capabilities}),q=window.__FRAME_PREAMBLE?.transforms,z=window.__FRAME_PREAMBLE?.comments,$=window.__FRAME_PREAMBLE?.translate,N=/^[\w.-]+\.js$/,be=/^[a-z][a-z0-9_-]{0,63}$/,V=null,M=null;function B(e,t,r){try{Object.defineProperty(e,t,{value:r,writable:!1,configurable:!1,enumerable:!0})}catch{try{Object.defineProperty(e,t,{value:r,writable:!1,configurable:!0,enumerable:!0})}catch{}}}var F=!1;function Z(e){const t=document.documentElement;e==="light"||e==="dark"?(t.dataset.theme=e,t.style.colorScheme=e,F=!0):F&&(delete t.dataset.theme,t.style.colorScheme="",F=!1)}var ee=256,R=Object.assign(Object.create(null),{mcp:Object.assign(Object.create(null),{watchTool:{handlerArg:3}})}),L=new Map;function te(e,t){const r=L.get(e);if(!r)return;const c=Object.assign(Object.create(null),t);Object.assign(r.impl,c),r.impl.__settled=()=>Promise.reject({code:"capability_removed",message:`${e}: method not in this runtime`});const i=r.queue;r.queue=[];for(const s of i){const f=c[s.method];if(f)if(R[e]?.[s.method])try{s.resolve(f(...s.args))}catch{T(s,R[e][s.method].handlerArg,{code:"transform_error",message:`${e}.${s.method} rejected its arguments`})}else f(...s.args).then(s.resolve,s.reject);else{const a={code:"capability_removed",message:`${e}.${s.method} is not in this runtime`},_=R[e]?.[s.method];if(_){T(s,_.handlerArg,a);continue}s.reject(a)}}}function Ee(e,t){const r=L.get(e);if(!r)return;r.impl.__settled=()=>Promise.reject(t);const c=r.queue;r.queue=[];for(const i of c){const s=R[e]?.[i.method];if(s){T(i,s.handlerArg,t);continue}i.reject(t)}}function C(e,t){const r=K[e];if(!r){Ee(e,t);return}te(e,Object.fromEntries(Object.entries(r).map(([c,i])=>[c,()=>Promise.resolve(i)])))}function T(e,t,r){if(e.syncState?.dead)return;const c=e.args[t];typeof c=="function"&&queueMicrotask(()=>{if(!e.syncState?.dead)try{c({type:"error",error:r})}catch(i){oe(i)}})}var H=Object.getOwnPropertyDescriptor(window,"claude");if(window!==top&&!(H&&H.writable===!1)){ce(),le();let e=null;try{e=me()}catch{}const t=H?.value??{};B(window,"claude",t);const r=o=>{const l={impl:Object.create(null),queue:[]};L.set(o,l);const d=l.impl,m=h=>({code:"queue_overflow",message:`${o}.${h}: pre-init call queue is full`}),v=(h,u)=>{if(l.queue.length>=ee){const g=K[o];return g&&h in g?Promise.resolve(g[h]):Promise.reject(m(h))}return new Promise((g,b)=>{l.queue.push({method:h,args:u,resolve:g,reject:b})})},p=new Proxy(d,{get:(h,u)=>{if(typeof u!="string"||u==="then"||u==="toJSON"||u==="valueOf")return;if(u==="toString")return Object.prototype.toString;const g=R[o]?.[u];return g?(...b)=>{if(typeof b[g.handlerArg]!="function")throw new TypeError(`${o}.${u} requires a handler function`);const S=d[u];if(S)return S(...b);if(d.__settled){const E={dead:!1},P={args:[...b],syncState:E};return d.__settled().catch(U=>T(P,g.handlerArg,U)),()=>{E.dead=!0}}if(l.queue.length>=ee){const E={dead:!1};return T({args:[...b],syncState:E},g.handlerArg,m(u)),()=>{E.dead=!0}}let w=null;const j={dead:!1};return l.queue.push({method:u,args:b,resolve:E=>{w=typeof E=="function"?E:null,j.dead&&w?.()},reject:()=>{},syncState:j}),()=>{j.dead=!0,w?.()}}:(...b)=>{const S=d[u]??d.__settled;return S?S(...b):v(u,b)}},set:()=>!1});B(t,o,p)};for(const o of Object.keys(k)){if(t[o]!==void 0){B(t,o,t[o]);continue}r(o)}let c=null,i=null,s=0;const f=o=>{o.source!==parent||!Q(o.origin)||ne(o.data)&&(c=o.data.__frame_init,M=o.origin,removeEventListener("message",f),clearTimeout(s),i?.())};addEventListener("message",f),parent.postMessage({__frame_connect:!0},"*");const a=new Promise(o=>{i=o,s=setTimeout(()=>{removeEventListener("message",f),o()},_e)}),_=document.readyState==="loading"?new Promise(o=>document.addEventListener("DOMContentLoaded",()=>o(),{once:!0})):Promise.resolve();_.then(()=>{try{e?.restore()}catch{}});const y=o=>{if(!(o.source!==parent||!Q(o.origin))&&Y(o.data)){removeEventListener("message",y);try{e?.promoted()}catch{}}};addEventListener("message",y),a.then(async()=>{if(!c||!M){for(const n of L.keys())C(n,{code:"not_granted",message:"frame initialization did not arrive - capability unavailable"});return}Z(c.theme);const o=M;let l=!1,d=!1;addEventListener("message",n=>{if(n.source!==parent||n.origin!==o)return;se(n.data)&&Z(n.data.__frame_theme.theme);const O=n.data?.__fc_mode;O&&typeof O=="object"&&!l&&z&&N.test(z)&&(l=!0,m(z).then(W=>W.install?.(o,O.on===!0)).catch(()=>{}));const A=n.data?.__ft_cmd;A&&typeof A=="object"&&!d&&$&&N.test($)&&(d=!0,m($).then(W=>W.install?.(o,A)).catch(()=>{}))});const m=n=>ve(()=>import("/_runtime/"+n),void 0),v=Object.keys(c.capabilities??{});for(const n of v)Object.hasOwn(k,n)||be.test(n)&&t[n]===void 0&&(r(n),C(n,{code:"capability_disabled",message:"capability not in this runtime generation"}));const p=v.filter(n=>Object.hasOwn(k,n)).map(n=>[n,k[n]]).filter(n=>typeof n[1]=="string"&&N.test(n[1])),[h,...u]=await Promise.allSettled([q&&N.test(q)?m(q):Promise.resolve({}),...p.map(([,n])=>m(n))]),g=M;V=ge(c,h.status==="fulfilled"&&h.value?.TRANSFORMS||{},{shellOrigin:g,mount:te},n=>parent.postMessage({__frame_cap_telemetry:n},g));const b=n=>parent.postMessage({__frame_cap_telemetry:{kind:"cap-load-error",cap:n}},g),S=V;u.forEach((n,O)=>{const A=p[O][0];if(n.status!=="fulfilled"){b(A);return}try{n.value?.install?.(S)}catch{b(A)}});for(const[n,O]of L)if(!(O.queue.length===0&&Object.keys(O.impl).length>0)){if(v.includes(n)){C(n,{code:"capability_disabled",message:"capability not available in this session"});continue}C(n,{code:"not_granted",message:"capability not available in this session"})}await _,parent.postMessage({__frame_ready:!0},M);let w=-1,j=0;const E=()=>{j=0;const n=Math.max(document.documentElement.scrollHeight,document.body?document.body.scrollHeight:0);n!==w&&(w=n,parent.postMessage({__frame_size:!0,h:n},g))},P=()=>{j||(j=setTimeout(E,200))},U=new ResizeObserver(P);U.observe(document.documentElement),document.body&&U.observe(document.body),document.addEventListener("load",P,!0),document.fonts?.ready.then(P,()=>{}),addEventListener("beforeprint",()=>{w=-1,E()}),P(),addEventListener("message",n=>{if(!(n.source!==parent||n.origin!==g)&&Y(n.data)){try{e?.promoted()}catch{}w=-1,P()}})})}})();</script><!-- /frame-runtime --><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{color-scheme:light}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}</style></head><body>
+<title>Graph runner — noyau, déclaration, transitions, reprise</title>
+
+<style>
+  :root {
+    --bg: #EDEFF1; --surface: #FBFCFC; --sunk: #E3E7EA;
+    --ink: #161C22; --muted: #59656F; --rule: #CBD3D9;
+    --accent: #2C3E8F; --det: #1B6B5E; --agt: #2C3E8F;
+    --hum: #96620F; --stop: #8E2F2F;
+    --det-bg: #DDEDE9; --agt-bg: #DEE3F6; --hum-bg: #F4E8CF; --stop-bg: #F3DDDD;
+
+    --display: ui-sans-serif, system-ui, "Segoe UI", Helvetica, Arial, sans-serif;
+    --body: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12171B; --surface: #1A2026; --sunk: #161B20;
+      --ink: #DFE5EA; --muted: #8C99A4; --rule: #2E3841;
+      --accent: #93A6F2; --det: #57C4B1; --agt: #93A6F2;
+      --hum: #DCA847; --stop: #DE8585;
+      --det-bg: #16302C; --agt-bg: #1D2440; --hum-bg: #322715; --stop-bg: #331D1D;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12171B; --surface: #1A2026; --sunk: #161B20;
+    --ink: #DFE5EA; --muted: #8C99A4; --rule: #2E3841;
+    --accent: #93A6F2; --det: #57C4B1; --agt: #93A6F2;
+    --hum: #DCA847; --stop: #DE8585;
+    --det-bg: #16302C; --agt-bg: #1D2440; --hum-bg: #322715; --stop-bg: #331D1D;
+  }
+  :root[data-theme="light"] {
+    --bg: #EDEFF1; --surface: #FBFCFC; --sunk: #E3E7EA;
+    --ink: #161C22; --muted: #59656F; --rule: #CBD3D9;
+    --accent: #2C3E8F; --det: #1B6B5E; --agt: #2C3E8F;
+    --hum: #96620F; --stop: #8E2F2F;
+    --det-bg: #DDEDE9; --agt-bg: #DEE3F6; --hum-bg: #F4E8CF; --stop-bg: #F3DDDD;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: var(--body); font-size: 17px; line-height: 1.62;
+    margin: 0; padding: 0 1.25rem 6rem; -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 54rem; margin: 0 auto; display: flex; flex-direction: column; gap: 3.25rem; }
+  header.masthead { padding: 4rem 0 0; display: flex; flex-direction: column; gap: 1rem; }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: 0.7rem;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted);
+  }
+
+  h1 {
+    font-family: var(--display); font-size: clamp(1.9rem, 4.4vw, 2.9rem);
+    line-height: 1.1; font-weight: 640; letter-spacing: -0.022em; margin: 0; text-wrap: balance;
+  }
+
+  .standfirst { font-size: 1.1rem; color: var(--muted); max-width: 42rem; margin: 0; }
+
+  section { display: flex; flex-direction: column; gap: 1.15rem; }
+
+  h2 {
+    font-family: var(--display); font-size: 1.42rem; font-weight: 620;
+    letter-spacing: -0.014em; margin: 0; padding-bottom: 0.6rem;
+    border-bottom: 1.5px solid var(--rule); text-wrap: balance;
+  }
+
+  h3 {
+    font-family: var(--display); font-size: 1.02rem; font-weight: 620;
+    letter-spacing: -0.005em; margin: 0.6rem 0 0;
+  }
+
+  p { margin: 0; max-width: 42rem; }
+  a { color: var(--accent); }
+
+  code {
+    font-family: var(--mono); font-size: 0.86em;
+    background: var(--sunk); padding: 0.1em 0.36em; border-radius: 3px;
+  }
+
+  pre {
+    font-family: var(--mono); font-size: 0.775rem; line-height: 1.6;
+    background: var(--surface); border: 1.5px solid var(--rule);
+    border-radius: 4px; padding: 1rem 1.15rem; overflow-x: auto; margin: 0;
+  }
+  pre code { background: none; padding: 0; font-size: 1em; }
+  pre .cm { color: var(--muted); }
+  pre .hl { color: var(--stop); }
+
+  strong { font-weight: 700; }
+
+  ul.plain {
+    margin: 0; padding-left: 1.1rem;
+    display: flex; flex-direction: column; gap: 0.5rem; max-width: 42rem;
+  }
+
+  .figure {
+    background: var(--surface); border: 1.5px solid var(--rule);
+    border-radius: 4px; padding: 1.5rem 1rem; overflow-x: auto;
+  }
+  .figure svg { display: block; margin: 0 auto; min-width: 620px; }
+
+  .caption {
+    font-family: var(--mono); font-size: 0.72rem; color: var(--muted);
+    letter-spacing: 0.03em; margin-top: 0.9rem; text-align: center;
+  }
+
+  .n-small { font-family: var(--display); font-size: 11px; font-weight: 620; fill: var(--ink); }
+  .n-label { font-family: var(--display); font-size: 13px; font-weight: 620; fill: var(--ink); }
+  .n-kind  { font-family: var(--mono); font-size: 9px; letter-spacing: 0.08em; }
+  .e-label { font-family: var(--mono); font-size: 9.5px; fill: var(--muted); }
+  .flow    { stroke: var(--muted); stroke-width: 1.4; fill: none; }
+  .flow-back { stroke: var(--stop); stroke-width: 1.4; fill: none; stroke-dasharray: 4 3; }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 0.5rem 1.35rem;
+    font-family: var(--mono); font-size: 0.72rem; color: var(--muted);
+    justify-content: center; margin-top: 1.1rem;
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 0.42rem; }
+  .swatch { width: 11px; height: 11px; border-radius: 2px; border: 1.4px solid; display: inline-block; }
+
+  .tablewrap { overflow-x: auto; border: 1.5px solid var(--rule); border-radius: 4px; background: var(--surface); }
+
+  table {
+    border-collapse: collapse; width: 100%;
+    font-family: var(--mono); font-size: 0.775rem; min-width: 42rem;
+  }
+  table.tight { min-width: 32rem; }
+
+  th {
+    text-align: left; font-weight: 600; letter-spacing: 0.04em;
+    text-transform: uppercase; font-size: 0.68rem; color: var(--muted);
+    padding: 0.72rem 0.85rem; border-bottom: 1.5px solid var(--rule); white-space: nowrap;
+  }
+
+  td {
+    padding: 0.62rem 0.85rem; border-bottom: 1px solid var(--rule);
+    vertical-align: top; line-height: 1.45;
+  }
+  tr:last-child td { border-bottom: none; }
+
+  .kind {
+    display: inline-block; font-size: 0.68rem; letter-spacing: 0.05em;
+    padding: 0.12em 0.5em; border-radius: 3px; border: 1.3px solid; white-space: nowrap;
+  }
+  .k-det { color: var(--det); border-color: var(--det); background: var(--det-bg); }
+  .k-agt { color: var(--agt); border-color: var(--agt); background: var(--agt-bg); }
+  .k-hum { color: var(--hum); border-color: var(--hum); background: var(--hum-bg); }
+  .k-stop { color: var(--stop); border-color: var(--stop); background: var(--stop-bg); }
+
+  .no { color: var(--stop); font-weight: 600; }
+  .dash { color: var(--muted); }
+
+  .callout {
+    border-left: 3px solid var(--accent); background: var(--surface);
+    padding: 1rem 1.15rem; border-radius: 0 4px 4px 0;
+  }
+  .callout p { max-width: none; }
+  .callout p + p { margin-top: 0.7rem; }
+  .callout .tag {
+    font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 0.4rem;
+  }
+  .callout.warn { border-left-color: var(--stop); }
+  .callout.warn .tag { color: var(--stop); }
+
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 1rem; }
+
+  .card {
+    background: var(--surface); border: 1.5px solid var(--rule); border-radius: 4px;
+    padding: 1.1rem 1.15rem; display: flex; flex-direction: column; gap: 0.55rem;
+  }
+  .card h4 {
+    font-family: var(--mono); font-size: 0.78rem; letter-spacing: 0.05em;
+    margin: 0; color: var(--accent);
+  }
+  .card p { font-size: 0.92rem; max-width: none; }
+
+  .axiom {
+    font-family: var(--display); font-size: 1.24rem; font-weight: 620;
+    letter-spacing: -0.012em; line-height: 1.35; text-wrap: balance;
+    border-top: 1.5px solid var(--rule); border-bottom: 1.5px solid var(--rule);
+    padding: 1.25rem 0; margin: 0.4rem 0; max-width: 40rem;
+  }
+
+  footer {
+    border-top: 1.5px solid var(--rule); padding-top: 1.4rem;
+    font-family: var(--mono); font-size: 0.74rem; color: var(--muted);
+  }
+
+  @media (max-width: 600px) { body { font-size: 16px; } }
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <div class="eyebrow">Note de conception</div>
+  <h1>Un noyau fermé, des graphs ouverts</h1>
+  <p class="standfirst">Une algèbre de capacités qu'on ne peut pas étendre, des blocs qu'on peut inventer librement, et les cinq mécanismes qui décident si l'ensemble tient : déclaration, transition, persistance, ordonnancement, reprise.</p>
+</header>
+
+<section>
+  <h2>Deux niveaux, deux régimes</h2>
+  <p>Concevoir un système d'agents en graph impose de séparer deux notions qu'on confond spontanément :</p>
+  <ul class="plain">
+    <li><strong>Ce qu'un nœud a le droit de faire</strong> — lire, écrire, sortir vers l'extérieur, produire un effet, suspendre. C'est le modèle de sécurité et de reprise sur panne.</li>
+    <li><strong>Ce à quoi un nœud sert</strong> — trier, produire, relire, diagnostiquer, évaluer.</li>
+  </ul>
+  <p>Le premier doit rester fermé. Le second doit être ouvert.</p>
+
+  <div class="axiom">On peut inventer autant de blocs qu'on veut. On ne peut pas inventer une capacité.</div>
+
+  <pre><code>capability := (
+    reads     ∈ { ∅, local, external }
+    writes    ∈ { ∅, evidence, workspace, external }
+    model     ∈ { ∅, judge, act }        <span class="cm">— ∅ ⇒ sans modèle ; pas « déterministe » :</span>
+                                         <span class="cm">  FETCH et PROBE restent non déterministes</span>
+    suspends  ∈ { no, yes }
+)
+
+block := name × capability × input_ports × output_schema</code></pre>
+
+  <div class="callout warn">
+    <span class="tag">Ce que la vérification statique prouve, et ce qu'elle ne prouve pas</span>
+    <p>Une déclaration peut <em>restreindre</em> la capacité de son preset, jamais l'élargir, et c'est vérifiable avant exécution. Mais cela prouve seulement qu'<strong>une déclaration ne peut pas demander plus d'autorité que son preset</strong> — pas que le bloc n'en exercera pas davantage. Un bloc peut écrire à travers un lien symbolique, appeler un service qui écrit pour lui, ou déléguer à un outil doté d'accès ambiant.</p>
+    <p>L'autorité réelle s'applique à l'exécution : refus par défaut, aucun accès ambiant, aucune information d'authentification dans l'environnement du bloc, chemins résolus avant ouverture, sous-processus contraints. La déclaration décrit l'intention ; l'isolement la fait respecter.</p>
+    <p>Et le tuple ne modélise pas les <strong>flux d'information</strong>. Un <code>JUDGE</code> sans droit d'effet choisit pourtant l'issue qui mène à <code>EFFECT</code> : il contrôle l'effet indirectement, et du contenu malveillant ramené par <code>FETCH</code> peut en faire un adjoint confus. La vérification doit donc porter aussi sur la <em>composition</em> du graph — quelle provenance peut influencer quel effet — et certains chemins doivent exiger un <code>CHECK</code> déterministe ou une approbation avant l'arête d'effet. Les tuples locaux ne suffisent pas.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Les particules élémentaires</h2>
+  <p>Les presets ne sont pas la base. En dessous, il y a cinq particules, définies non par leur usage mais par quatre critères : <strong>enveloppe d'autorité</strong>, <strong>point de commit</strong>, <strong>classification du crash en vol</strong>, <strong>comportement d'ordonnancement</strong>. Deux blocs qui partagent ces quatre propriétés sont la même particule ; ce qui les distingue encore — modèle ou code, canal API ou canal humain — est une <em>saveur</em>, pas un type.</p>
+
+  <div class="tablewrap">
+    <table class="tight">
+      <thead><tr><th>Particule</th><th>Signature</th><th>Crash en vol</th></tr></thead>
+      <tbody>
+        <tr><td><span class="kind k-det">IN</span></td><td>monde → preuves, contenu intact</td><td>capture publiée → réutiliser ; sinon réacquérir selon le protocole de la source</td></tr>
+        <tr><td><span class="kind k-agt">JUDGE</span></td><td>contenu → sortie, contenu intact</td><td>jeter le calcul, rejouer librement</td></tr>
+        <tr><td><span class="kind k-agt">MAKE</span></td><td>contenu → contenu′</td><td>quarantaine du workspace, repartir d'une base validée</td></tr>
+        <tr><td><span class="kind k-stop">OUT</span></td><td>intention → monde</td><td>réconcilier par clé logique ; « incertain » possible</td></tr>
+        <tr><td><span class="kind k-hum">AWAIT</span></td><td>souscription durable</td><td>restaurer la souscription ; reprendre sur signal ou échéance</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p><code>JUDGE</code> signifie « ne modifie pas le contenu » — pas « pur », ni « rejouable à résultat identique » : un appel modèle rejoué peut répondre autre chose. <code>AWAIT</code> a deux protocoles typés, pas deux types : <code>AWAIT.decision</code> (clé de décision, contrepartie autonome et non interrogeable, échéance métier) et <code>AWAIT.process</code> (référence durable <code>ProcessRef&lt;T&gt;</code> produite par un <code>OUT</code> ou adoptée par un <code>IN</code>, ensemble d'états terminaux connu, échéance d'observation). Pour un processus observé, trois événements distincts que la validation couvre séparément : le verdict déclaré par le processus lui-même — y compris son propre <code>timed_out</code> — est une issue <em>domaine</em> ; l'incapacité d'observer est une issue <em>infra</em>, retries bornés sans budget sémantique ; la <code>wall_deadline</code> tranche en dernier.</p>
+
+  <p>Tout le reste est molécule : <code>QUERY</code> = JUDGE à schéma factuel ; <code>CHECK</code> et <code>EVAL</code> = JUDGE en saveur déterministe ; <code>FETCH</code> et <code>PROBE</code> = IN ; <code>ACT</code> = MAKE ; et <code>ASK/WAIT</code> se décompose en trois particules — publier la question (souvent un OUT), <code>AWAIT.decision</code>, matérialiser la réponse (IN). L'API du moteur peut rester plus étroite encore — <code>RUN</code> (exécute IN, JUDGE, MAKE), <code>EFFECT</code>, <code>WAIT</code> — l'ontologie ci-dessus est celle de l'auteur de graphs, pas celle du runtime.</p>
+</section>
+
+<section>
+  <h2>Les forces d'interaction</h2>
+  <p>Les particules disent ce qu'un nœud <em>est</em>. Reste à dire comment un item touche ce qui n'est pas lui : le monde, les autres items, les gens, son propre passé. Une seule règle couvre tout :</p>
+
+  <div class="axiom">Pas d'action à distance. Rien ne traverse une frontière sans une claim déclarée d'avance, vérifiée au passage.</div>
+
+  <pre><code>claim := (
+    target        <span class="cm">— URI : notion://task/123 · github://repo/main · team://security · subject://deploy-x</span>
+    mode          ∈ { read, write, capacity, budget }
+    expected      <span class="cm">— version attendue (If-Match) ou quantité à tirer</span>
+    expires_at    <span class="cm">— fait d'un write un bail</span>
+    on_violation  <span class="cm">— une issue déclarée du nœud, jamais une exception</span>
+)</code></pre>
+
+  <p>Le noyau vérifie les claims dans la transition <code>apply()</code> qui existe déjà — et aux trois autres frontières déjà présentes : admission, publication du graph, réveil d'un <code>AWAIT</code>. Aucune nouvelle transition. Trois forces seulement, selon ce que la claim transporte :</p>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Force</th><th>Ce qui traverse</th><th>Loi de conservation</th><th>Violation</th></tr></thead>
+      <tbody>
+        <tr><td><span class="kind k-agt">épistémique</span></td><td>la preuve — source, version, date</td><td>on ne décide que sur des preuves enregistrées, et une preuve a une demi-vie</td><td><code>stale</code></td></tr>
+        <tr><td><span class="kind k-hum">économique</span></td><td>le mandat — émetteur, quantité, lignée, échéance</td><td>pas d'auto-frappe : droits et budgets sont émis de l'extérieur, jamais par celui qui les consomme</td><td><code>exhausted</code> <code>unbacked</code></td></tr>
+        <tr><td><span class="kind k-stop">causale</span></td><td>la clé fencée — clé logique, write_set, version attendue</td><td>une clé par cible, et aucune écriture hors journal, humaine comprise</td><td><code>conflict</code> <code>uncertain</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <ul class="plain">
+    <li><strong>Épistémique</strong> — un JUDGE décide lundi sur la tâche Notion v42 ; la revue dure jusqu'à vendredi ; au franchissement vers l'effet, Notion est en v45 → <code>stale</code>, on re-juge au lieu de déployer une décision périmée.</li>
+    <li><strong>Économique</strong> — l'agent qui a produit le travail ne s'accorde pas son propre retry : le retry est un tirage sur le budget de la <em>lignée</em> (<code>subject://…</code>), que la ré-admission après <code>close_unresolved</code> débite aussi. Et un graph qui réserve du temps de l'équipe sécurité sans mandat contresigné est refusé à la publication : <code>unbacked</code>.</li>
+    <li><strong>Causale</strong> — deux items déploient la même app : le second échoue en <code>conflict</code> au lieu de deux « applied ✓ » dont l'un a silencieusement écrasé l'autre. Et le join de contrebande — un IN qui lit la base du runner pour savoir si « les autres items sont finis » — est de la causalité déguisée en observation : source interdite à la validation.</li>
+  </ul>
+
+  <p>Chaque force a trois régimes, pas deux : la claim <strong>tient</strong> (le rail avance), elle <strong>casse</strong> (violation nommée, routée comme n'importe quelle arête), ou elle est <strong>indécise</strong> — ni tenue ni violée, l'impossibilité de conclure. La passerelle d'effets le disait déjà : <code>applied / rejected / uncertain</code>. L'indécis n'est levé que d'une façon : un <strong>constat d'opérateur</strong> — « j'ai vérifié la cible, voici son état » — enregistré comme événement causal journalisé, jamais un UPDATE direct. Le journal reste vrai précisément la nuit où on en a besoin.</p>
+
+  <div class="callout">
+    <span class="tag">Ce que les forces ne couvrent pas — trois annexes assumées</span>
+    <p><strong>La flotte.</strong> Une congestion ne viole la claim d'aucun item : le temps en file ne débite pas le budget (seul le temps d'exécution le fait), et le cliquet d'escalade — timeouts → escalades vers un étage plus lent → plus de timeouts — exige un gouverneur global : jitter sur les échéances, garde-fou sur le reaper.</p>
+    <p><strong>La mesure.</strong> Les claims <code>read</code> enregistrent gratuitement ce que chaque juge a vu — c'est le corpus qui permettra de distiller un JUDGE coûteux en CHECK gratuit — mais l'analyse (biais de routage, détecteur de tampon) n'est pas une interaction.</p>
+    <p><strong>Le couplage.</strong> Un ACT géant de deux heures respecte toutes les conservations : c'est de la matière noire — une particule qui ne se couple à rien. D'où un axiome de géométrie séparé : toute particule doit se coupler, mesuré par le plus long segment sans porte, publié par révision.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Les presets livrés</h2>
+  <p>Les presets sont des molécules livrées, pas des primitives. <code>JUDGE</code> et <code>QUERY</code> partagent leur tuple, <code>CHECK</code> et <code>EVAL</code> aussi : <strong>le tuple borne ce qu'un bloc peut faire, le schéma définit ce qu'il veut dire.</strong></p>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Preset</th><th>Lit</th><th>Écrit</th><th>Modèle</th><th>Sortie</th></tr></thead>
+      <tbody>
+        <tr><td><span class="kind k-det">FETCH</span></td><td>externe</td><td>preuves</td><td class="dash">∅</td><td>WorkItem + artefacts matérialisés</td></tr>
+        <tr><td><span class="kind k-agt">JUDGE</span></td><td>local</td><td class="no">∅</td><td>judge</td><td>décision, énuméré fermé</td></tr>
+        <tr><td><span class="kind k-agt">QUERY</span></td><td>local</td><td class="no">∅</td><td>judge</td><td>réponse factuelle · 1 tour, sans relance</td></tr>
+        <tr><td><span class="kind k-agt">ACT</span></td><td>local</td><td>workspace</td><td>act</td><td>point de contrôle validé + manifeste</td></tr>
+        <tr><td><span class="kind k-det">CHECK</span></td><td>local</td><td>preuves</td><td class="dash">∅</td><td>verdict binaire — <em>porte</em></td></tr>
+        <tr><td><span class="kind k-det">EVAL</span></td><td>local</td><td>preuves</td><td class="dash">∅</td><td>métrique vs référence — <em>mesure</em></td></tr>
+        <tr><td><span class="kind k-det">PROBE</span></td><td>externe</td><td>preuves</td><td class="dash">∅</td><td>observation du système vivant</td></tr>
+        <tr><td><span class="kind k-det">EFFECT</span></td><td class="dash">∅</td><td>externe</td><td class="dash">∅</td><td>intention remise à la passerelle</td></tr>
+        <tr><td><span class="kind k-hum">WAIT</span></td><td class="dash">∅</td><td class="no">∅</td><td class="dash">∅</td><td>réponse liée à une clé de décision</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>La colonne générique</h2>
+  <p>Un graph opère sur un <code>WorkItem</code> produit par une <code>Source</code>. À ce niveau d'abstraction, la même colonne accueille des domaines très différents.</p>
+
+  <div class="figure">
+    <svg viewBox="0 0 760 250" role="img" aria-label="Colonne générique : source, admit, diagnose, decide, act, verify, commit">
+      <defs>
+        <marker id="a1" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+          <path d="M0,0 L7,3 L0,6" fill="none" stroke="var(--muted)" stroke-width="1.4"/></marker>
+        <marker id="a2" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+          <path d="M0,0 L7,3 L0,6" fill="none" stroke="var(--stop)" stroke-width="1.4"/></marker>
+        <marker id="a3" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+          <path d="M0,0 L7,3 L0,6" fill="none" stroke="var(--hum)" stroke-width="1.4"/></marker>
+      </defs>
+
+      <rect x="6" y="58" width="96" height="44" rx="3" fill="var(--det-bg)" stroke="var(--det)" stroke-width="1.6"/>
+      <text class="n-small" x="20" y="78">SOURCE</text><text class="n-kind" x="20" y="92" fill="var(--det)">FETCH</text>
+      <rect x="116" y="58" width="96" height="44" rx="3" fill="var(--agt-bg)" stroke="var(--agt)" stroke-width="1.6"/>
+      <text class="n-small" x="130" y="78">ADMIT</text><text class="n-kind" x="130" y="92" fill="var(--agt)">JUDGE · dédup</text>
+      <rect x="226" y="58" width="96" height="44" rx="3" fill="var(--agt-bg)" stroke="var(--agt)" stroke-width="1.6"/>
+      <text class="n-small" x="240" y="78">DIAGNOSE</text><text class="n-kind" x="240" y="92" fill="var(--agt)">JUDGE</text>
+      <rect x="336" y="58" width="96" height="44" rx="3" fill="var(--agt-bg)" stroke="var(--agt)" stroke-width="1.6"/>
+      <text class="n-small" x="350" y="78">DECIDE</text><text class="n-kind" x="350" y="92" fill="var(--agt)">JUDGE · fermé</text>
+      <rect x="446" y="58" width="96" height="44" rx="3" fill="var(--agt-bg)" stroke="var(--agt)" stroke-width="1.6"/>
+      <text class="n-small" x="460" y="78">ACT</text><text class="n-kind" x="460" y="92" fill="var(--agt)">ACT</text>
+      <rect x="556" y="58" width="96" height="44" rx="3" fill="var(--det-bg)" stroke="var(--det)" stroke-width="1.6"/>
+      <text class="n-small" x="570" y="78">VERIFY</text><text class="n-kind" x="570" y="92" fill="var(--det)">CHECK · EVAL</text>
+      <rect x="666" y="58" width="90" height="44" rx="3" fill="var(--det-bg)" stroke="var(--det)" stroke-width="1.6"/>
+      <text class="n-small" x="680" y="78">COMMIT</text><text class="n-kind" x="680" y="92" fill="var(--det)">EFFECT</text>
+
+      <path class="flow" d="M102,80 L112,80" marker-end="url(#a1)"/>
+      <path class="flow" d="M212,80 L222,80" marker-end="url(#a1)"/>
+      <path class="flow" d="M322,80 L332,80" marker-end="url(#a1)"/>
+      <path class="flow" d="M432,80 L442,80" marker-end="url(#a1)"/>
+      <path class="flow" d="M542,80 L552,80" marker-end="url(#a1)"/>
+      <path class="flow" d="M652,80 L662,80" marker-end="url(#a1)"/>
+
+      <path class="flow-back" d="M604,102 L604,140 L494,140 L494,106" marker-end="url(#a2)"/>
+      <text class="e-label" x="504" y="154" fill="var(--stop)">escalade · consomme un budget non renouvelable</text>
+      <path class="flow-back" d="M164,102 L164,190" marker-end="url(#a2)"/>
+      <text class="e-label" x="24" y="196" fill="var(--stop)">déjà traité →</text>
+
+      <rect x="336" y="196" width="96" height="34" rx="17" fill="none" stroke="var(--hum)" stroke-width="1.6" stroke-dasharray="5 3"/>
+      <text class="n-small" x="350" y="217" fill="var(--hum)">WAIT</text>
+      <path class="flow" d="M384,102 L384,192" marker-end="url(#a3)" stroke="var(--hum)"/>
+      <text class="e-label" x="390" y="150" fill="var(--hum)">issue « escalader »</text>
+      <path class="flow" d="M700,102 L700,213 L438,213" marker-end="url(#a3)" stroke="var(--hum)"/>
+      <text class="e-label" x="560" y="228" fill="var(--hum)">revue humaine, si pas d'EVAL fiable</text>
+    </svg>
+    <div class="caption">Fig. 1 — La topologie ne change pas d'un domaine à l'autre. Ce qui change, c'est l'ensemble d'issues déclaré à DECIDE.</div>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Domaine</th><th>Source</th><th>WorkItem</th><th>Clé de sujet</th><th>Issues de DECIDE</th></tr></thead>
+      <tbody>
+        <tr><td>Travail dirigé</td><td>file de demandes</td><td>une demande</td><td>identifiant de demande</td><td><code>approve</code> <code>request_changes</code></td></tr>
+        <tr><td>Supervision</td><td>flux d'échecs</td><td>une exécution</td><td>empreinte d'échec</td><td><code>retry</code> <code>fix</code> <code>raise</code> <code>known</code></td></tr>
+        <tr><td>Recherche</td><td>file d'hypothèses</td><td>une hypothèse</td><td>signature d'expérience</td><td><code>promote</code> <code>discard</code> <code>inconclusive</code></td></tr>
+        <tr><td>Auto-amélioration</td><td>seuil sur métriques</td><td>un signal</td><td>signature du symptôme</td><td><code>promote</code> <code>discard</code> <code>escalate</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>1 · Le format de déclaration</h2>
+  <p>C'est ici que l'idée est réfutable : si un graph ne se déclare pas en données, la séparation noyau / userland est une fiction.</p>
+
+  <pre><code>graph supervision @revision 7c1f…          <span class="cm">— immuable, adressée par contenu</span>
+  work_item:
+    source      = failed_runs
+    subject_key = [pipeline, task, error_class]
+    budgets:
+      node_starts   = 12      <span class="cm">— monotones, jamais réinitialisés</span>
+      escalations   = 4
+      cost          = 40u
+      active_time   = 2h      <span class="cm">— ne court pas pendant un WAIT</span>
+      wall_deadline = 7d      <span class="cm">— court toujours</span>
+
+  node ingest   : FETCH { materialize: [logs, run_meta] }
+      out artifacts:bundle
+      ok → diagnose
+
+  node diagnose : JUDGE { schema: cause_v1 }
+      in  artifacts ← ingest.bundle
+      out cause
+      → decide
+
+  node decide   : JUDGE { schema: verdict_v1 }
+      in  cause ← diagnose.cause
+      retry → rerun     fix   → produce
+      raise → escalate  known → close
+
+  node produce  : ACT   { workspace: isolated, deny_write: [manifests] }
+      out checkpoint
+      ok → verify
+
+  node verify   : CHECK { manifest: pinned:checks@3 }
+      in  checkpoint ← produce.checkpoint
+      pass → commit
+      fail → escalate_ladder(produce)
+
+  node commit   : EFFECT { intent: open_change }
+      applied   → review            <span class="cm">— un effet est une barrière : on ne route</span>
+      uncertain → escalate          <span class="cm">  qu'après son issue, jamais avant</span>
+  node escalate : WAIT   { owner: oncall, deadline: 4h }
+      answered → decide
+      expired  → close_unresolved
+  node review   : WAIT   { owner: reviewer, deadline: 3d }
+      approved → close
+      changes  → escalate_ladder(produce)
+      expired  → close_unresolved
+  node close, close_unresolved : terminal
+
+  <span class="cm">— obligatoire pour tout nœud : la couverture des issues noyau</span>
+  on_kernel:
+    crashed, timed_out, invalid_result → escalate_ladder(self)
+    budget_exhausted                   → close_unresolved
+    cancelled, superseded              → terminal</code></pre>
+
+  <h3>Deux espaces d'issues, disjoints</h3>
+  <p>Un nœud échoue de deux façons sans rapport. Les <strong>issues du domaine</strong> viennent du schéma versionné — <code>retry</code>, <code>fix</code>, <code>promote</code>. Les <strong>issues du noyau</strong> sont mécaniques — <code>crashed</code>, <code>timed_out</code>, <code>invalid_result</code>, <code>budget_exhausted</code>, <code>cancelled</code>, <code>superseded</code>.</p>
+  <p>Les mélanger couple chaque schéma métier à la mécanique du moteur. Les omettre laisse le graph sans arête pour les pannes ordinaires — c'est-à-dire pour le cas le plus fréquent. D'où <code>on_kernel</code>, obligatoire, et une expiration de <code>WAIT</code> qui doit nommer sa transition.</p>
+
+  <h3>Validation statique</h3>
+  <ul class="plain">
+    <li>Chaque issue déclarée a exactement une arête ; l'ensemble des issues est <em>égal</em> à l'énuméré du schéma, ni plus ni moins.</li>
+    <li>Toutes les issues du noyau applicables sont couvertes.</li>
+    <li>Chaque liaison de port est explicite, typée, et référence un artefact immuable qualifié par la tentative — le jeton porte des références d'artefacts précises, résolues à l'exécution : après une escalade, « <code>produce.checkpoint</code> » sans tentative serait ambigu. Aucune convention du type « le dernier artefact produit ».</li>
+    <li>Aucun nœud inatteignable ; aucune arête vers un nœud non déclaré.</li>
+    <li>L'échelle d'escalade est <strong>développée</strong> avant analyse : on ne valide jamais un graph contenant une macro non expansée.</li>
+    <li>Une fois toutes les arêtes d'escalade retirées, le graph restant est acyclique.</li>
+  </ul>
+
+  <div class="callout warn">
+    <span class="tag">La règle acyclique ne suffit pas — contre-exemple</span>
+    <p>Soit <code>a → b</code> et <code>b →escalade→ a</code>. Tout cycle contient bien une arête d'escalade, et pourtant l'exécution <code>a, b, escalade, a, b, escalade…</code> ne termine jamais. La propriété graphique borne le nombre de transitions <em>entre</em> deux escalades ; elle ne dit rien du nombre d'escalades.</p>
+    <p>La terminaison ne devient démontrable qu'en ajoutant une condition d'exécution : <strong>toute traversée d'escalade décrémente atomiquement un budget fini et non renouvelable, porté par le WorkItem</strong> ; aucune transition ne peut l'augmenter ni le remplacer ; ni un replan, ni une migration de graph, ni l'entrée dans un sous-graph ne crée une nouvelle lignée de budget ; et l'épuisement a une transition terminale explicite. Graph fini + sous-graph non-escalade acyclique + budget monotone décroissant ⇒ terminaison <em>structurelle</em> — qui ne devient opérationnelle que sous trois hypothèses qu'il faut appliquer, pas supposer : chaque nœud termine ou est fauché, l'ordonnanceur est équitable, et toute attente — réconciliation et revue opérateur comprises — est bornée par une <code>wall_deadline</code> obligatoire et non renouvelable.</p>
+  </div>
+
+  <div class="callout">
+    <span class="tag">Ce que ce format est vraiment</span>
+    <p>Ce n'est pas un langage de workflow générique, et le prétendre serait malhonnête. Le comportement réel vit dans les sources, les presets, les schémas, les manifestes et les gestionnaires d'effets — tous du code. <strong>La déclaration est de la configuration au-dessus d'une interface de blocs typée.</strong></p>
+    <p>C'est défendable à une condition : rester délibérément étroit. Un câblage auditable, essentiellement séquentiel, au-dessus d'un catalogue de blocs petit et stable. Le jour où l'on ajoute des expressions, des variables et des conditions arbitraires, on aura un langage de programmation mal outillé — et un vrai petit programme typé aurait été supérieur dès le départ.</p>
+  </div>
+
+  <h3>Limites assumées</h3>
+  <p>Un <code>WorkItem</code> porte <strong>un seul jeton</strong>. Il n'y a ni fan-out dynamique, ni jointure, ni quorum, ni compensation transactionnelle, ni sous-graph paramétré. Le parallélisme s'obtient en admettant plusieurs <code>WorkItem</code>, pas en ramifiant à l'intérieur d'un seul. Ces primitives ne sont pas « à venir » — les ajouter changerait la nature du modèle, parce qu'un état unique ne peut pas représenter plusieurs prédécesseurs actifs.</p>
+</section>
+
+<section>
+  <h2>2 · La fonction de transition</h2>
+  <p>Une seule fonction transactionnelle, partagée par <em>toutes</em> les mutations : résultat de nœud, réponse humaine, échéance, annulation, admission, migration. Une mutation qui contourne cette fonction rend le journal faux.</p>
+
+  <pre><code>apply(run_id, submitted):
+  atomically:
+    run  ← load node_run[run_id] FOR UPDATE      <span class="cm">— l'identité vient de la ligne,</span>
+    item ← load work_item[run.item_id] FOR UPDATE <span class="cm">  jamais de l'appelant</span>
+
+    <span class="cm">— rejets : chacun est lui-même une transition durable</span>
+    if run.status ≠ running        → record(run, faulted);  return
+    if run.fence ≠ item.fence      → record(run, superseded); return
+    if run.expected_version ≠ item.version → record(run, stale); return
+    if item.lifecycle ≠ active     → record(run, cancelled);  return
+
+    outcome ← validate(submitted, run.pinned_schema)
+              or KERNEL(invalid_result)
+    edge ← TRANSITIONS[(<span class="hl">item.graph_revision</span>, item.state, run.node, outcome)]
+    if edge = ∅                    → record(run, faulted(unmapped));  return
+
+    <span class="cm">— gardes : prédicats purs, ordre total déclaré, une seule issue d'échec</span>
+    for g in edge.guards in declared_order:
+        if ¬g(item): edge ← TRANSITIONS[…, g.failure_outcome]; break
+
+    append_event(item, item.version + 1, edge, run_id)
+    item.state   ← edge.target
+    item.version ← item.version + 1
+    run.status   ← applied ; run.outcome ← outcome    <span class="cm">— immuable ensuite</span>
+    enqueue_intents(edge.effects)                      <span class="cm">— exécutés hors txn</span></code></pre>
+
+  <ul class="plain">
+    <li><strong>L'identité ne vient jamais de l'appelant.</strong> On charge <code>node_run</code> d'abord et on en dérive l'item, le nœud, la version attendue et le jeton. Sinon un résultat rejoué ou malformé choisit lui-même son arête.</li>
+    <li><strong>Un rejet est une transition.</strong> <code>stale</code>, <code>superseded</code>, <code>faulted</code> s'écrivent durablement. Sans ça, l'ordonnanceur revoit un run « en cours » et le reprend, le fauche, ou le mal-classe au redémarrage.</li>
+    <li><strong>Le jeton se compare par égalité</strong>, pas par « pas inférieur » — sinon une autorité future fabriquée est acceptée.</li>
+    <li><strong>La révision du graph est dans la clé de transition.</strong> Un résultat produit sous une révision ne doit jamais être interprété par une autre. La révision est épinglée sur l'item et sur le run à la réservation.</li>
+    <li><strong>Les gardes ont un ordre total déclaré</strong> et une seule issue d'échec, elle-même routée par la table. Sinon le résultat dépend de l'ordre d'un tableau.</li>
+  </ul>
+
+  <div class="callout warn">
+    <span class="tag">Le cloisonnement à l'application arrive trop tard</span>
+    <p>Rejeter un run périmé au moment de <code>apply</code> empêche une transition ; ça n'annule rien de ce qu'il a déjà fait. Un travailleur qui a perdu son bail mais continue de tourner peut encore modifier un espace partagé ou appeler un service.</p>
+    <p>Le cloisonnement doit donc s'appliquer <strong>à la ressource</strong>, pas seulement au journal : espace de travail isolé par tentative, entrées immuables, et toute action irréversible passée par la passerelle d'effets — laquelle vérifie le jeton au moment de muter.</p>
+    <p>Et même à la passerelle, la fenêtre ne se ferme pas entièrement : entre la vérification du jeton et l'émission du paquet, une annulation peut gagner, et un appel parti ne se rappelle pas. D'où un état <code>possibly_sent</code> explicite — passé ce point, annuler ne veut plus dire « empêcher » mais « attendre puis réconcilier ». L'autorité n'est strictement révocable que sur les ressources qui comprennent le jeton ; pour une API ordinaire, c'est une propriété de meilleur effort, et le dire est plus honnête que le promettre.</p>
+  </div>
+
+  <div class="callout warn">
+    <span class="tag">Le budget se réserve à la réservation, pas à l'application</span>
+    <p>Si l'on ne débite qu'au succès, un run coûteux dont le résultat arrive périmé n'est jamais facturé. Répété, cela contourne entièrement le budget d'escalade. Il faut réserver la tentative et le coût estimé <em>dans la transaction de réservation</em>, puis solder la consommation réelle à la fin du run — que sa transition soit acceptée ou non.</p>
+  </div>
+</section>
+
+<section>
+  <h2>3 · La persistance</h2>
+
+  <pre><code>graph_revision(id, name, content_hash, bundle, published_at)
+    <span class="cm">— immuable : déclaration + schémas + presets + manifestes + catalogue d'effets</span>
+
+subject(id, graph, subject_key, UNIQUE(graph, subject_key))
+work_item(id, subject_id, generation, graph_revision_id,
+          state, lifecycle, version, fence,
+          created_at, terminal_at, superseded_by,
+          UNIQUE(subject_id, generation))
+    lifecycle ∈ {active, cancel_requested, cancelled, completed, failed, superseded}
+
+node_run(id, item_id, node, attempt, escalation_state, status,
+         graph_revision_id, fence, expected_version,
+         claimed_by, lease_expires_at, last_progress_at,
+         outcome, result_ref, env_ref, checkpoint_ref,
+         UNIQUE(item_id, node, attempt))
+
+event(item_id, item_version, at, kind, from_state, to_state, run_id, payload_ref,
+      PRIMARY KEY(item_id, item_version))     <span class="cm">— ordre local, pas de séquence globale</span>
+
+effect(op_id, item_id, run_id, logical_key, key_scope, intent_hash,
+       intent_ref, observation, external_ref, lease, reconciled_at,
+       UNIQUE(key_scope_ref, logical_key))    <span class="cm">— voir encadré</span>
+    key_scope   ∈ {occurrence, subject, target}
+    observation ∈ {not_attempted, possibly_sent, rejected, applied, uncertain, compensated}
+
+target(uri, version, balance, controller)   <span class="cm">— version incrémentée par la passerelle à chaque</span>
+    <span class="cm">  applied ; balance pour capacité et lignée ; controller lu par le validateur</span>
+claim(id, item_id, node, target_uri, mode, expected_version, amount,
+      expires_at, on_violation)
+    mode ∈ {read, write, capacity, budget}
+
+decision(id, item_id, decision_key, UNIQUE(item_id, decision_key))
+question(id, decision_id, revision, text, options_ref, state, deadline, owner)
+answer(id, question_id, at, by, payload_ref, kind)
+    kind ∈ {full, partial, contradiction, withdrawal}
+
+failure(graph, fingerprint_algo, fingerprint, scope, count, first_at, last_at)
+baseline(graph_revision, metric_version, dataset_version, ref, promoted_at)
+ledger(id, item_id, run_id, kind, amount, unit, at)   <span class="cm">— débits immuables</span>
+artifact(id, content_key, sha256, bytes, media_type, retention_class)</code></pre>
+
+  <div class="callout warn">
+    <span class="tag">Identité de sujet ≠ déduplication d'admission</span>
+    <p>Une contrainte d'unicité sur la clé de sujet seule confond les deux. Une exécution qui échoue en janvier, qu'on répare, puis qui rééchoue en juin sur la même empreinte, entre en collision avec la ligne de janvier : soit le nouvel incident disparaît, soit il ressuscite des budgets, des questions et un historique périmés.</p>
+    <p>D'où la séparation : le <code>subject</code> est durable et unique ; le <code>work_item</code> est une <strong>occurrence</strong> numérotée de ce sujet. La déduplication est alors une politique explicite — « supprimer si une occurrence active existe », « supprimer dans une fenêtre de N jours » — et non un effet de bord d'un index.</p>
+  </div>
+
+  <div class="callout warn">
+    <span class="tag">Une clé d'effet stable, pas un identifiant par tentative</span>
+    <p>Un identifiant d'opération généré à chaque transaction est individuellement idempotent et collectivement inutile : après un replan, la même action logique reçoit un nouvel identifiant et s'exécute deux fois. On ouvre deux changements pour un seul besoin.</p>
+    <p>La clé doit être dérivée de <strong>l'action logique voulue</strong> — sujet, intention, cible — et unique dans son périmètre. L'état enregistré doit décrire le monde (<code>applied</code>, <code>uncertain</code>), pas l'exécuteur (<code>executing</code>). « Inconnu » est un état de première classe, pas une valeur par défaut.</p>
+    <p>Le périmètre de la clé est <strong>déclaré</strong> — occurrence, sujet ou cible — jamais implicite : une clé au périmètre de l'occurrence ne dédupliquera pas deux occurrences du même sujet, ce qui est parfois voulu et parfois une faute. Et réutiliser une clé avec une intention différente est une faute dure — d'où le hachage canonique de l'intention enregistré à côté de la clé.</p>
+  </div>
+
+  <ul class="plain">
+    <li><strong>Le journal d'événements n'est pas un corpus de rejeu.</strong> Il le devient seulement s'il épingle la révision de graph, les entrées, les versions de schéma et de producteur. Et les deux usages divergent ensuite : l'audit veut la complétude et la rétention, le corpus veut la curation et l'expurgation. Un seul entrepôt canonique, un corpus dérivé versionné qui référence ses sources.</li>
+    <li><strong>Rien de volumineux dans la base.</strong> Les résultats de modèle, journaux, invites et diffs vivent dans un magasin adressé par contenu ; la base garde des résumés typés, des hachages et des tailles. Un chemin local n'est pas une référence durable : un autre travailleur ne peut pas le lire et le nettoyage l'invalide.</li>
+    <li><strong>Les compteurs sont des projections.</strong> Tentatives et coûts se dérivent d'un registre de débits immuables. Un compteur dénormalisé finit toujours par diverger des lignes qu'il résume.</li>
+    <li><strong>Le registre de champion se met à jour par comparaison-et-échange</strong>, et sa clé inclut la version de la métrique et celle du jeu de données. Deux mesures ne sont comparables que si l'évaluateur et les données le sont.</li>
+    <li><strong>L'empreinte d'échec porte sa version d'algorithme</strong> et un périmètre. Le périmètre inter-items est celui qui compte : c'est ce qui permet de reconnaître qu'un même symptôme génère en boucle des sujets distincts.</li>
+  </ul>
+
+  <p><strong>Hors périmètre, assumé :</strong> pas de cloisonnement multi-organisation. Si le besoin apparaît, c'est une clé de partition sur chaque enregistrement racine et dans chaque contrainte d'unicité — une décision structurelle, pas un ajout.</p>
+</section>
+
+<section>
+  <h2>4 · L'ordonnancement</h2>
+  <p>Le réflexe d'un unique verrou de tour, avec « réconcilier d'abord, toujours », transforme une sauvegarde comptable en panne totale : un fournisseur qui pend, et plus rien ne se réserve, ne s'échoit, ne se distribue.</p>
+
+  <div class="axiom">Réconcilier avant de reprendre le travail qui a pu produire cet effet — pas réconcilier le monde avant d'agir.</div>
+
+  <pre><code><span class="cm">— cinq boucles indépendantes, chacune avec sa cadence et son budget de passe</span>
+
+reconciler   : réclame des effets par lot, bail par effet, délai par fournisseur,
+               disjoncteur ; un effet empoisonné part en revue opérateur
+               et ne bloque que son propre item
+reaper       : bails expirés → révoque l'autorité (voir encadré)
+waiter       : échéances, relances bornées, sondage des réponses,
+               le tout par mise à jour conditionnelle avec clé d'idempotence
+ingestor     : admission sous contrôle de crédit (voir plus bas)
+dispatcher   : déclenché par le temps ET par la libération de capacité
+
+<span class="cm">— la réservation est une seule transaction, sinon les quotas sont décoratifs</span>
+claim(item):
+  atomically:
+    verify item unchanged since selection
+    reserve global / graph / block-kind / resource slots
+    reserve attempt + estimated cost in the ledger
+    acquire resource lease, assign fence
+    pin graph_revision on the run</code></pre>
+
+  <div class="callout warn">
+    <span class="tag">« Ne jamais tuer un travailleur vivant » n'est pas un modèle de sûreté</span>
+    <p>Un travailleur qui a cessé d'émettre son signal mais reste vivant conserve ses accès et son espace de travail. Incrémenter le jeton empêche sa transition finale ; ça ne l'empêche pas d'appeler un service ou d'écrire un fichier.</p>
+    <p>À l'expiration du bail, il faut <strong>révoquer l'autorité, pas seulement l'acceptation du résultat</strong> : annulation coopérative, puis terminaison forcée après un délai de grâce, révocation des accès, mise en quarantaine de l'espace de travail. Et il faut séparer <em>signal de vie</em> et <em>progression</em> : un travailleur qui émet son signal sans progresser doit être annulé comme un mort, et un long appel légitime ne doit pas être fauché pour un simple silence.</p>
+  </div>
+
+  <ul class="plain">
+    <li><strong>La priorité stricte affame.</strong> Un flux continu de priorité haute signifie que le reste ne passe jamais. Il faut du vieillissement ou une capacité réservée par classe : la priorité doit influencer la latence, pas autoriser l'exclusion permanente.</li>
+    <li><strong>L'admission a besoin de contre-pression.</strong> Sans crédit ni seuils haut/bas, un ralentissement en aval fait croître la file sans borne, ce qui ralentit la base, donc la réconciliation, donc aggrave la file. Une source qu'on met en pause doit avoir une sémantique d'acquittement définie, sinon on perd ou on relit indéfiniment.</li>
+    <li><strong>Le coût se réserve avant l'appel.</strong> Vérifier un budget puis lancer laisse passer <em>n</em> items simultanés qui le dépassent chacun. Réservation estimée, puis solde réel.</li>
+    <li><strong>Les pannes d'infrastructure ne consomment pas le budget sémantique.</strong> Un fournisseur en erreur doit déclencher un disjoncteur et un délai exponentiel avec bruit, pas brûler les tentatives d'escalade d'un item dont le travail était correct.</li>
+    <li><strong>Le travail empoisonné se contient par empreinte.</strong> L'escalade bornée arrête un item ; elle n'arrête pas une source qui recrée cent items équivalents. D'où la suppression par empreinte inter-items, la limitation du taux de distribution, et une file d'attente morte visible.</li>
+    <li><strong>Le temps durable est celui du serveur</strong> pour les bails et les échéances ; l'horloge monotone locale ne sert qu'à mesurer une durée écoulée.</li>
+    <li><strong>Vidange explicite</strong> : <em>en marche</em>, <em>en vidange</em>, <em>arrêté</em>. Vider, c'est cesser d'admettre et de réserver, continuer à renouveler ce qu'on possède, puis annuler et cloisonner le reste après une fenêtre bornée.</li>
+  </ul>
+
+  <p><strong>Choix assumé :</strong> un seul ordonnanceur actif, avec un suiveur passif. La réaction à la perte de leadership est définie — cesser immédiatement de distribuer, puis cloisonner l'autorité de l'ancien leader. Passer en actif/actif demanderait des réclamations atomiques et des bails durables sur <em>chaque</em> objet contendu, y compris les curseurs de source et les quotas.</p>
+</section>
+
+<section>
+  <h2>5 · La reprise après panne</h2>
+  <p>Une classification en cinq cas séquentiels se recouvre : un fichier à demi écrit, sans effet externe et sans opération marquée « multi-étapes », tombe dans la branche « récupérable » avant d'atteindre la branche « indéterminé ». L'ordre des tests masque le recouvrement, il ne le supprime pas.</p>
+  <p>Il faut donc classer sur <strong>trois dimensions indépendantes</strong>, puis dériver l'action d'une table explicite.</p>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Effets externes</th><th>Espace de travail</th><th>Exécuteur</th><th>Action autorisée</th></tr></thead>
+      <tbody>
+        <tr><td>—</td><td>—</td><td><span class="kind k-stop">peut-être vivant</span></td><td><strong>ORPHELIN ACTIF</strong> — révoquer, terminer, vérifier ; ne rien classer avant</td></tr>
+        <tr><td><span class="kind k-stop">incertain</span></td><td>quelconque</td><td>mort confirmé</td><td><strong>RÉCONCILIER</strong> — interroger le monde par la clé logique, avant tout</td></tr>
+        <tr><td>appliqué</td><td>quelconque</td><td>mort confirmé</td><td><strong>REPRENDRE APRÈS L'EFFET</strong> — ne jamais rejouer le nœud tel quel</td></tr>
+        <tr><td>aucun / rejeté</td><td>inchangé</td><td>mort confirmé</td><td><strong>REDÉMARRABLE</strong> — jeter, refaire depuis la base</td></tr>
+        <tr><td>aucun / rejeté</td><td>point de contrôle validé</td><td>mort confirmé</td><td><strong>REPRISE SUR POINT DE CONTRÔLE</strong></td></tr>
+        <tr><td>aucun / rejeté</td><td><span class="kind k-stop">modifié non validé</span></td><td>mort confirmé</td><td><strong>QUARANTAINE</strong> — conserver, repartir d'une base neuve</td></tr>
+        <tr><td colspan="3">observations contradictoires</td><td><strong>FAUTE</strong> — jamais deviner</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout warn">
+    <span class="tag">L'absence de trace n'est pas une preuve d'absence</span>
+    <p>Le journal d'effets n'est faisant foi que si l'accès au monde est <strong>mécaniquement impossible</strong> avant qu'une intention durable existe. Sinon le scénario est banal : un exécuteur appelle un service, meurt avant d'écrire sa ligne, le redémarrage ne voit aucun effet, classe « redémarrable », et refait l'action.</p>
+    <p>Cela impose une <strong>passerelle d'effets</strong> : les blocs <code>ACT</code> ne détiennent aucun accès permettant de la contourner ; seule la passerelle agit, après commit de l'intention et de sa clé logique ; en cas d'issue ambiguë elle interroge la cible avec cette même clé. Si la cible ne sait ni interroger ni dédupliquer par clé, l'issue est <em>ambiguë en externe</em> et exige une réconciliation humaine — surtout pas un redémarrage.</p>
+  </div>
+
+  <div class="callout warn">
+    <span class="tag">Pas de reprise « à la volée » d'un travail non validé</span>
+    <p>Reprendre un espace de travail modifié en s'appuyant sur un récit reconstruit après coup, c'est faire confiance à une inférence, pas à une garantie. Les modifications présentes peuvent être exploratoires, contradictoires, ou issues d'un outil interrompu à mi-course. Un artefact de passation reste utile, mais comme <em>entrée non fiable</em>, jamais comme état repris.</p>
+    <p>La seule reprise sûre part d'un <strong>point de contrôle explicitement validé</strong> : base immuable identifiée, manifeste complet des sorties avec empreintes, identité de l'opération, invariants déclarés, validation enregistrée <em>après</em> toutes les écritures, publication atomique. Tout ce qui a été modifié sans point de contrôle publié est « modifié non validé », point final. Un fichier de verrou ou une réécriture partielle sont des indices d'enquête, jamais des preuves.</p>
+  </div>
+
+  <p>Reste la tentation d'un raccourci séduisant : « si la plupart des pannes tombent en redémarrable, l'isolement est bon ». C'est une métrique de coût, pas un théorème. Un nœud long passe l'essentiel de sa vie à produire avant de publier, donc une panne aléatoire le trouvera souvent en cours de modification — même avec un isolement parfait. Et un système peut afficher un taux flatteur simplement parce qu'il <em>ne voit pas</em> les effets non journalisés, ce qui masque le pire bug. Les grandeurs à suivre sont ailleurs : taux d'effets ambigus, activité constatée après révocation, durée entre deux points de contrôle validés.</p>
+</section>
+
+<section>
+  <h2>EVAL : mesurer plutôt que barrer</h2>
+  <p><code>CHECK</code> est binaire et auto-suffisant. <code>EVAL</code> est <strong>comparatif</strong> : une métrique ne veut rien dire seule. D'où une référence qui persiste entre les exécutions, et un registre champion / challenger — le seul ajout que l'auto-amélioration impose au noyau.</p>
+
+  <pre><code>EVAL := baseline_ref × metric_version × dataset_version × comparison
+        → { promote, discard, error }
+
+promote ⇒ baseline_ref ← challenger   <span class="cm">— par comparaison-et-échange</span>
+discard ⇒ workspace    ← baseline_ref</code></pre>
+
+  <ul class="plain">
+    <li><strong>Normaliser l'axe qu'on n'optimise pas.</strong> Si le budget d'exécution est libre, l'agent optimisera le budget plutôt que la qualité. Fixer les dimensions hors périmètre est le travail le plus important dans la conception d'un <code>EVAL</code>.</li>
+    <li><strong>Un holdout est obligatoire.</strong> Sinon l'agent apprend le corpus qu'il voit. Surapprentissage, p-hacking, sur-ajustement d'invite : un seul phénomène sous trois noms.</li>
+    <li><strong>Le harness est hors du périmètre d'écriture</strong> du bloc <code>ACT</code>, avec les budgets, la table de permissions et les ensembles d'issues. Un agent qui peut relever son propre budget de reprise détient le même pouvoir que celui qui pourrait affaiblir ses tests, en pire. Appliqué par l'isolement, jamais par une consigne.</li>
+  </ul>
+
+  <div class="axiom">Plus l'EVAL est riche, plus le graph est mince.</div>
+
+  <p>Un graph dont la métrique est rapide, fiable et difficile à truquer n'a besoin ni de revue ni d'attente humaine. D'où le meilleur objectif d'auto-amélioration disponible : ne pas rendre l'agent plus malin, mais <strong>rendre le travail mesurable</strong>. Chaque métrique gagnée supprime un nœud humain.</p>
+</section>
+
+<section>
+  <h2>Le dialogue</h2>
+  <p>Dans un système conversationnel, une question est un tour de parole : éphémère, non adressable. Dans un graph, <strong>une question est un état durable</strong>.</p>
+
+  <div class="figure">
+    <svg viewBox="0 0 660 250" role="img" aria-label="Routage d'une question : répondable par preuve, ou décision humaine">
+      <defs>
+        <marker id="ar2" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+          <path d="M0,0 L7,3 L0,6" fill="none" stroke="var(--muted)" stroke-width="1.4"/></marker>
+      </defs>
+      <rect x="14" y="98" width="168" height="46" rx="3" fill="var(--surface)" stroke="var(--rule)" stroke-width="1.6"/>
+      <text class="n-label" x="30" y="118">Une question surgit</text>
+      <text class="n-kind" x="30" y="132" fill="var(--muted)">DIAGNOSE, ACT ou REVIEW</text>
+      <path class="flow" d="M182,121 L232,121" marker-end="url(#ar2)"/>
+      <path d="M330,84 L410,121 L330,158 L250,121 Z" fill="var(--surface)" stroke="var(--accent)" stroke-width="1.6"/>
+      <text class="n-kind" x="277" y="115" fill="var(--accent)">répondable par</text>
+      <text class="n-kind" x="283" y="128" fill="var(--accent)">une preuve ?</text>
+      <path class="flow" d="M410,105 L470,58" marker-end="url(#ar2)"/>
+      <text class="e-label" x="418" y="76">oui</text>
+      <rect x="474" y="30" width="172" height="46" rx="3" fill="var(--agt-bg)" stroke="var(--agt)" stroke-width="1.6"/>
+      <text class="n-label" x="488" y="50">QUERY interne</text>
+      <text class="n-kind" x="488" y="64" fill="var(--agt)">1 tour, lecture seule, budgété</text>
+      <path class="flow" d="M410,137 L470,184" marker-end="url(#ar2)" stroke="var(--hum)"/>
+      <text class="e-label" x="416" y="172" fill="var(--hum)">non, ou incertain</text>
+      <rect x="474" y="156" width="172" height="46" rx="3" fill="var(--hum-bg)" stroke="var(--hum)" stroke-width="1.6"/>
+      <text class="n-label" x="488" y="176">ASK → WAIT</text>
+      <text class="n-kind" x="488" y="190" fill="var(--hum)">clé de décision structurée</text>
+      <text class="e-label" x="14" y="230">L'incertitude route vers l'humain. Jamais l'inverse.</text>
+    </svg>
+    <div class="caption">Fig. 2 — Une question répondable depuis les sources disponibles n'est pas une question, c'est une recherche.</div>
+  </div>
+
+  <p><strong>Entre agents, pas de conversation.</strong> L'information circule par l'état du graph. Le relecteur émet des points bloquants structurés ; le producteur les lit comme une entrée, pas comme un interlocuteur. Seule exception : <code>QUERY</code>, un aller-retour en lecture seule <em>sans relance</em> — autoriser la relance recrée une boucle non bornée à l'intérieur d'un nœud, invisible à l'échelle d'escalade.</p>
+
+  <ul class="plain">
+    <li><strong>Jamais de question ouverte.</strong> « Lequel de ces trois cas ? » se répond en cinq secondes ; « que devrait-il se passer ici ? » dort trois semaines.</li>
+    <li><strong>L'identité est une clé de décision</strong> — <code>domaine.objet.aspect</code> — pas une empreinte de prose, qui ne rapprochera jamais deux formulations du même problème.</li>
+    <li><strong>Une question est une suite de révisions immuables, pas une ligne modifiable.</strong> Les réponses sont des soumissions distinctes et typées : complète, partielle, contradiction, retrait. Écraser un champ de réponse détruit qui a dit quoi et quand, et laisse rouvrir une question dont la réponse partielle n'est pas résolue.</li>
+    <li><strong>Une réponse ne se devine pas.</strong> Un message reçu ne vaut pas résolution — il faut une correspondance explicite avec la décision en cours.</li>
+    <li><strong>L'attente a une échéance</strong>, un responsable, des relances bornées créées de façon idempotente, et une politique de péremption de l'espace de travail.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>La porte d'admission</h2>
+  <p>Pour du travail formulé par un humain, <code>ADMIT</code> remplace le score de clarté auto-attribué — du ressenti, donc contournable — par l'extraction de faits vérifiables : la <strong>cible</strong> est nommée ; le <strong>comportement actuel</strong> est décrit ; le <strong>comportement souhaité</strong> l'est sans adjectif d'appréciation ; la <strong>vérification</strong> complète la phrase « c'est fini quand je fais ___ et que j'observe ___, sans que ___ change » ; et si le résultat est perceptuel, une <strong>référence</strong> est matérialisée à l'ingestion.</p>
+  <p>Trois leviers rendent la porte supportable : répondre par un gabarit troué plutôt que par une question ; évaluer à la formulation plutôt qu'au tour suivant, pendant que l'auteur a le sujet en tête ; et mesurer la porte elle-même — un sujet qui la passe puis revient trois fois signale une porte trop laxiste, et c'est un chiffre, pas une impression.</p>
+</section>
+
+<section>
+  <h2>Ce que le système est : un rail</h2>
+  <p>L'idée d'ensemble tient en une inversion : on ne demande pas à l'agent de suivre le processus, on construit un rail où <strong>avancer sans passer par la porte est impossible</strong>. Chaque progression traverse la même transition atomique — qui voit, valide contre le schéma épinglé, enregistre, débite, puis route dans un énuméré fermé. Guider, c'est les issues fermées ; suivre, c'est le journal ; tracer, c'est la révision épinglée et les artefacts par tentative ; corriger, c'est l'échelle d'escalade — structurelle, pas conversationnelle.</p>
+  <p>Le rail a deux moitiés indissociables. Les portes contiennent la <em>progression</em> : un agent ne franchit pas sans elles. L'isolement et la passerelle d'effets contiennent l'<em>action</em> : un agent vivant qui a perdu son bail peut encore écrire ou appeler un service, et seule la révocation d'autorité l'en empêche. Des portes seules font un tableau de suivi contournable ; l'isolement seul, une prison sans parcours. Le produit, c'est les deux.</p>
+  <p>C'est aussi ce qui rend le multi-agents traçable : pas de conversation inter-agents — chaque agent est seul dans son nœud avec ses entrées typées, et la coordination <em>est</em> le graph. N agents qui discutent produisent un transcript inauditable ; N agents séparés par des portes produisent une trajectoire dans une machine à états.</p>
+</section>
+
+<section>
+  <h2>Les invariants</h2>
+  <p>C'est ça, le produit. Pas les blocs — les garanties dont hérite tout nouveau graph.</p>
+
+  <div class="grid2">
+    <div class="card"><h4>identité</h4><p>Un sujet durable, des occurrences numérotées. La déduplication est une politique explicite, pas un effet de bord d'un index.</p></div>
+    <div class="card"><h4>révision épinglée</h4><p>Item et run pointent une définition immuable adressée par contenu. Un résultat n'est jamais interprété par une autre révision.</p></div>
+    <div class="card"><h4>issues fermées</h4><p>Domaine et noyau, deux espaces disjoints, tous deux couverts exhaustivement. Une issue non mappée est une faute.</p></div>
+    <div class="card"><h4>faits dérivés</h4><p>Tout ce qui est mécaniquement observable est mesuré par l'hôte, jamais rapporté par le modèle.</p></div>
+    <div class="card"><h4>terminaison structurelle</h4><p>Sous-graph non-escalade acyclique, budget d'escalade fini que rien ne régénère — et trois hypothèses appliquées : nœuds fauchables, ordonnanceur équitable, attentes toutes bornées.</p></div>
+    <div class="card"><h4>autorité révocable</h4><p>Un bail expiré révoque l'autorité, pas seulement l'acceptation du résultat. Le cloisonnement s'applique à la ressource.</p></div>
+    <div class="card"><h4>effets par passerelle</h4><p>Intention et clé logique commises avant tout accès au monde. « Inconnu » est un état, réconcilié en interrogeant la cible.</p></div>
+    <div class="card"><h4>pas d'action à distance</h4><p>Toute traversée de frontière porte une claim vérifiée à l'apply(). Trois régimes : tient, casse (issue nommée), indécis — levé seulement par un constat d'opérateur journalisé.</p></div>
+    <div class="card"><h4>attente explicite</h4><p>Échéance, responsable, relances bornées idempotentes, et révisions immuables plutôt qu'une ligne réécrite.</p></div>
+  </div>
+
+  <div class="callout warn">
+    <span class="tag">Honnêteté sur la garantie</span>
+    <p>Une passerelle d'effets ne fournit pas l'exactement-une-fois. Elle fournit l'au-moins-une-fois avec réconciliation, et l'idempotence effective seulement lorsque la cible sait dédupliquer par clé. Là où elle ne le sait pas, la seule réponse honnête est un état ambigu visible et une reprise en main humaine.</p>
+    <p>De même : une fois qu'on a les transitions durables, les budgets, l'annulation, la réconciliation et la migration de version, on a construit un moteur de workflow, qu'on l'appelle ainsi ou non. La règle qui empêche que ça dégénère tient en une phrase — <strong>généraliser le noyau, garder chaque graph petit et concret</strong>.</p>
+  </div>
+</section>
+
+<footer>
+  Algèbre de capacités · claims aux frontières · déclaration validée statiquement · transition unique et transactionnelle · sujets et occurrences · ordonnancement découplé · reprise à trois dimensions
+</footer>
+
+</div>
+
+</body></html>

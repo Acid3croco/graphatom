@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GraphAtom — le noyau</title>
+<style>
+  :root {
+    --bg: #EDEFF1; --surface: #FBFCFC; --sunk: #E3E7EA;
+    --ink: #161C22; --muted: #59656F; --rule: #CBD3D9;
+    --accent: #2C3E8F; --det: #1B6B5E; --agt: #2C3E8F;
+    --hum: #96620F; --stop: #8E2F2F;
+    --det-bg: #DDEDE9; --agt-bg: #DEE3F6; --hum-bg: #F4E8CF; --stop-bg: #F3DDDD;
+    --display: ui-sans-serif, system-ui, "Segoe UI", Helvetica, Arial, sans-serif;
+    --body: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12171B; --surface: #1A2026; --sunk: #161B20;
+      --ink: #DFE5EA; --muted: #8C99A4; --rule: #2E3841;
+      --accent: #93A6F2; --det: #57C4B1; --agt: #93A6F2;
+      --hum: #DCA847; --stop: #DE8585;
+      --det-bg: #16302C; --agt-bg: #1D2440; --hum-bg: #322715; --stop-bg: #331D1D;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: var(--body); font-size: 17px; line-height: 1.62;
+    margin: 0; padding: 0 1.25rem 6rem; -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 54rem; margin: 0 auto; display: flex; flex-direction: column; gap: 3rem; }
+  header.masthead { padding: 4rem 0 0; display: flex; flex-direction: column; gap: 1rem; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 0.7rem;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted);
+  }
+  h1 {
+    font-family: var(--display); font-size: clamp(1.9rem, 4.4vw, 2.9rem);
+    line-height: 1.1; font-weight: 640; letter-spacing: -0.022em; margin: 0; text-wrap: balance;
+  }
+  .standfirst { font-size: 1.1rem; color: var(--muted); max-width: 42rem; margin: 0; }
+  section { display: flex; flex-direction: column; gap: 1.1rem; }
+  h2 {
+    font-family: var(--display); font-size: 1.42rem; font-weight: 620;
+    letter-spacing: -0.014em; margin: 0; padding-bottom: 0.6rem;
+    border-bottom: 1.5px solid var(--rule); text-wrap: balance;
+  }
+  p { margin: 0; max-width: 42rem; }
+  code {
+    font-family: var(--mono); font-size: 0.86em;
+    background: var(--sunk); padding: 0.1em 0.36em; border-radius: 3px;
+  }
+  pre {
+    font-family: var(--mono); font-size: 0.775rem; line-height: 1.6;
+    background: var(--surface); border: 1.5px solid var(--rule);
+    border-radius: 4px; padding: 1rem 1.15rem; overflow-x: auto; margin: 0;
+  }
+  pre code { background: none; padding: 0; font-size: 1em; }
+  pre .cm { color: var(--muted); }
+  strong { font-weight: 700; }
+  ul.plain {
+    margin: 0; padding-left: 1.1rem;
+    display: flex; flex-direction: column; gap: 0.5rem; max-width: 42rem;
+  }
+  .tablewrap { overflow-x: auto; border: 1.5px solid var(--rule); border-radius: 4px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 0.775rem; min-width: 38rem; }
+  th {
+    text-align: left; font-weight: 600; letter-spacing: 0.04em;
+    text-transform: uppercase; font-size: 0.68rem; color: var(--muted);
+    padding: 0.72rem 0.85rem; border-bottom: 1.5px solid var(--rule); white-space: nowrap;
+  }
+  td { padding: 0.62rem 0.85rem; border-bottom: 1px solid var(--rule); vertical-align: top; line-height: 1.45; }
+  tr:last-child td { border-bottom: none; }
+  .callout {
+    border-left: 3px solid var(--accent); background: var(--surface);
+    padding: 1rem 1.15rem; border-radius: 0 4px 4px 0;
+  }
+  .callout p { max-width: none; }
+  .callout p + p { margin-top: 0.7rem; }
+  .callout .tag {
+    font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 0.4rem;
+  }
+  .callout.warn { border-left-color: var(--stop); }
+  .callout.warn .tag { color: var(--stop); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 1rem; }
+  .card {
+    background: var(--surface); border: 1.5px solid var(--rule); border-radius: 4px;
+    padding: 1.1rem 1.15rem; display: flex; flex-direction: column; gap: 0.55rem;
+  }
+  .card h4 { font-family: var(--mono); font-size: 0.78rem; letter-spacing: 0.05em; margin: 0; color: var(--accent); }
+  .card p { font-size: 0.92rem; max-width: none; }
+  .axiom {
+    font-family: var(--display); font-size: 1.24rem; font-weight: 620;
+    letter-spacing: -0.012em; line-height: 1.35; text-wrap: balance;
+    border-top: 1.5px solid var(--rule); border-bottom: 1.5px solid var(--rule);
+    padding: 1.25rem 0; margin: 0.4rem 0; max-width: 40rem;
+  }
+  footer { border-top: 1.5px solid var(--rule); padding-top: 1.4rem; font-family: var(--mono); font-size: 0.74rem; color: var(--muted); }
+  @media (max-width: 600px) { body { font-size: 16px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="masthead">
+  <div class="eyebrow">GraphAtom · note de conception · v2</div>
+  <h1>Le noyau</h1>
+  <p class="standfirst">Une machine à états persistante qui exécute des tâches isolées et externalise les effets de façon réconciliable. Six pièces, sept concepts pour l'utilisateur, et rien d'autre dans le noyau.</p>
+</header>
+
+<section>
+  <h2>Ce qu'un utilisateur doit savoir</h2>
+  <p>Sept concepts suffisent pour écrire et exécuter un premier graph :</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Concept</th><th>Définition</th></tr></thead>
+      <tbody>
+        <tr><td><strong>nœud</strong></td><td>une étape typée : observer, juger, produire, agir sur le monde, attendre</td></tr>
+        <tr><td><strong>entrée</strong></td><td>les artefacts qu'un nœud reçoit, référencés depuis un nœud précédent</td></tr>
+        <tr><td><strong>issue</strong></td><td>ce qu'un nœud peut répondre — un énuméré fermé, déclaré</td></tr>
+        <tr><td><strong>arête</strong></td><td>issue → nœud suivant ; chaque issue a exactement une arête</td></tr>
+        <tr><td><strong>retry</strong></td><td>rejouer coûte un budget fini que rien ne régénère</td></tr>
+        <tr><td><strong>deadline</strong></td><td>toute attente est bornée ; l'expiration est une issue comme une autre</td></tr>
+        <tr><td><strong>effet</strong></td><td>toute action sur le monde extérieur passe par la passerelle, jamais en direct</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Tout le reste — fencing, baux, réconciliation, gardes de frontière — est le travail du noyau, invisible tant qu'il ne se passe rien d'anormal.</p>
+</section>
+
+<section>
+  <h2>Un exemple complet</h2>
+  <pre><code>graph supervision @rev 7c1f…            <span class="cm">— immuable, adressée par contenu</span>
+  source      = failed_runs
+  subject_key = [pipeline, error_class]
+  budgets: escalations = 4, wall_deadline = 7d
+
+  node ingest   : FETCH { materialize: [logs] }
+      ok → diagnose
+  node diagnose : JUDGE { schema: cause_v1 }
+      → decide
+  node decide   : JUDGE { schema: verdict_v1 }
+      fix   → produce
+      raise → escalate
+      known → close
+  node produce  : ACT   { workspace: isolated }
+      ok → verify
+  node verify   : CHECK { manifest: checks@3 }
+      pass → commit
+      fail → escalate
+  node commit   : EFFECT { intent: open_change }
+      applied   → close
+      uncertain → escalate
+  node escalate : WAIT  { owner: oncall, deadline: 4h }
+      answered → decide
+      expired  → close_unresolved
+  node close, close_unresolved : terminal</code></pre>
+  <p>Les issues mécaniques — <code>crashed</code>, <code>timed_out</code>, <code>invalid_result</code>, <code>budget_exhausted</code> — ont des <strong>défauts centralisés</strong> (réessayer, puis escalader ; épuisement → <code>close_unresolved</code>). Un graph ne les redéclare que pour les surcharger. Les références d'artefacts sont résolues par le runtime depuis le prédécesseur réel, puis enregistrées explicitement — l'auteur n'écrit jamais de qualificatif de tentative.</p>
+</section>
+
+<section>
+  <h2>Les six pièces</h2>
+
+  <div class="grid2">
+    <div class="card"><h4>1 · révision immuable</h4><p>Un graph publié est une donnée adressée par contenu : nœuds, schémas, issues, arêtes. Item et run épinglent leur révision ; un résultat n'est jamais interprété par une autre.</p></div>
+    <div class="card"><h4>2 · apply() unique</h4><p>Toute mutation d'état d'un item passe par une seule fonction transactionnelle. L'identité vient de la ligne chargée, jamais de l'appelant ; un rejet (<code>stale</code>, <code>superseded</code>) est lui-même une transition durable.</p></div>
+    <div class="card"><h4>3 · issues fermées</h4><p>Chaque nœud déclare son énuméré ; chaque issue a exactement une arête ; une issue non mappée est une faute. Rien d'autre ne route — pas de conversation, pas d'exception.</p></div>
+    <div class="card"><h4>4 · passerelle d'effets</h4><p>Intention et clé logique commises <em>avant</em> tout accès au monde. États : <code>applied / rejected / uncertain / possibly_sent</code>. « Inconnu » est un état de première classe, réconcilié en interrogeant la cible.</p></div>
+    <div class="card"><h4>5 · baux et fencing</h4><p>Chaque run tient un bail ; l'expiration révoque l'<em>autorité</em> (annulation, terminaison, quarantaine du workspace), pas seulement l'acceptation du résultat. Le jeton se compare par égalité.</p></div>
+    <div class="card"><h4>6 · terminaison</h4><p>Sous-graph non-escalade acyclique + budget d'escalade fini que rien ne régénère + deadlines partout ⇒ tout item termine. C'est la garantie qui distingue un rail d'un tableau de suivi.</p></div>
+  </div>
+
+  <pre><code>apply(run_id, submitted):
+  atomically:
+    run  ← node_run[run_id] FOR UPDATE       <span class="cm">— l'identité vient de la ligne</span>
+    item ← work_item[run.item_id] FOR UPDATE
+    if run.fence ≠ item.fence                → record(superseded); return
+    if run.expected_version ≠ item.version   → record(stale); return
+    outcome ← validate(submitted, run.schema) or KERNEL(invalid_result)
+    edge ← transitions[item.revision, item.state, run.node, outcome]
+    guard_boundaries(edge)                    <span class="cm">— voir les quatre gardes</span>
+    append_event ; item.state ← edge.target ; item.version += 1
+    enqueue_intents(edge.effects)             <span class="cm">— exécutés hors txn, par la passerelle</span></code></pre>
+</section>
+
+<section>
+  <h2>Les quatre gardes de frontière</h2>
+  <p>Un item est étanche à l'intérieur ; les incidents réels arrivent aux frontières — le temps, les autres items, les gens, sa propre lignée. Quatre gardes, chacune rangée là où elle s'exécute :</p>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Garde</th><th>Où elle s'exécute</th><th>Violation</th><th>Le bug évité</th></tr></thead>
+      <tbody>
+        <tr><td>fraîcheur</td><td><code>apply()</code>, à la reprise après un WAIT</td><td><code>stale</code></td><td>décision prise lundi sur la v42, exécutée vendredi alors que le monde est en v45</td></tr>
+        <tr><td>version de cible (If-Match)</td><td>passerelle d'effets, à l'émission</td><td><code>conflict</code></td><td>deux items écrivent la même cible, deux « applied ✓ », l'un a écrasé l'autre en silence</td></tr>
+        <tr><td>capacité humaine</td><td>publication du graph</td><td><code>unbacked</code></td><td>un graph réserve l'équipe sécurité sans son accord → rubber-stamp ou expiration de masse</td></tr>
+        <tr><td>budget de lignée</td><td>admission d'une occurrence</td><td><code>exhausted</code></td><td>item épuisé → clôture → ré-admission du même sujet avec un budget neuf, à l'infini</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>Deux règles complètent les gardes. Un <strong>constat d'opérateur</strong> — « j'ai vérifié la cible, voici son état » — est un événement journalisé de première classe, jamais un UPDATE direct : c'est la seule façon de lever un <code>uncertain</code>. Et aucun nœud d'observation ne peut lire la base du runner lui-même — c'est une jointure déguisée, refusée à la validation.</p>
+</section>
+
+<section>
+  <h2>La persistance</h2>
+  <pre><code>graph_revision(id, content_hash, bundle)
+subject(id, graph, subject_key, lineage_budget, UNIQUE(graph, subject_key))
+work_item(id, subject_id, generation, revision, state, version, fence,
+          UNIQUE(subject_id, generation))
+node_run(id, item_id, node, attempt, status, fence, expected_version,
+         lease_expires_at, outcome, result_ref, UNIQUE(item_id, node, attempt))
+event(item_id, item_version, edge, run_id, PRIMARY KEY(item_id, item_version))
+effect(op_id, item_id, logical_key, target_uri, expected_target_version,
+       intent_hash, observation, UNIQUE(target_uri, logical_key))
+artifact(id, sha256, bytes, media_type)</code></pre>
+  <p>Sept tables. Le <code>subject</code> est durable, le <code>work_item</code> en est une occurrence numérotée — la déduplication est une politique explicite, pas un effet de bord d'un index. Rien de volumineux en base : les artefacts vivent dans un magasin adressé par contenu.</p>
+</section>
+
+<section>
+  <h2>Honnêteté sur la garantie</h2>
+  <div class="callout warn">
+    <span class="tag">Pas d'exactement-une-fois</span>
+    <p>La passerelle fournit l'au-moins-une-fois avec réconciliation, et l'idempotence effective seulement quand la cible sait dédupliquer par clé. Là où elle ne le sait pas, la réponse honnête est un état ambigu visible et une reprise en main humaine — pas une promesse.</p>
+  </div>
+  <div class="callout">
+    <span class="tag">Ce que la déclaration est vraiment</span>
+    <p>Ce n'est pas un langage de workflow : le comportement vit dans les blocs, les schémas et les gestionnaires d'effets — du code. La déclaration est de la configuration au-dessus d'une interface de blocs typée. Elle reste défendable à une condition : rester étroite. Le jour où on y ajoute expressions et conditions arbitraires, un vrai programme typé aurait été supérieur.</p>
+  </div>
+  <div class="callout">
+    <span class="tag">Périmètre d'apply()</span>
+    <p>L'unicité d'<code>apply()</code> porte sur les mutations d'état d'un item. La réservation d'un run et la réconciliation d'un effet sont des transactions périphériques — mais toutes aboutissent à une transition <code>apply()</code>, et aucune ne route un item par un autre chemin.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Hors du noyau — les modules</h2>
+  <p>Quatre sous-systèmes utiles, volontairement exclus du noyau. Chacun se branche sur le journal et les issues fermées ; aucun n'ajoute de concept au chemin d'entrée.</p>
+  <ul class="plain">
+    <li><strong>EVAL</strong> — mesure comparative, registre champion/challenger, distillation d'un juge coûteux en check déterministe.</li>
+    <li><strong>ADMIT</strong> — la porte d'admission pour le travail formulé par un humain : faits vérifiables plutôt que score de clarté.</li>
+    <li><strong>Dialogue durable</strong> — questions adressables, réponses typées, révisions immuables.</li>
+    <li><strong>Gouverneur de flotte</strong> — contre-pression, jitter sur les échéances, garde-fou du reaper : la congestion est un état de flotte, pas un échec d'item.</li>
+  </ul>
+  <p>Le raisonnement qui a conduit à cette forme — particules, forces d'interaction, douze trous de frontière — vit dans <code>archive/graph-runner-original.html</code>. C'est la dérivation, pas la spécification.</p>
+</section>
+
+<div class="axiom">Généraliser le noyau, garder chaque graph — et ce document — petit et concret.</div>
+
+<footer>
+  révision immuable · apply() unique · issues fermées · passerelle d'effets · baux et fencing · terminaison structurelle
+</footer>
+
+</div>
+</body>
+</html>
