@@ -23,3 +23,15 @@ L'idée : des portes successives dont l'exécution est certaine — du code atom
 6. **Terminaison structurelle** — budget d'escalade fini que rien ne régénère, deadlines partout.
 
 Hors noyau, en modules : EVAL, ADMIT, dialogue durable, gouverneur de flotte.
+
+## Ce qu'on ne fera jamais
+
+Périmètre négatif, assumé — ces refus *sont* le design :
+
+- **Pas de fan-out ni de jointure** dans un item — le parallélisme, c'est plusieurs items. Un état unique ne représente pas plusieurs prédécesseurs actifs.
+- **Pas de conversation inter-agents** — la coordination est le graph. N agents qui discutent produisent un transcript inauditable.
+- **Pas de langage de workflow** — la déclaration reste de la configuration étroite au-dessus de blocs typés. Expressions et conditions arbitraires : non.
+- **Pas de question ouverte** aux humains — toute question est fermée, avec des options et une deadline.
+- **Pas d'exactement-une-fois** promis — au-moins-une-fois avec réconciliation, et un état « incertain » honnête là où la cible ne sait pas dédupliquer.
+- **Pas de mutation d'état hors des verbes officiels** — pas d'UPDATE de dépannage, jamais.
+- **Pas de multi-organisation** — un opérateur, ses graphs, ses agents.
