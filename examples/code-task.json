@@ -36,10 +36,10 @@
     "test_frontend": {
       "block": "CHECK",
       "config": {
-        "lease_s": 600,
+        "lease_s": 900,
         "agent": {
           "cmd": "claude --dangerously-skip-permissions -p \"$(cat prompt.md)\"",
-          "timeout_s": 540,
+          "timeout_s": 840,
           "prompt": "Agent de test frontend. Le dépôt est $GRAPHATOM_REPO_DIR, l'issue testée : {subject_key}. Ta variable GRAPHATOM_DSN pointe déjà sur une base de test jetable. Tu utilises un navigateur headless — pas seulement curl : il faut regarder comment le front se comporte.\n\n1. Peuple la base de test si vide (`uv run python tests/crash_test.py` le fait), puis démarre l'interface : `uv run graphatom serve --port 8899 &` (depuis $GRAPHATOM_REPO_DIR).\n2. Avec `chromium --headless=new`, charge chaque page concernée par l'issue (`--dump-dom` pour le DOM rendu, `--screenshot=<fichier>` pour la preuve visuelle) : la page des questions, /items, /item/<id>.\n3. Vérifie dans le DOM rendu que ce que l'issue demande est vraiment là (tables remplies, SVG du graph présent, état courant marqué, liens qui pointent juste), et que les screenshots ne sont pas vides.\n4. Arrête le serveur que tu as lancé.\n\nGarde les screenshots dans ton workspace et écris test_frontend.md : pages vues, ce qui s'affiche, ce qui cloche. outcome `pass` ou `fail`."
         }
       },
@@ -53,7 +53,43 @@
         "owner": "Acid3croco",
         "deadline_minutes": 1440
       },
-      "edges": { "merger": "close", "abandonner": "close_unresolved", "expired": "escalate" }
+      "edges": { "merger": "release", "abandonner": "close_unresolved", "expired": "escalate" }
+    },
+    "release": {
+      "block": "ACT",
+      "config": {
+        "lease_s": 600,
+        "agent": {
+          "cmd": "claude --dangerously-skip-permissions -p \"$(cat prompt.md)\"",
+          "timeout_s": 540,
+          "prompt": "Agent de release. Le dépôt est $GRAPHATOM_REPO_DIR, l'issue traitée : {subject_key} — extrais-en owner/repo et le numéro. La review humaine a répondu « merger » : à toi de fermer la boucle git.\n\n1. Depuis $GRAPHATOM_REPO_DIR, commit tout ce qui traîne sur la branche courante : `git add -A`, message = le titre de l'issue en première ligne, une ligne vide, puis `Closes #<num>`. S'il n'y a rien à committer, passe à l'étape suivante.\n2. `git push -u origin <branche courante>`.\n3. La PR : `gh pr view --repo <owner/repo> --json number,url` sur la branche ; si elle n'existe pas, `gh pr create --repo <owner/repo> --fill`. Puis `gh pr merge <num> --repo <owner/repo> --merge`.\n4. Surveille le merge : relis `gh pr view <num> --repo <owner/repo> --json state,merged,mergeCommit` toutes les 15 s jusqu'à `merged: true`, deux minutes au plus.\n5. Écris release.md dans ton workspace : branche, numéro et URL de la PR, SHA du commit de merge, ce qui s'est passé.\n\noutcome `done` quand la PR est mergée et le SHA noté ; `conflict` si le push, la création ou le merge est refusé (conflit, checks rouges, droits) — dis lequel dans release.md."
+        }
+      },
+      "edges": { "done": "deploy", "conflict": "escalate" }
+    },
+    "deploy": {
+      "block": "ACT",
+      "config": {
+        "lease_s": 660,
+        "agent": {
+          "cmd": "claude --dangerously-skip-permissions -p \"$(cat prompt.md)\"",
+          "timeout_s": 600,
+          "prompt": "Agent de déploiement. Le dépôt est $GRAPHATOM_REPO_DIR, l'issue déployée : {subject_key}. Les conteneurs rejouent le code du worktree : les reconstruire suffit à mettre le rail à jour.\n\n1. Depuis $GRAPHATOM_REPO_DIR : `GITHUB_TOKEN=$(gh auth token) docker compose up -d --build github-sync web` (compte ~3 min de build).\n2. Ne touche à rien d'autre : ni au worker hôte — c'est lui qui t'exécute —, ni à `db`, ni à `scheduler`.\n3. `docker compose ps` : `github-sync` et `web` doivent être `Up`.\n4. Écris deploy.md dans ton workspace : la commande lancée, la fin du log de build, l'état des conteneurs.\n\noutcome `done` si le build et le démarrage passent ; `failed` sinon — colle l'erreur dans deploy.md."
+        }
+      },
+      "edges": { "done": "verify_deploy", "failed": "escalate" }
+    },
+    "verify_deploy": {
+      "block": "CHECK",
+      "config": {
+        "lease_s": 420,
+        "agent": {
+          "cmd": "claude --dangerously-skip-permissions -p \"$(cat prompt.md)\"",
+          "timeout_s": 360,
+          "prompt": "Agent de vérification du déploiement. Le dépôt est $GRAPHATOM_REPO_DIR, l'issue déployée : {subject_key}. Tu ne redéploies rien — tu constates.\n\n1. `docker compose ps` depuis $GRAPHATOM_REPO_DIR : `github-sync` et `web` sont `Up`, et pas en boucle de redémarrage.\n2. `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8850/items` répond 200.\n3. `docker compose logs --tail 50 github-sync` : le dernier poll ne montre ni traceback ni erreur.\n4. Écris verify_deploy.md dans ton workspace : l'état des conteneurs, le code HTTP, les dernières lignes du log.\n\noutcome `pass` seulement si les trois tiennent, sinon `fail`."
+        }
+      },
+      "edges": { "pass": "close", "fail": "escalate" }
     },
     "escalate": {
       "block": "WAIT",
