@@ -37,9 +37,15 @@ def main() -> None:
 
     sp = sub.add_parser("serve", help="canal humain : web local sur les questions")
     sp.add_argument("--port", type=int, default=8848)
+    sp.add_argument("--host", default="127.0.0.1")
     sp.add_argument("--by", default="jack")
     sp.add_argument("--notify-cmd", default=None,
                     help="commande shell lancée à chaque question ouverte (JSON sur stdin)")
+
+    sp = sub.add_parser("github-sync", help="canal github : issues labellisées, /answer, rapports")
+    sp.add_argument("--repo", required=True, help="owner/repo")
+    sp.add_argument("--graph", required=True, help="bundle JSON publié au démarrage")
+    sp.add_argument("--poll", type=float, default=15.0)
 
     args = p.parse_args()
 
@@ -51,7 +57,11 @@ def main() -> None:
         scheduler.run_forever()
         return
     if args.cmd == "serve":
-        web.serve(port=args.port, by=args.by, notify_cmd=args.notify_cmd)
+        web.serve(port=args.port, by=args.by, notify_cmd=args.notify_cmd, host=args.host)
+        return
+    if args.cmd == "github-sync":
+        from . import github_sync
+        github_sync.sync_forever(args.repo, args.graph, poll_s=args.poll)
         return
 
     with db.connect() as conn:

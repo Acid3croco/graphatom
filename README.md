@@ -59,6 +59,31 @@ Refusé, exprès : auth, comptes, exposition Internet, WebSocket, édition de
 graphs, mutation d'items, dashboard. Voir les WAIT, répondre une fois parmi
 les options, laisser le rail reprendre.
 
+## Le canal GitHub + docker (milestone 3a)
+
+Le rail branché sur un repo — dogfoodé sur ce repo même :
+
+```sh
+GITHUB_TOKEN=$(gh auth token) docker compose up -d --build
+```
+
+Quatre services : Postgres, l'ordonnanceur, le canal GitHub (polling), le
+canal web (secours, port 8850). Ensuite tout se passe sur GitHub :
+
+1. poser le label `graphatom` sur une issue → admission (une seule fois par issue)
+2. le rail pose sa question fermée en commentaire
+3. répondre par un commentaire `/answer <id> <option>` (auteurs autorisés :
+   `GRAPHATOM_ANSWERERS`, défaut : le propriétaire du repo)
+4. le rail route, puis poste le rapport terminal — le journal en table
+
+Règles : GitHub est l'interface humaine et la cible des effets, Postgres
+reste l'unique autorité d'exécution. Chaque prise de parole du rail est un
+effet — clé logique, intention commise avant, réconciliation par marqueur
+dans les commentaires : un crash entre le POST et le marquage ne produit
+jamais de doublon. Aucun parsing de langage naturel, aucune lecture de
+GitHub comme état d'item. La démo : issues [#7](https://github.com/Acid3croco/graphatom/issues/7)
+et [#8](https://github.com/Acid3croco/graphatom/issues/8).
+
 ## Ce qu'on ne fera jamais
 
 Périmètre négatif, assumé — ces refus *sont* le design :

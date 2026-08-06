@@ -71,9 +71,9 @@ def validate(bundle: dict) -> None:
             if "expired" not in edges:
                 raise GraphError(f"{name} : l'expiration d'un WAIT doit nommer son arête")
 
-    # atteignabilité depuis entry
+    # atteignabilité depuis entry — les cibles on_kernel sont de vraies arêtes
     seen: set[str] = set()
-    stack = [bundle["entry"]]
+    stack = [bundle["entry"], on_kernel["escalate_to"], on_kernel["exhausted_to"]]
     while stack:
         n = stack.pop()
         if n in seen:

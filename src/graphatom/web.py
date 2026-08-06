@@ -92,7 +92,8 @@ def _notify_loop(cmd: str, base_url: str) -> None:
         time.sleep(2)
 
 
-def serve(port: int = 8848, by: str = "web", notify_cmd: str | None = None) -> None:
+def serve(port: int = 8848, by: str = "web", notify_cmd: str | None = None,
+          host: str = "127.0.0.1") -> None:
     token = secrets.token_hex(16)
     base_url = f"http://127.0.0.1:{port}/"
 
@@ -136,4 +137,4 @@ def serve(port: int = 8848, by: str = "web", notify_cmd: str | None = None) -> N
         threading.Thread(target=_notify_loop, args=(notify_cmd, base_url),
                          daemon=True).start()
     print(f"canal humain sur {base_url} (réponses signées « {by} »)", flush=True)
-    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+    ThreadingHTTPServer((host, port), Handler).serve_forever()

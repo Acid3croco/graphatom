@@ -1,0 +1,41 @@
+{
+  "name": "github-pilot",
+  "entry": "ingest",
+  "budgets": { "escalations": 3, "wall_deadline_hours": 168 },
+  "on_kernel": { "escalate_to": "escalate", "exhausted_to": "close_unresolved" },
+  "nodes": {
+    "ingest": {
+      "block": "FETCH",
+      "config": { "materialize": ["issue"] },
+      "edges": { "ok": "triage" }
+    },
+    "triage": {
+      "block": "WAIT",
+      "config": {
+        "question": "Nouvelle issue sur le rail. On la traite, ou on la classe sans suite ?",
+        "options": ["traiter", "classer"],
+        "owner": "Acid3croco",
+        "deadline_minutes": 1440
+      },
+      "edges": { "traiter": "produce", "classer": "close_unresolved", "expired": "close_unresolved" }
+    },
+    "produce": {
+      "block": "ACT",
+      "config": { "duration_s": 1 },
+      "edges": { "ok": "close" }
+    },
+    "escalate": {
+      "block": "WAIT",
+      "escalade": true,
+      "config": {
+        "question": "Le rail a échoué en interne (retries épuisés). On retente depuis le début, ou on abandonne ?",
+        "options": ["retry", "abandon"],
+        "owner": "Acid3croco",
+        "deadline_minutes": 1440
+      },
+      "edges": { "retry": "ingest", "abandon": "close_unresolved", "expired": "close_unresolved" }
+    },
+    "close": { "terminal": true },
+    "close_unresolved": { "terminal": true }
+  }
+}
