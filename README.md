@@ -119,7 +119,11 @@ n'importe quel bloc. L'agent ne voit jamais la base du rail :
 tourner ce repo : implémentation par agent, **agent de test backend**
 (imports, crash-test), **agent de test frontend au navigateur headless**
 (le DOM rendu et des screenshots, pas du curl), puis review humaine —
-question fermée sur l'issue GitHub. Les agents demandent un worker sur
+question fermée sur l'issue GitHub. La boucle se ferme ensuite toute
+seule : **release** (commit, push, PR, merge surveillé jusqu'au SHA),
+**deploy** (`docker compose up -d --build github-sync web`) et
+**verify_deploy** (conteneurs `Up`, `/items` en 200, logs du sync
+propres). Les agents demandent un worker sur
 l'hôte (voir le commentaire dans `docker-compose.yml`) ; le bail par nœud
 (`config.lease_s`) couvre leur durée, et l'ordonnanceur exécute chaque
 bloc dans son propre thread — un agent de dix minutes ne bloque ni le
