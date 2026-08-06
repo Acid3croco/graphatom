@@ -72,16 +72,22 @@ Quatre services : Postgres, l'ordonnanceur, le canal GitHub (polling), le
 canal web (secours, port 8850). Ensuite tout se passe sur GitHub :
 
 1. poser le label `graphatom` sur une issue → admission (une seule fois par issue)
-2. le rail pose sa question fermée en commentaire
-3. répondre par un commentaire `/answer <id> <option>` (auteurs autorisés :
+2. le rail accuse la prise en charge en commentaire : item, graph, lien
+   trajectoire — et pose le label d'état `rail:<état>`
+3. le rail pose sa question fermée en commentaire
+4. répondre par un commentaire `/answer <id> <option>` (auteurs autorisés :
    `GRAPHATOM_ANSWERERS`, défaut : le propriétaire du repo)
-4. le rail route, puis poste le rapport terminal — le journal en table
+5. le rail route — le label suit chaque transition — puis poste le rapport
+   terminal, le journal en table, et retire le label d'état
 
 Règles : GitHub est l'interface humaine et la cible des effets, Postgres
 reste l'unique autorité d'exécution. Chaque prise de parole du rail est un
 effet — clé logique, intention commise avant, réconciliation par marqueur
 dans les commentaires : un crash entre le POST et le marquage ne produit
-jamais de doublon. Aucun parsing de langage naturel, aucune lecture de
+jamais de doublon. Le label `rail:<état>` n'est pas un état : c'est une
+projection possédée par le rail, comme la colonne d'un board — jamais lue,
+repeinte à chaque tick depuis la base ; un label bricolé à la main revient
+à sa place tout seul. Aucun parsing de langage naturel, aucune lecture de
 GitHub comme état d'item. La démo : issues [#7](https://github.com/Acid3croco/graphatom/issues/7)
 et [#8](https://github.com/Acid3croco/graphatom/issues/8).
 
