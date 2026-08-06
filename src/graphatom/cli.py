@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import db, graph, kernel, scheduler
+from . import channel, db, graph, kernel, scheduler, web
 
 
 def main() -> None:
@@ -35,6 +35,12 @@ def main() -> None:
     sp.add_argument("option")
     sp.add_argument("--by", default="jack")
 
+    sp = sub.add_parser("serve", help="canal humain : web local sur les questions")
+    sp.add_argument("--port", type=int, default=8848)
+    sp.add_argument("--by", default="jack")
+    sp.add_argument("--notify-cmd", default=None,
+                    help="commande shell lancée à chaque question ouverte (JSON sur stdin)")
+
     args = p.parse_args()
 
     if args.cmd == "init-db":
@@ -43,6 +49,9 @@ def main() -> None:
         return
     if args.cmd == "run":
         scheduler.run_forever()
+        return
+    if args.cmd == "serve":
+        web.serve(port=args.port, by=args.by, notify_cmd=args.notify_cmd)
         return
 
     with db.connect() as conn:
@@ -79,19 +88,9 @@ def main() -> None:
                 print(f"v{r['item_version']:>2} {r['at']:%H:%M:%S} {r['kind']:<9} "
                       f"{arrow}{r['to_state']}{out}")
         elif args.cmd == "answer":
-            row = conn.execute(
-                "SELECT * FROM question WHERE id = %s AND state = 'open'",
-                (args.question_id,),
-            ).fetchone()
-            if row is None:
-                sys.exit("question inconnue ou déjà réglée")
-            if args.option not in row["options"]:
-                sys.exit(f"option invalide — attendu : {', '.join(row['options'])}")
-            conn.execute(
-                "UPDATE question SET state = 'answered', answer = %s, "
-                "answered_by = %s, answered_at = now() WHERE id = %s",
-                (args.option, args.by, args.question_id),
-            )
+            err = channel.record_answer(conn, args.question_id, args.option, args.by)
+            if err:
+                sys.exit(err)
             print("réponse enregistrée — le waiter routera au prochain tick")
 
 

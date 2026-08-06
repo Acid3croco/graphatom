@@ -42,6 +42,23 @@ uv run python tests/crash_test.py                    # le critère du milestone 
                                                      # SIGKILL en plein vol = cas nominal
 ```
 
+## Le canal humain (milestone 2)
+
+```sh
+uv run graphatom serve                               # http://127.0.0.1:8848
+uv run graphatom serve --notify-cmd 'mon-hook.sh'    # JSON de la question sur stdin
+```
+
+Un web local en stdlib, zéro dépendance : les questions ouvertes, un bouton
+par option, et rien d'autre. Le canal n'écrit jamais l'état d'un item — il
+enregistre la réponse, l'ordonnanceur route au tick suivant. Une page
+disponible n'est pas un oncall notifié : `--notify-cmd` lance une commande
+à chaque question ouverte (au-moins-une-fois — au redémarrage, on renotifie).
+
+Refusé, exprès : auth, comptes, exposition Internet, WebSocket, édition de
+graphs, mutation d'items, dashboard. Voir les WAIT, répondre une fois parmi
+les options, laisser le rail reprendre.
+
 ## Ce qu'on ne fera jamais
 
 Périmètre négatif, assumé — ces refus *sont* le design :
