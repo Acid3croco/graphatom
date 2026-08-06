@@ -49,8 +49,11 @@ class GitHub:
             return json.loads(resp.read() or "null")
 
     def labeled_issues(self) -> list[dict]:
+        # GRAPHATOM_TAKE_ALL : le déploiement prend toute issue ouverte en charge,
+        # sans attendre le label — pour un repo où le rail est le seul mainteneur
+        label = "" if os.environ.get("GRAPHATOM_TAKE_ALL") else f"labels={LABEL}&"
         rows = self._call(
-            "GET", f"/repos/{self.repo}/issues?labels={LABEL}&state=open&per_page=100")
+            "GET", f"/repos/{self.repo}/issues?{label}state=open&per_page=100")
         return [r for r in rows if "pull_request" not in r]  # les PR sont des issues, pas pour nous
 
     def comments(self, number: int) -> list[dict]:
@@ -126,10 +129,12 @@ def _publish_questions(conn: Connection, gh: GitHub) -> None:
     for q in _gh_questions(conn, gh):
         number = _issue_number(q["subject_key"])
         options = " / ".join(f"`{o}`" for o in q["options"])
+        web = os.environ.get("GRAPHATOM_WEB_URL", "http://127.0.0.1:8850")
         body = (f"**Question du rail** — pour @{q['owner']}, "
                 f"avant le {q['deadline']:%d/%m %H:%M} UTC\n\n{q['text']}\n\n"
                 f"Options : {options}\n"
-                f"Répondre par un commentaire : `/answer {q['id']} <option>`")
+                f"Répondre par un commentaire : `/answer {q['id']} <option>`\n"
+                f"Trajectoire et artefacts (previews) : {web}/item/{q['item_id']}")
         _speak(conn, gh, number, q["item_id"], f"q{q['id']}", body)
 
 
@@ -164,7 +169,7 @@ def _collect_answers(conn: Connection, gh: GitHub, allowed: set[str]) -> None:
 
 def _report_terminals(conn: Connection, gh: GitHub) -> None:
     rows = conn.execute(
-        "SELECT w.*, s.subject_key FROM work_item w "
+        "SELECT w.*, s.subject_key, s.graph FROM work_item w "
         "JOIN subject s ON s.id = w.subject_id "
         "WHERE w.terminal_at IS NOT NULL AND s.subject_key LIKE %s",
         (f"gh:{gh.repo}#%",),
@@ -182,7 +187,10 @@ def _report_terminals(conn: Connection, gh: GitHub) -> None:
         body = (f"**Item terminé : `{item['state']}`** "
                 f"(génération {item['generation']}, {len(events)} transitions)\n\n"
                 f"| v | événement | transition | issue |\n|---|---|---|---|\n{lines}")
-        _speak(conn, gh, number, item["id"], f"g{item['generation']}-terminal", body)
+        # la clé porte le graph : deux graphs peuvent traiter la même issue,
+        # chacun a droit à son rapport de génération
+        _speak(conn, gh, number, item["id"],
+               f"{item['graph']}-g{item['generation']}-terminal", body)
 
 
 def sync_forever(repo: str, bundle_path: str, poll_s: float = 15.0) -> None:

@@ -4,10 +4,15 @@
     2. wait    — réponses arrivées et échéances de WAIT, wall_deadline
     3. dispatch— pour chaque item actif sans run : claim → bloc → apply
 
+Chaque bloc s'exécute dans son propre thread avec sa propre connexion :
+un agent qui travaille dix minutes ne bloque ni le faucheur ni les
+autres items. claim() garantit qu'un item n'a qu'un run à la fois.
+
 Tuer ce processus n'importe quand est un cas nominal, pas une panne :
 c'est le contrat que le crash-test vérifie.
 """
 
+import threading
 import time
 
 import psycopg
@@ -66,6 +71,22 @@ def _settle_waits(conn: psycopg.Connection) -> int:
     return n
 
 
+def _execute(run_id: int, item_id: int) -> None:
+    """Un bloc, un thread, une connexion. L'issue est appliquée à la fin."""
+    from .db import connect
+
+    with connect() as conn:
+        run = conn.execute("SELECT * FROM node_run WHERE id = %s", (run_id,)).fetchone()
+        item = conn.execute("SELECT * FROM work_item WHERE id = %s", (item_id,)).fetchone()
+        bundle = load_bundle(conn, item["revision"])
+        node = bundle["nodes"][run["node"]]
+        try:
+            result = BLOCKS[node["block"]](Context(conn, run, item, node, bundle))
+        except Exception as exc:  # le bloc a le droit d'échouer, pas de router
+            result = {"outcome": "crashed", "error": str(exc)}
+        kernel.apply(conn, run_id, result)
+
+
 def _dispatch(conn: psycopg.Connection) -> int:
     items = conn.execute(
         "SELECT id FROM work_item WHERE terminal_at IS NULL ORDER BY id"
@@ -76,14 +97,7 @@ def _dispatch(conn: psycopg.Connection) -> int:
         if run is None:
             continue
         n += 1
-        item = conn.execute(
-            "SELECT * FROM work_item WHERE id = %s", (row["id"],)
-        ).fetchone()
-        bundle = load_bundle(conn, item["revision"])
-        node = bundle["nodes"][run["node"]]
-        try:
-            result = BLOCKS[node["block"]](Context(conn, run, item, node, bundle))
-        except Exception as exc:  # le bloc a le droit d'échouer, pas de router
-            result = {"outcome": "crashed", "error": str(exc)}
-        kernel.apply(conn, run["id"], result)
+        threading.Thread(
+            target=_execute, args=(run["id"], row["id"]), daemon=True
+        ).start()
     return n

@@ -110,12 +110,13 @@ def claim(conn: psycopg.Connection, item_id: int) -> dict | None:
         ).fetchone()["n"] + 1
         fence = item["fence"] + 1
         conn.execute("UPDATE work_item SET fence = %s WHERE id = %s", (fence, item_id))
+        lease_s = float((node.get("config") or {}).get("lease_s", LEASE_SECONDS))
         run = conn.execute(
             "INSERT INTO node_run (item_id, node, attempt, status, fence, "
             "expected_version, lease_expires_at) "
             "VALUES (%s, %s, %s, 'running', %s, %s, %s) RETURNING *",
             (item_id, item["state"], attempt, fence, item["version"],
-             now() + dt.timedelta(seconds=LEASE_SECONDS)),
+             now() + dt.timedelta(seconds=lease_s)),
         ).fetchone()
         return run
 

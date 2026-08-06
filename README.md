@@ -84,6 +84,40 @@ jamais de doublon. Aucun parsing de langage naturel, aucune lecture de
 GitHub comme état d'item. La démo : issues [#7](https://github.com/Acid3croco/graphatom/issues/7)
 et [#8](https://github.com/Acid3croco/graphatom/issues/8).
 
+Config de déploiement : `GRAPHATOM_TAKE_ALL=1` fait prendre en charge
+toute issue ouverte, sans attendre le label — pour un repo dont le rail
+est le seul mainteneur.
+
+## De vrais agents dans les blocs (milestone 3b)
+
+Un nœud ACT / CHECK / JUDGE peut déclarer `config.agent` — le bloc écrit
+alors `prompt.md` dans le workspace, lance la commande configurée, et lit
+`outcome.json` :
+
+```json
+"agent": {
+  "cmd": "claude --dangerously-skip-permissions -p \"$(cat prompt.md)\"",
+  "timeout_s": 540,
+  "prompt": "Agent de test frontend… chromium --headless=new…"
+}
+```
+
+Le contrat est minuscule et agnostique : n'importe quel agent CLI (claude,
+codex, pi…) fait l'affaire ; le kernel n'en connaît aucun. Pas
+d'`outcome.json` valide → `crashed`, retenté puis escaladé — comme
+n'importe quel bloc. L'agent ne voit jamais la base du rail :
+`GRAPHATOM_AGENT_DSN` lui substitue une base jetable.
+
+[`examples/code-task.json`](examples/code-task.json) est le graph qui fait
+tourner ce repo : implémentation par agent, **agent de test backend**
+(imports, crash-test), **agent de test frontend au navigateur headless**
+(le DOM rendu et des screenshots, pas du curl), puis review humaine —
+question fermée sur l'issue GitHub. Les agents demandent un worker sur
+l'hôte (voir le commentaire dans `docker-compose.yml`) ; le bail par nœud
+(`config.lease_s`) couvre leur durée, et l'ordonnanceur exécute chaque
+bloc dans son propre thread — un agent de dix minutes ne bloque ni le
+faucheur ni les autres items.
+
 ## Ce qu'on ne fera jamais
 
 Périmètre négatif, assumé — ces refus *sont* le design :

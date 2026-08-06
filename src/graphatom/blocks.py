@@ -1,12 +1,19 @@
-"""L'interface de bloc, et les six blocs en version stub.
+"""L'interface de bloc, les six blocs stub, et l'exécuteur d'agent.
 
 Un bloc reçoit un contexte et retourne {"outcome": ...} plus ce qu'il veut.
 Il ne touche jamais la base : le noyau réserve avant, applique après.
-Les stubs simulent le travail via la config du nœud — assez pour exercer
-le rail et le crash-test, sans modèle ni monde extérieur.
+Les stubs simulent le travail via la config du nœud.
+
+Un nœud ACT / CHECK / JUDGE peut déclarer `config.agent` : un vrai agent
+CLI fait alors le travail. Le contrat est minuscule et agnostique — le
+bloc écrit `prompt.md` dans le workspace, lance la commande configurée
+(claude, codex, pi, n'importe quoi), et lit `outcome.json`. Pas de
+fichier d'issue valide = crashed, et le noyau route comme d'habitude.
 """
 
 import json
+import os
+import subprocess
 import time
 from pathlib import Path
 
@@ -32,6 +39,43 @@ class Context:
         time.sleep(float(self.config.get("duration_s", 0)))
 
 
+def _agent(ctx: Context) -> dict:
+    """Exécute l'agent CLI configuré. Contrat : prompt.md → outcome.json."""
+    cfg = ctx.config["agent"]
+    outcomes = sorted(ctx.node.get("edges") or {})
+    subject = ctx.conn.execute(
+        "SELECT subject_key FROM subject WHERE id = %s", (ctx.item["subject_id"],)
+    ).fetchone()["subject_key"]
+
+    workspace = ctx.workspace.resolve()
+    outcome_path = workspace / "outcome.json"
+    outcome_path.unlink(missing_ok=True)
+    prompt = os.path.expandvars(
+        cfg["prompt"].replace("{subject_key}", subject)
+    ) + (
+        "\n\n--- Contrat GraphAtom ---\n"
+        f"Tu es le bloc « {ctx.run['node']} » d'un rail d'exécution. "
+        f"Ton workspace : {workspace}\n"
+        f"Avant de terminer, écris impérativement {outcome_path} : "
+        f'{{"outcome": <une valeur parmi {outcomes}>, "summary": "<une phrase>"}}\n'
+        "Sans ce fichier, ta tentative est classée crashed et sera retentée."
+    )
+    (workspace / "prompt.md").write_text(prompt)
+
+    env = os.environ | {"GRAPHATOM_WORKSPACE": str(workspace)}
+    if "GRAPHATOM_AGENT_DSN" in env:
+        # l'agent ne voit jamais la base du rail : sa DSN est une base jetable
+        env["GRAPHATOM_DSN"] = env["GRAPHATOM_AGENT_DSN"]
+    subprocess.run(
+        cfg["cmd"], shell=True, cwd=workspace, env=env,
+        timeout=float(cfg.get("timeout_s", 570)),
+        stdout=(workspace / f"agent-{ctx.run['attempt']}.log").open("w"),
+        stderr=subprocess.STDOUT,
+    )
+    data = json.loads(outcome_path.read_text())  # absent/invalide → crashed
+    return {"outcome": data["outcome"], "summary": data.get("summary", "")}
+
+
 def fetch(ctx: Context) -> dict:
     ctx.simulate_work()
     evidence = ctx.workspace / f"evidence-{ctx.run['node']}-{ctx.run['attempt']}.json"
@@ -40,12 +84,16 @@ def fetch(ctx: Context) -> dict:
 
 
 def judge(ctx: Context) -> dict:
+    if "agent" in ctx.config:
+        return _agent(ctx)
     ctx.simulate_work()
-    # le stub répond ce que la config scripte ; un vrai JUDGE appellerait un modèle
+    # le stub répond ce que la config scripte ; un vrai JUDGE appelle un agent
     return {"outcome": ctx.config["stub_outcome"]}
 
 
 def act(ctx: Context) -> dict:
+    if "agent" in ctx.config:
+        return _agent(ctx)
     ctx.simulate_work()
     checkpoint = ctx.workspace / f"checkpoint-{ctx.run['attempt']}.txt"
     checkpoint.write_text(f"travail de la tentative {ctx.run['attempt']}\n")
@@ -53,6 +101,8 @@ def act(ctx: Context) -> dict:
 
 
 def check(ctx: Context) -> dict:
+    if "agent" in ctx.config:
+        return _agent(ctx)
     ctx.simulate_work()
     return {"outcome": ctx.config.get("stub_outcome", "pass")}
 

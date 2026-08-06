@@ -15,6 +15,8 @@ services:
       POSTGRES_DB: graphatom
     volumes:
       - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:54322:5432"   # pour un worker hôte (agents CLI, navigateur headless)
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U graphatom"]
       interval: 2s
@@ -30,7 +32,12 @@ services:
       db:
         condition: service_healthy
 
+  # l'ordonnanceur conteneurisé convient aux graphs à stubs ; les graphs à
+  # agents (claude, chromium headless) demandent un worker sur l'hôte :
+  #   GRAPHATOM_DSN=postgresql://graphatom:graphatom@127.0.0.1:54322/graphatom \
+  #   GRAPHATOM_AGENT_DSN=<base jetable> GRAPHATOM_REPO_DIR=<repo> graphatom run
   scheduler:
+    profiles: ["stub"]
     build: .
     command: graphatom run
     environment: *env
@@ -41,11 +48,12 @@ services:
 
   github-sync:
     build: .
-    command: graphatom github-sync --repo ${GRAPHATOM_REPO:-Acid3croco/graphatom} --graph examples/github-pilot.json
+    command: graphatom github-sync --repo ${GRAPHATOM_REPO:-Acid3croco/graphatom} --graph ${GRAPHATOM_GRAPH:-examples/code-task.json}
     environment:
       <<: *env
       GITHUB_TOKEN: ${GITHUB_TOKEN:?GITHUB_TOKEN requis}
       GRAPHATOM_ANSWERERS: ${GRAPHATOM_ANSWERERS:-Acid3croco}
+      GRAPHATOM_TAKE_ALL: ${GRAPHATOM_TAKE_ALL:-}
     restart: unless-stopped
     depends_on:
       init:
@@ -56,6 +64,8 @@ services:
     command: graphatom serve --host 0.0.0.0 --port 8848
     environment: *env
     restart: unless-stopped
+    volumes:
+      - ./data:/app/data:ro   # les workspaces du worker hôte — previews en lecture seule
     ports:
       - "127.0.0.1:8850:8848"
     depends_on:
