@@ -36,10 +36,15 @@ def validate(bundle: dict) -> None:
     if bundle["entry"] not in nodes:
         raise GraphError(f"entry inconnu : {bundle['entry']}")
 
+    # toute cible on_kernel est une arête comme une autre : les deux clés du
+    # noyau sont obligatoires, et aucune clé ne peut viser un nœud fantôme
     on_kernel = bundle["on_kernel"]
     for key in ("escalate_to", "exhausted_to"):
-        if on_kernel.get(key) not in nodes:
-            raise GraphError(f"on_kernel.{key} doit viser un nœud déclaré")
+        if key not in on_kernel:
+            raise GraphError(f"on_kernel.{key} manquant")
+    for key, target in on_kernel.items():
+        if target not in nodes:
+            raise GraphError(f"on_kernel.{key} → nœud non déclaré {target}")
 
     terminals = {n for n, spec in nodes.items() if spec.get("terminal")}
     if not terminals:
@@ -73,7 +78,7 @@ def validate(bundle: dict) -> None:
 
     # atteignabilité depuis entry — les cibles on_kernel sont de vraies arêtes
     seen: set[str] = set()
-    stack = [bundle["entry"], on_kernel["escalate_to"], on_kernel["exhausted_to"]]
+    stack = [bundle["entry"], *on_kernel.values()]
     while stack:
         n = stack.pop()
         if n in seen:

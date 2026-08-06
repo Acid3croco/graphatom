@@ -40,6 +40,7 @@ uv run graphatom questions && uv run graphatom answer 1 retry
 
 uv run python tests/crash_test.py                    # le critère du milestone :
                                                      # SIGKILL en plein vol = cas nominal
+uv run python tests/validate_test.py                 # la validation statique, sans base
 ```
 
 ## Le canal humain (milestone 2)
