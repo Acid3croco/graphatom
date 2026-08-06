@@ -207,6 +207,24 @@
 </section>
 
 <section>
+  <h2>Le cycle de vie d'un nœud</h2>
+  <p>Comment un item change de nœud — validé par le crash-test du milestone 1. Trois temps, dont un seul hors transaction :</p>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Temps</th><th>Transactionnel ?</th><th>Ce qui se passe</th></tr></thead>
+      <tbody>
+        <tr><td><code>claim()</code></td><td>oui</td><td>Réservation : un run est créé, le fence de l'item est incrémenté, la version courante est épinglée (<code>expected_version</code>), un bail est posé. Refusé si l'item est terminal, en WAIT, ou déjà réservé.</td></tr>
+        <tr><td>exécution du bloc</td><td><strong>non</strong></td><td>Le bloc travaille dans son workspace, aussi longtemps que le bail tient. Il peut crasher, ralentir, être tué : rien de ce qu'il fait n'engage l'item.</td></tr>
+        <tr><td><code>apply(résultat)</code></td><td>oui</td><td>Validation de l'issue, comparaison fence/version, routage par l'arête déclarée, <code>version += 1</code>, événement journalisé. Un rejet (<code>superseded</code>, <code>stale</code>) est classé sur le run, l'item n'a pas bougé.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>Trois déclencheurs, et seulement trois, font bouger un item : le <strong>résultat d'un run</strong> (apply), une <strong>réponse humaine ou une deadline</strong> (apply_item — transition sans run), et le <strong>faucheur</strong> (bail expiré → fence incrémenté, run classé <code>faulted</code>, issue <code>crashed</code> routée comme n'importe quelle autre). Une question de WAIT est armée <em>dans la même transaction</em> que l'entrée dans l'état WAIT — pas de réveil perdu possible. Tuer l'ordonnanceur en plein vol traverse ce cycle sans le casser : c'est un cas nominal, pas une panne.</p>
+</section>
+
+<section>
   <h2>Les quatre gardes de frontière</h2>
   <p>Un item est étanche à l'intérieur ; les incidents réels arrivent aux frontières — le temps, les autres items, les gens, sa propre lignée. Quatre gardes, chacune rangée là où elle s'exécute :</p>
 
