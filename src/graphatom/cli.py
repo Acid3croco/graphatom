@@ -42,7 +42,9 @@ def main() -> None:
     sp.add_argument("--notify-cmd", default=None,
                     help="commande shell lancée à chaque question ouverte (JSON sur stdin)")
 
-    sp = sub.add_parser("github-sync", help="canal github : issues labellisées, /answer, rapports")
+    sp = sub.add_parser(
+        "github-sync",
+        help="canal github : issues labellisées, /answer, labels d'état, rapports")
     sp.add_argument("--repo", required=True, help="owner/repo")
     sp.add_argument("--graph", required=True, help="bundle JSON publié au démarrage")
     sp.add_argument("--poll", type=float, default=15.0)

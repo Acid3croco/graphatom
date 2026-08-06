@@ -1,17 +1,21 @@
 """Le canal GitHub — module hors noyau, par polling.
 
 GitHub est l'interface humaine et la cible des effets ; Postgres reste
-l'unique autorité d'exécution. Ce module fait quatre choses, et refuse
+l'unique autorité d'exécution. Ce module fait six choses, et refuse
 tout le reste :
 
   1. admission  — une issue ouverte portant le label `graphatom` devient
                   un sujet (une seule admission automatique par issue)
-  2. questions  — chaque WAIT ouvert est publié en commentaire d'issue ;
+  2. accusé     — l'occurrence ouverte reçoit son commentaire de prise en
+                  charge : item, graph, lien trajectoire — une seule fois
+  3. questions  — chaque WAIT ouvert est publié en commentaire d'issue ;
                   la publication est un effet réconciliable par marqueur
-  3. réponses   — un commentaire `/answer <id> <option>` d'un auteur
+  4. réponses   — un commentaire `/answer <id> <option>` d'un auteur
                   autorisé, postérieur à l'armement de la question,
                   enregistre la réponse ; l'ordonnanceur route
-  4. rapports   — un item terminal reçoit son commentaire de clôture
+  5. état       — un label `rail:<état>` projette l'état de l'item actif,
+                  repeint à chaque tick, retiré au terminal
+  6. rapports   — un item terminal reçoit son commentaire de clôture
 
 Aucun parsing de langage naturel. Aucune lecture de GitHub comme état
 d'item. Chaque prise de parole du rail est un effet : clé logique,
@@ -23,6 +27,7 @@ import json
 import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from psycopg import Connection
@@ -31,6 +36,8 @@ from . import channel, db, graph, kernel
 
 API = "https://api.github.com"
 LABEL = "graphatom"
+RAIL = "rail:"        # préfixe des labels d'état — l'espace de noms du rail
+RAIL_COLOR = "1f6feb"  # couleur unie : un label d'état se reconnaît d'un coup d'œil
 
 
 class GitHub:
@@ -64,9 +71,36 @@ class GitHub:
         self._call("POST", f"/repos/{self.repo}/issues/{number}/comments",
                    {"body": body})
 
+    def create_label(self, name: str) -> None:
+        # les labels du rail naissent à la volée ; 422 = il existe déjà, tant mieux
+        try:
+            self._call("POST", f"/repos/{self.repo}/labels",
+                       {"name": name, "color": RAIL_COLOR})
+        except urllib.error.HTTPError as exc:
+            if exc.code != 422:
+                raise
+
+    def add_label(self, number: int, name: str) -> None:
+        self._call("POST", f"/repos/{self.repo}/issues/{number}/labels",
+                   {"labels": [name]})
+
+    def remove_label(self, number: int, name: str) -> None:
+        # 404 : quelqu'un l'a retiré entre la lecture et l'écriture — c'était le but
+        try:
+            self._call(
+                "DELETE",
+                f"/repos/{self.repo}/issues/{number}/labels/{urllib.parse.quote(name)}")
+        except urllib.error.HTTPError as exc:
+            if exc.code != 404:
+                raise
+
 
 def _issue_number(subject_key: str) -> int:
     return int(subject_key.rsplit("#", 1)[1])
+
+
+def _web() -> str:
+    return os.environ.get("GRAPHATOM_WEB_URL", "http://127.0.0.1:8850")
 
 
 def _speak(conn: Connection, gh: GitHub, number: int, item_id: int,
@@ -113,6 +147,32 @@ def _admit_labeled(conn: Connection, gh: GitHub, revision: str) -> None:
             print(f"#{issue['number']} refusé : {exc}", flush=True)
 
 
+def _acknowledge(conn: Connection, gh: GitHub) -> None:
+    """Accusé de prise en charge : entre l'admission et la première question,
+    l'issue dit déjà qu'on travaille dessus.
+
+    Un acte de parole comme les autres — une fois l'effet appliqué, le geste
+    ne coûte plus qu'une lecture en base : jamais deux accusés par occurrence.
+    """
+    rows = conn.execute(
+        "SELECT w.*, s.subject_key, s.graph FROM work_item w "
+        "JOIN subject s ON s.id = w.subject_id "
+        "WHERE s.subject_key LIKE %s ORDER BY w.id",
+        (f"gh:{gh.repo}#%",),
+    ).fetchall()
+    for item in rows:
+        number = _issue_number(item["subject_key"])
+        body = (f"**Prise en charge par le rail** — item {item['id']}, "
+                f"graph `{item['graph']}` (génération {item['generation']}).\n\n"
+                f"Le label `{RAIL}<état>` suit la trajectoire ; les questions "
+                f"arrivent ici en commentaire.\n"
+                f"Trajectoire et artefacts : {_web()}/item/{item['id']}")
+        # la clé porte le graph et la génération : chaque occurrence a droit
+        # à son accusé, une ré-admission n'est pas un doublon
+        _speak(conn, gh, number, item["id"],
+               f"{item['graph']}-g{item['generation']}-admitted", body)
+
+
 def _gh_questions(conn: Connection, gh: GitHub) -> list[dict]:
     return list(conn.execute(
         "SELECT q.*, s.subject_key, w.generation, "
@@ -129,7 +189,7 @@ def _publish_questions(conn: Connection, gh: GitHub) -> None:
     for q in _gh_questions(conn, gh):
         number = _issue_number(q["subject_key"])
         options = " / ".join(f"`{o}`" for o in q["options"])
-        web = os.environ.get("GRAPHATOM_WEB_URL", "http://127.0.0.1:8850")
+        web = _web()
         body = (f"**Question du rail** — pour @{q['owner']}, "
                 f"avant le {q['deadline']:%d/%m %H:%M} UTC\n\n{q['text']}\n\n"
                 f"Options : {options}\n"
@@ -165,6 +225,37 @@ def _collect_answers(conn: Connection, gh: GitHub, allowed: set[str]) -> None:
                 _speak(conn, gh, number, q["item_id"], f"q{q['id']}-receipt",
                        f"Réponse `{parts[2]}` enregistrée (par @{author}) — le rail reprend.")
                 break  # la première réponse valide gagne
+
+
+def _paint_states(conn: Connection, gh: GitHub) -> None:
+    """Le label `rail:<état>` : une projection possédée par le rail.
+
+    Comme la colonne d'un board — jamais lue comme état d'item, seulement
+    réécrite depuis la base : l'ancien label rail part, le nouveau arrive.
+    Un item terminal n'en porte aucun (le rapport suffit) et un label
+    bricolé à la main est simplement repeint au tick suivant.
+    """
+    active = {
+        _issue_number(r["subject_key"]): f"{RAIL}{r['state']}"
+        for r in conn.execute(
+            "SELECT w.state, s.subject_key FROM work_item w "
+            "JOIN subject s ON s.id = w.subject_id "
+            "WHERE w.terminal_at IS NULL AND s.subject_key LIKE %s ORDER BY w.id",
+            (f"gh:{gh.repo}#%",),
+        ).fetchall()
+    }
+    for issue in gh.labeled_issues():
+        number = issue["number"]
+        wanted = active.get(number)
+        painted = {lab["name"] for lab in issue["labels"]
+                   if lab["name"].startswith(RAIL)}
+        if wanted and wanted not in painted:
+            gh.create_label(wanted)
+            gh.add_label(number, wanted)
+            print(f"#{number} ← {wanted}", flush=True)
+        for stale in painted - {wanted}:
+            gh.remove_label(number, stale)
+            print(f"#{number} ⌫ {stale}", flush=True)
 
 
 def _report_terminals(conn: Connection, gh: GitHub) -> None:
@@ -208,8 +299,10 @@ def sync_forever(repo: str, bundle_path: str, poll_s: float = 15.0) -> None:
         while True:
             try:
                 _admit_labeled(conn, gh, revision)
+                _acknowledge(conn, gh)
                 _publish_questions(conn, gh)
                 _collect_answers(conn, gh, allowed)
+                _paint_states(conn, gh)
                 _report_terminals(conn, gh)
             except (urllib.error.URLError, OSError) as exc:
                 print(f"github injoignable : {exc} — on réessaie", flush=True)
