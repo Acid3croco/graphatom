@@ -1,0 +1,65 @@
+"""Le test de la validation statique : ce qui passe ne peut plus casser.
+
+Scénario, sans base ni ordonnanceur — la validation est pure :
+
+  1. les bundles d'`examples/` se valident tous
+  2. un bundle avec une clé `on_kernel` parasite visant un nœud fantôme
+     est refusé, avec un message qui nomme la clé
+  3. `web._layers()` ne lève pas de KeyError sur un bundle validé
+
+Usage : uv run python tests/validate_test.py
+"""
+
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from graphatom import graph, web  # noqa: E402
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def main() -> None:
+    bundles = {p.name: json.loads(p.read_text()) for p in sorted((ROOT / "examples").glob("*.json"))}
+
+    # 1. les exemples se valident
+    for bundle in bundles.values():
+        graph.validate(bundle)
+    print(f"1. exemples validés : {', '.join(bundles)} ✓")
+
+    # 2. une cible on_kernel fantôme est refusée, quelle que soit la clé
+    bundle = json.loads(json.dumps(bundles["supervision.json"]))
+    bundle["on_kernel"]["notify_to"] = "nowhere"
+    try:
+        graph.validate(bundle)
+    except graph.GraphError as e:
+        assert "notify_to" in str(e) and "nowhere" in str(e), str(e)
+        print(f"2. cible parasite refusée : {e} ✓")
+    else:
+        sys.exit("ÉCHEC : on_kernel.notify_to = 'nowhere' a passé la validation")
+
+    # les deux clés du noyau restent obligatoires
+    for key in ("escalate_to", "exhausted_to"):
+        bundle = json.loads(json.dumps(bundles["supervision.json"]))
+        del bundle["on_kernel"][key]
+        try:
+            graph.validate(bundle)
+        except graph.GraphError as e:
+            assert key in str(e), str(e)
+        else:
+            sys.exit(f"ÉCHEC : on_kernel sans {key} a passé la validation")
+    print("   clés du noyau toujours obligatoires ✓")
+
+    # 3. le placement du graph tient sur tout bundle validé
+    for name, bundle in bundles.items():
+        layers = web._layers(bundle)
+        assert sorted(n for layer in layers for n in layer) == sorted(bundle["nodes"]), name
+    print("3. _layers() couvre exactement les nœuds déclarés ✓")
+
+    print("\nvalidation : OK — une cible on_kernel fantôme ne se publie plus")
+
+
+if __name__ == "__main__":
+    main()
