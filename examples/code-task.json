@@ -1,0 +1,72 @@
+{
+  "name": "code-task",
+  "entry": "ingest",
+  "budgets": { "escalations": 3, "wall_deadline_hours": 72 },
+  "on_kernel": { "escalate_to": "escalate", "exhausted_to": "close_unresolved" },
+  "nodes": {
+    "ingest": {
+      "block": "FETCH",
+      "config": { "materialize": ["issue"] },
+      "edges": { "ok": "implement" }
+    },
+    "implement": {
+      "block": "ACT",
+      "config": {
+        "lease_s": 900,
+        "agent": {
+          "cmd": "claude --dangerously-skip-permissions -p \"$(cat prompt.md)\"",
+          "timeout_s": 840,
+          "prompt": "Sujet : {subject_key} — extrais owner/repo et le numéro d'issue, puis lis l'issue : `gh issue view <num> --repo <owner/repo> --json title,body,comments`.\n\nLe dépôt de travail est $GRAPHATOM_REPO_DIR. Implémente ce que demande l'issue, dans le style du code existant : simple, plat, lisible, français dans les docstrings. Si l'implémentation existe déjà sur la branche, vérifie qu'elle couvre chaque point de l'issue et complète ce qui manque. Ne commite pas, ne pushe pas, ne touche pas à git. Écris dans ton workspace un fichier implementation.md : ce que tu as fait ou vérifié, fichier par fichier.\n\noutcome `done` quand le code est prêt à être testé."
+        }
+      },
+      "edges": { "done": "test_backend" }
+    },
+    "test_backend": {
+      "block": "CHECK",
+      "config": {
+        "lease_s": 600,
+        "agent": {
+          "cmd": "claude --dangerously-skip-permissions -p \"$(cat prompt.md)\"",
+          "timeout_s": 540,
+          "prompt": "Agent de test backend. Le dépôt est $GRAPHATOM_REPO_DIR, l'issue testée : {subject_key}. Ta variable GRAPHATOM_DSN pointe déjà sur une base de test jetable — utilise-la sans crainte, elle n'est pas la production.\n\n1. Vérifie que tout s'importe : `uv run python -c \"import graphatom.cli, graphatom.web, graphatom.kernel, graphatom.scheduler, graphatom.github_sync\"` (depuis $GRAPHATOM_REPO_DIR).\n2. Lance le crash-test : `uv run python tests/crash_test.py` (~60 s, 4 assertions).\n3. Vérifie côté serveur ce que l'issue exige (endpoints, requêtes SQL, logique) en lisant le code et en l'exerçant en Python si utile.\n\nÉcris test_backend.md dans ton workspace : ce que tu as vérifié, ce qui a cassé. outcome `pass` seulement si tout tient, sinon `fail`."
+        }
+      },
+      "edges": { "pass": "test_frontend", "fail": "escalate" }
+    },
+    "test_frontend": {
+      "block": "CHECK",
+      "config": {
+        "lease_s": 600,
+        "agent": {
+          "cmd": "claude --dangerously-skip-permissions -p \"$(cat prompt.md)\"",
+          "timeout_s": 540,
+          "prompt": "Agent de test frontend. Le dépôt est $GRAPHATOM_REPO_DIR, l'issue testée : {subject_key}. Ta variable GRAPHATOM_DSN pointe déjà sur une base de test jetable. Tu utilises un navigateur headless — pas seulement curl : il faut regarder comment le front se comporte.\n\n1. Peuple la base de test si vide (`uv run python tests/crash_test.py` le fait), puis démarre l'interface : `uv run graphatom serve --port 8899 &` (depuis $GRAPHATOM_REPO_DIR).\n2. Avec `chromium --headless=new`, charge chaque page concernée par l'issue (`--dump-dom` pour le DOM rendu, `--screenshot=<fichier>` pour la preuve visuelle) : la page des questions, /items, /item/<id>.\n3. Vérifie dans le DOM rendu que ce que l'issue demande est vraiment là (tables remplies, SVG du graph présent, état courant marqué, liens qui pointent juste), et que les screenshots ne sont pas vides.\n4. Arrête le serveur que tu as lancé.\n\nGarde les screenshots dans ton workspace et écris test_frontend.md : pages vues, ce qui s'affiche, ce qui cloche. outcome `pass` ou `fail`."
+        }
+      },
+      "edges": { "pass": "review", "fail": "escalate" }
+    },
+    "review": {
+      "block": "WAIT",
+      "config": {
+        "question": "Implémentation testée (backend + frontend headless). On garde ?",
+        "options": ["merger", "abandonner"],
+        "owner": "Acid3croco",
+        "deadline_minutes": 1440
+      },
+      "edges": { "merger": "close", "abandonner": "close_unresolved", "expired": "escalate" }
+    },
+    "escalate": {
+      "block": "WAIT",
+      "escalade": true,
+      "config": {
+        "question": "Un agent a échoué ou la review a expiré. On retente le cycle, ou on abandonne ?",
+        "options": ["retry", "abandon"],
+        "owner": "Acid3croco",
+        "deadline_minutes": 1440
+      },
+      "edges": { "retry": "implement", "abandon": "close_unresolved", "expired": "close_unresolved" }
+    },
+    "close": { "terminal": true },
+    "close_unresolved": { "terminal": true }
+  }
+}
