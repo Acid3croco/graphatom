@@ -9,10 +9,14 @@ CLI fait alors le travail. Le contrat est minuscule et agnostique — le
 bloc écrit `prompt.md` dans le workspace, lance la commande configurée
 (claude, codex, pi, n'importe quoi), et lit `outcome.json`. Pas de
 fichier d'issue valide = crashed, et le noyau route comme d'habitude.
+
+L'agent tourne dans son propre groupe de processus : au timeout, c'est
+tout le groupe qui est révoqué — un descendant ne survit pas au bail.
 """
 
 import json
 import os
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -21,6 +25,7 @@ import psycopg
 
 DATA_DIR = Path("data")
 OUTBOX = DATA_DIR / "effects_outbox.log"
+GRACE_S = 5.0  # entre le SIGTERM et le SIGKILL du groupe de l'agent
 
 
 class Context:
@@ -66,14 +71,48 @@ def _agent(ctx: Context) -> dict:
     if "GRAPHATOM_AGENT_DSN" in env:
         # l'agent ne voit jamais la base du rail : sa DSN est une base jetable
         env["GRAPHATOM_DSN"] = env["GRAPHATOM_AGENT_DSN"]
-    subprocess.run(
-        cfg["cmd"], shell=True, cwd=workspace, env=env,
-        timeout=float(cfg.get("timeout_s", 570)),
-        stdout=(workspace / f"agent-{ctx.run['attempt']}.log").open("w"),
-        stderr=subprocess.STDOUT,
-    )
+    log = workspace / f"agent-{ctx.run['attempt']}.log"
+    with log.open("w") as out:
+        # session dédiée : l'agent est chef de son groupe, ses descendants aussi
+        proc = subprocess.Popen(
+            cfg["cmd"], shell=True, cwd=workspace, env=env, start_new_session=True,
+            stdout=out, stderr=subprocess.STDOUT,
+        )
+        try:
+            proc.wait(timeout=float(cfg.get("timeout_s", 570)))
+        except BaseException:  # timeout, mais aussi interruption du bloc
+            _kill_group(proc)
+            raise  # l'erreur remonte après la révocation : tentative crashed
+
     data = json.loads(outcome_path.read_text())  # absent/invalide → crashed
     return {"outcome": data["outcome"], "summary": data.get("summary", "")}
+
+
+def _kill_group(proc: subprocess.Popen) -> None:
+    """Révoque le groupe entier : SIGTERM, une grâce, puis SIGKILL.
+
+    L'expiration d'un bail révoque l'autorité — donc aussi celle des
+    descendants. Tuer le seul shell laisserait des orphelins (chromium,
+    serveurs de test, sous-agents) travailler sans autorité.
+    """
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:  # déjà parti, rien à révoquer
+        return
+    _signal_group(pgid, signal.SIGTERM)
+    try:
+        proc.wait(timeout=GRACE_S)  # le chef de groupe part le premier
+    except subprocess.TimeoutExpired:
+        pass
+    _signal_group(pgid, signal.SIGKILL)
+    proc.wait()  # récolte le chef de groupe, pas de zombie
+
+
+def _signal_group(pgid: int, sig: int) -> None:
+    try:
+        os.killpg(pgid, sig)
+    except ProcessLookupError:  # plus personne dans le groupe
+        pass
 
 
 def fetch(ctx: Context) -> dict:
