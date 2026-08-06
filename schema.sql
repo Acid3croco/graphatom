@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS event (
 CREATE TABLE IF NOT EXISTS effect (
     op_id       BIGSERIAL PRIMARY KEY,
     item_id     BIGINT NOT NULL REFERENCES work_item(id),
-    run_id      BIGINT NOT NULL,
+    run_id      BIGINT,                        -- NULL : acte de parole du rail, sans run
     logical_key TEXT   NOT NULL,              -- dérivée de l'action logique, pas de la tentative
     target_uri  TEXT   NOT NULL,
     intent      JSONB  NOT NULL,

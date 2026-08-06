@@ -11,7 +11,13 @@ DSN = os.environ.get(
     "postgresql://graphatom:graphatom@127.0.0.1:54321/graphatom",
 )
 
-SCHEMA = Path(__file__).resolve().parents[2] / "schema.sql"
+def _schema() -> Path:
+    # depuis le repo (src/graphatom/ → racine) ou depuis une installation (cwd)
+    for p in (Path(__file__).resolve().parents[2] / "schema.sql",
+              Path.cwd() / "schema.sql"):
+        if p.exists():
+            return p
+    raise FileNotFoundError("schema.sql introuvable")
 
 
 def connect() -> psycopg.Connection:
@@ -27,4 +33,4 @@ def init_db(drop: bool = False) -> None:
                 "DROP TABLE IF EXISTS question, effect, event, node_run, "
                 "work_item, subject, graph_revision CASCADE"
             )
-        conn.execute(SCHEMA.read_text())
+        conn.execute(_schema().read_text())

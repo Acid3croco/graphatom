@@ -1,0 +1,66 @@
+# GraphAtom sur son propre repo : db + ordonnanceur + canal github + canal web.
+#
+#   GITHUB_TOKEN=$(gh auth token) docker compose up -d --build
+#
+# Puis : poser le label `graphatom` sur une issue du repo. Le rail admet,
+# pose sa question en commentaire, attend `/answer <id> <option>`, route,
+# et rapporte le terminal — chaque prise de parole étant un effet réconciliable.
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: graphatom
+      POSTGRES_PASSWORD: graphatom
+      POSTGRES_DB: graphatom
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U graphatom"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  init:
+    build: .
+    command: graphatom init-db
+    environment: &env
+      GRAPHATOM_DSN: postgresql://graphatom:graphatom@db:5432/graphatom
+    depends_on:
+      db:
+        condition: service_healthy
+
+  scheduler:
+    build: .
+    command: graphatom run
+    environment: *env
+    restart: unless-stopped
+    depends_on:
+      init:
+        condition: service_completed_successfully
+
+  github-sync:
+    build: .
+    command: graphatom github-sync --repo ${GRAPHATOM_REPO:-Acid3croco/graphatom} --graph examples/github-pilot.json
+    environment:
+      <<: *env
+      GITHUB_TOKEN: ${GITHUB_TOKEN:?GITHUB_TOKEN requis}
+      GRAPHATOM_ANSWERERS: ${GRAPHATOM_ANSWERERS:-Acid3croco}
+    restart: unless-stopped
+    depends_on:
+      init:
+        condition: service_completed_successfully
+
+  web:
+    build: .
+    command: graphatom serve --host 0.0.0.0 --port 8848
+    environment: *env
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8850:8848"
+    depends_on:
+      init:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:
