@@ -12,7 +12,8 @@ from psycopg import Connection
 def open_questions(conn: Connection) -> list[dict]:
     """Les questions ouvertes, avec le contexte de leur item."""
     return list(conn.execute(
-        "SELECT q.*, s.subject_key, w.state AS item_state, w.escalations "
+        "SELECT q.*, s.subject_key, w.state AS item_state, "
+        "w.version AS item_version, w.escalations "
         "FROM question q "
         "JOIN work_item w ON w.id = q.item_id "
         "JOIN subject s ON s.id = w.subject_id "

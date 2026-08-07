@@ -70,6 +70,9 @@ uv run python tests/passage_test.py                  # un retry d'escalade rend 
 uv run python tests/heartbeat_test.py                # le battement du worker : le
                                                      # front et le canal GitHub disent
                                                      # quand plus rien ne tourne
+uv run python tests/live_test.py                     # le marqueur de fraîcheur des
+                                                     # pages : stable à données
+                                                     # égales, sans base
 ```
 
 Les tests ne touchent jamais au `data/` du repo : chacun travaille dans un
@@ -93,6 +96,17 @@ L'en-tête de chaque page porte le battement du worker — « rail vivant il y
 a 3 s », ou un bandeau rouge « rail à l'arrêt depuis HH:MM — les états
 affichés sont figés ». Une page qui montre des états doit dire quand plus
 personne ne les fait avancer : voir [le battement](#le-battement-du-worker--railstalled).
+
+Chaque page se suit sans rechargement : elle porte un marqueur de fraîcheur
+en meta (`graphatom-version` — la version de l'item, ou la plus haute des
+items listés, et l'état du battement), et une quinzaine de lignes de JS
+vanilla refont un `fetch` de la même URL toutes les 5 s. Marqueur identique :
+rien ne bouge. Marqueur différent : seul le contenu du conteneur `#live` est
+remplacé, donc le scroll reste où il est. Le polling s'arrête quand l'onglet
+est caché, et ne patche jamais pendant qu'un élément du conteneur a le focus
+— le formulaire de réponse ne bouge pas sous la souris. Le serveur, lui, ne
+change pas : toujours du rendu complet côté serveur, et sans JavaScript le
+rechargement d'avant tient toujours, dans un `noscript`.
 
 La boucle avec GitHub va dans les deux sens : les commentaires du rail
 pointent vers le frontend, et le frontend renvoie vers GitHub. Partout où
