@@ -1,0 +1,7 @@
+# Ce qui se refait au build ou n'y sert pas : rien de tout ça n'entre dans
+# l'image, et le contexte reste minuscule.
+node_modules
+.next
+.git
+Dockerfile
+README.md
