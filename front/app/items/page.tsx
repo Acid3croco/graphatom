@@ -1,15 +1,17 @@
 /**
- * Tous les items : le titre vers l'issue, l'état courant, la trajectoire.
+ * Tous les items : le titre vers la page de l'item, l'état courant, la
+ * trajectoire.
  *
- * Le titre vient de la base — le canal l'y a rangé à l'admission — et
- * pointe vers l'issue GitHub quand le sujet en est une. Un sujet d'un
- * autre canal n'a ni titre ni lien : la cellule montre alors la clé du
- * sujet, pour que la ligne reste identifiable.
+ * Le titre vient de la base — le canal l'y a rangé à l'admission — et mène
+ * au détail de l'item, son chemin naturel. Le lien vers l'issue GitHub est
+ * porté par le numéro, dans sa propre colonne, comme sur les pages stdlib.
+ * Un sujet d'un autre canal n'a ni titre ni numéro : la cellule du titre
+ * montre alors la clé du sujet, celle du numéro reste vide.
  */
 import Link from "next/link";
 
 import { getItems } from "@/lib/api";
-import { moment } from "@/lib/format";
+import { issueNumber, moment } from "@/lib/format";
 import { ApiDown } from "@/components/api-down";
 import { Badge, tone } from "@/components/ui/badge";
 import {
@@ -40,6 +42,7 @@ export default async function ItemsPage() {
           <TableHeader>
             <TableRow>
               <TableHead>item</TableHead>
+              <TableHead>issue</TableHead>
               <TableHead>titre</TableHead>
               <TableHead>graph</TableHead>
               <TableHead>gén.</TableHead>
@@ -57,13 +60,16 @@ export default async function ItemsPage() {
                   </Link>
                 </TableCell>
                 <TableCell>
-                  {item.issue_url ? (
+                  {item.issue_url && (
                     <a href={item.issue_url} className="underline">
-                      {item.title ?? item.subject_key}
+                      {issueNumber(item.issue_url)}
                     </a>
-                  ) : (
-                    (item.title ?? item.subject_key)
                   )}
+                </TableCell>
+                <TableCell>
+                  <Link href={`/item/${item.id}`} className="underline">
+                    {item.title ?? item.subject_key}
+                  </Link>
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {item.graph}
