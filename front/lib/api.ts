@@ -132,6 +132,58 @@ export type ItemDetail = {
 
 export type OpenQuestions = { token: string; questions: Question[] };
 
+/** Une révision publiée, telle que `/api/graphs` la liste. */
+export type GraphRevision = {
+  id: string;
+  name: string;
+  published_at: string;
+  items: number;
+};
+
+/** L'agent d'un nœud : sa commande, son prompt, sa borne de temps. */
+export type BundleAgent = {
+  cmd?: string;
+  prompt?: string;
+  timeout_s?: number;
+};
+
+/**
+ * La config d'un nœud, telle qu'elle est publiée.
+ *
+ * Les clés connues sont nommées ; le reste passe quand même — un bloc qui
+ * range sa propre clé dans sa config se montre sous son nom plutôt que de
+ * disparaître de la vue.
+ */
+export type BundleConfig = {
+  lease_s?: number;
+  agent?: BundleAgent;
+  question?: string;
+  options?: string[];
+  owner?: string;
+  deadline_minutes?: number;
+  [key: string]: unknown;
+};
+
+export type BundleNode = {
+  block?: string;
+  terminal?: boolean;
+  escalade?: boolean;
+  config?: BundleConfig;
+  edges?: Record<string, string>;
+};
+
+/** Le bundle entier d'une révision, plus ce que la base sait d'elle. */
+export type GraphBundle = {
+  revision: string;
+  published_at: string;
+  items: number;
+  name: string;
+  entry: string;
+  budgets: Record<string, number>;
+  on_kernel: Record<string, string>;
+  nodes: Record<string, BundleNode>;
+};
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
     cache: "no-store",
@@ -162,3 +214,8 @@ export const getItem = (id: number) => get<ItemDetail>(`/api/item/${id}`);
 export const getQuestions = () => get<OpenQuestions>("/api/questions");
 
 export const getHeartbeat = () => get<Heartbeat>("/api/heartbeat");
+
+export const getGraphs = () => get<GraphRevision[]>("/api/graphs");
+
+export const getGraph = (revision: string) =>
+  get<GraphBundle>(`/api/graph/${encodeURIComponent(revision)}`);

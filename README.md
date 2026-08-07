@@ -146,17 +146,21 @@ d'un autre canal n'a pas de titre : cellule vide, rien de cassé.
 curl -s localhost:8848/api/items | jq '.[0]'
 curl -s localhost:8848/api/item/1 | jq 'keys'
 curl -s localhost:8848/api/questions | jq '.token'
+curl -s localhost:8848/api/graphs | jq '.[0]'
+curl -s localhost:8848/api/graph/<rév> | jq '.nodes | keys'
 curl -s -H 'Accept: application/json' \
      -d "question_id=1&option=retry&token=<jeton>" localhost:8848/answer
 ```
 
-Quatre lectures, pour un client qui rend les pages lui-même : `/api/items`
+Six lectures, pour un client qui rend les pages lui-même : `/api/items`
 (la table, avec l'état, le statut et les liens issue et PR), `/api/item/<id>`
 (l'item entier : `item`, `graph`, `journal`, `runs`, `effects`, `questions`,
-`criteria`, `files`), `/api/questions` (les questions ouvertes) et
+`criteria`, `files`), `/api/questions` (les questions ouvertes),
 `/api/heartbeat` (les deux battements bruts, `rail` et `github-sync`, chacun
-avec son horodatage, son âge et son état périmé). Une projection, pas un
-second modèle :
+avec son horodatage, son âge et son état périmé), `/api/graphs` (les
+révisions publiées : nom, date, nombre d'items qui la portent) et
+`/api/graph/<rév>` (le bundle entier de cette révision, config des nœuds et
+prompts compris). Une projection, pas un second modèle :
 mêmes requêtes, mêmes durées tirées du journal, mêmes totaux de tokens que
 les pages — seul le rendu change. Le `graph` porte les nœuds, les arêtes et
 le nœud courant : le SVG se redessine sans relire la base. Toujours zéro
@@ -314,7 +318,7 @@ Un seul service est à la bordure, et c'est le **front Next.js** :
 | `web` | `default` | `127.0.0.1:8850` | `front`, par le réseau interne (`http://web:8848`) |
 
 `web` ne rejoint plus le réseau du proxy : l'API ne sort pas. Elle garde
-tout ce qu'elle avait — les quatre lectures `/api/…`, l'unique porte
+tout ce qu'elle avait — les six lectures `/api/…`, l'unique porte
 d'écriture `POST /answer`, la route des fichiers de workspace
 (`/item/<id>/file/<nom>`, les screenshots des agents) et ses pages HTML
 complètes. Le front ne fait que la consommer : il relaie `POST /answer` par

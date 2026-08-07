@@ -29,7 +29,10 @@
  * illisible ou d'une autre forme est ignorée en silence — la visionneuse
  * repart de l'ajustement initial, ce n'est pas une panne.
  *
- * Le nœud courant est peint en orange : c'est là qu'est l'item.
+ * Le nœud courant est peint en orange : c'est là qu'est l'item. Un graph
+ * sans exécution — la vitrine d'une révision publiée — n'en a pas : son
+ * `current` est vide, aucun nœud n'est peint, et c'est `onSelect` qui rend
+ * alors les nœuds cliquables pour lire leur config.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Expand, Minimize, RotateCcw, ZoomIn, ZoomOut } from "lucide-react";
@@ -94,7 +97,17 @@ function write(item: number, kept: Kept) {
   }
 }
 
-export function GraphSvg({ graph, item }: { graph: Graph; item: number }) {
+export function GraphSvg({
+  graph,
+  item,
+  selected,
+  onSelect,
+}: {
+  graph: Graph;
+  item: number;
+  selected?: string | null;
+  onSelect?: (name: string) => void;
+}) {
   const [orient, setOrient] = useState<Orient>("LR");
   const [full, setFull] = useState(false);
   // le cadrage choisi, ou `null` pour l'ajustement initial
@@ -103,6 +116,8 @@ export function GraphSvg({ graph, item }: { graph: Graph; item: number }) {
   const svg = useRef<SVGSVGElement>(null);
   // les pointeurs en cours : un pour le glisser, deux pour le pincement
   const points = useRef(new Map<number, { x: number; y: number }>());
+  // d'où est parti le pointeur : ce qui distingue un clic d'un glisser
+  const start = useRef({ x: 0, y: 0 });
 
   const plan = useMemo(() => layout(graph, orient), [graph, orient]);
 
@@ -201,9 +216,20 @@ export function GraphSvg({ graph, item }: { graph: Graph; item: number }) {
   }
 
   function down(e: React.PointerEvent) {
+    start.current = { x: e.clientX, y: e.clientY };
     points.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  }
+
+  /**
+   * Garder le pointeur qui sort du cadre — mais seulement quand il glisse.
+   *
+   * Capturé dès le `pointerdown`, le pointeur re-cible aussi le `click` sur
+   * le SVG : un simple clic n'atteindrait plus jamais le nœud qu'il vise.
+   * La capture arrive donc au premier vrai déplacement, et pas avant.
+   */
+  function capture(pointerId: number) {
     try {
-      svg.current?.setPointerCapture(e.pointerId);
+      svg.current?.setPointerCapture(pointerId);
     } catch {
       // un pointeur simulé n'a rien à capturer — le glisser marche quand même
     }
@@ -213,6 +239,9 @@ export function GraphSvg({ graph, item }: { graph: Graph; item: number }) {
     const from = points.current.get(e.pointerId);
     if (!from) {
       return;
+    }
+    if (moved(e)) {
+      capture(e.pointerId);
     }
     const others = [...points.current.values()].filter((p) => p !== from);
     points.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -242,6 +271,20 @@ export function GraphSvg({ graph, item }: { graph: Graph; item: number }) {
 
   function up(e: React.PointerEvent) {
     points.current.delete(e.pointerId);
+  }
+
+  /** Le pointeur a-t-il quitté son point de départ — glisser, ou simple clic ? */
+  function moved(e: React.MouseEvent | React.PointerEvent): boolean {
+    return (
+      Math.hypot(e.clientX - start.current.x, e.clientY - start.current.y) >= 4
+    );
+  }
+
+  /** Choisir un nœud — un clic qui finit un glisser a déplacé la vue, pas plus. */
+  function pick(e: React.MouseEvent, name: string) {
+    if (!moved(e)) {
+      onSelect?.(name);
+    }
   }
 
   if (!plan) {
@@ -328,7 +371,11 @@ export function GraphSvg({ graph, item }: { graph: Graph; item: number }) {
           full ? "h-full" : "h-auto",
         )}
         role="img"
-        aria-label={`graph ${graph.name}, courant ${graph.current}, orientation ${orient}`}
+        aria-label={
+          `graph ${graph.name}` +
+          (graph.current ? `, courant ${graph.current}` : "") +
+          `, orientation ${orient}`
+        }
         onPointerDown={down}
         onPointerMove={move}
         onPointerUp={up}
@@ -371,8 +418,15 @@ export function GraphSvg({ graph, item }: { graph: Graph; item: number }) {
                 : node.terminal
                   ? "#eee"
                   : "#e3ecf7";
+            const chosen = node.name === selected;
             return (
-              <g key={node.name}>
+              <g
+                key={node.name}
+                className={onSelect ? "cursor-pointer" : undefined}
+                role={onSelect ? "button" : undefined}
+                aria-label={onSelect ? `config du nœud ${node.name}` : undefined}
+                onClick={onSelect ? (e) => pick(e, node.name) : undefined}
+              >
                 <rect
                   x={x}
                   y={y}
@@ -380,7 +434,10 @@ export function GraphSvg({ graph, item }: { graph: Graph; item: number }) {
                   height={H}
                   rx="7"
                   fill={fill}
-                  stroke="#888"
+                  // le nœud choisi s'épaissit : c'est une sélection de
+                  // lecture, pas un état d'exécution — la couleur ne bouge pas
+                  stroke={chosen ? "#333" : "#888"}
+                  strokeWidth={chosen ? 2 : 1}
                   strokeDasharray={node.escalade ? "4 2" : undefined}
                 />
                 <text

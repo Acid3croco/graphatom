@@ -1,6 +1,6 @@
-/** La barre commune : les deux vues du rail, questions d'abord. */
+/** La barre commune : les vues du rail, questions d'abord. */
 import Link from "next/link";
-import { CircleQuestionMark, List } from "lucide-react";
+import { CircleQuestionMark, List, Workflow } from "lucide-react";
 
 export function Nav() {
   return (
@@ -15,6 +15,13 @@ export function Nav() {
       >
         <List className="size-4" />
         items
+      </Link>
+      <Link
+        href="/graphs"
+        className="flex items-center gap-1.5 hover:text-foreground"
+      >
+        <Workflow className="size-4" />
+        graphs
       </Link>
     </nav>
   );
