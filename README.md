@@ -68,8 +68,8 @@ uv run python tests/hermetic_test.py                 # ce qu'un agent lance ne v
 uv run python tests/passage_test.py                  # un retry d'escalade rend la
                                                      # marge de tentatives des nœuds,
                                                      # jamais le budget d'escalades
-uv run python tests/heartbeat_test.py                # le battement du worker : le
-                                                     # front et le canal GitHub disent
+uv run python tests/heartbeat_test.py                # les battements du worker et du
+                                                     # canal GitHub : le front dit
                                                      # quand plus rien ne tourne
 uv run python tests/live_test.py                     # le marqueur de fraîcheur des
                                                      # pages : stable à données
@@ -149,7 +149,9 @@ Quatre lectures, pour un client qui rend les pages lui-même : `/api/items`
 (la table, avec l'état, le statut et les liens issue et PR), `/api/item/<id>`
 (l'item entier : `item`, `graph`, `journal`, `runs`, `effects`, `questions`,
 `criteria`, `files`), `/api/questions` (les questions ouvertes) et
-`/api/heartbeat` (le battement brut). Une projection, pas un second modèle :
+`/api/heartbeat` (les deux battements bruts, `rail` et `github-sync`, chacun
+avec son horodatage, son âge et son état périmé). Une projection, pas un
+second modèle :
 mêmes requêtes, mêmes durées tirées du journal, mêmes totaux de tokens que
 les pages — seul le rendu change. Le `graph` porte les nœuds, les arêtes et
 le nœud courant : le SVG se redessine sans relire la base. Toujours zéro
@@ -242,16 +244,21 @@ fois en un jour, jusqu'à quarante minutes de stase invisible. L'absence de
 signal doit devenir un signal.
 
 L'ordonnanceur tamponne donc un battement à chaque tick — une ligne en base
-(`heartbeat`, `id = 1`, UPSERT), écrite dans le tick comme le reste : pas de
-thread dédié, pas de timer. Plusieurs workers tamponnent la même ligne :
-c'est « au moins un vivant » qu'on mesure, jamais qui est vivant.
+(`heartbeat`, `who = 'rail'`, UPSERT), écrite dans le tick comme le reste :
+pas de thread dédié, pas de timer. Plusieurs workers tamponnent la même
+ligne : c'est « au moins un vivant » qu'on mesure, jamais qui est vivant.
 
-Deux surfaces le lisent, et deux suffisent :
+Le canal GitHub est un second processus, et son silence à lui ne se voyait
+nulle part : il tamponne donc sa propre ligne (`who = 'github-sync'`) à
+chaque tour de sa boucle, hors du tick, pour dire que la boucle tourne — et
+non que GitHub répond.
+
+Deux surfaces les lisent, et deux suffisent :
 
 - **le frontend**, dans l'en-tête commun de chaque page — « rail vivant il y
-  a 3 s », et au-delà de deux minutes le bandeau rouge « rail à l'arrêt
-  depuis HH:MM — les états affichés sont figés » ; une requête d'une ligne
-  par rendu ;
+  a 3 s · canal GitHub il y a 2 s », et le bandeau rouge dès qu'un seul des
+  deux dépasse deux minutes : « … — les états affichés sont figés » ; une
+  requête d'une ligne par batteur ;
 - **le canal GitHub**, qui pose `rail:stalled` sur les issues des items
   actifs et le retire au retour du battement, comme les autres
   labels-projections. C'est le point clé : le sync est un processus séparé

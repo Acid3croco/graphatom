@@ -15,7 +15,8 @@ d'écriture ; `front/` est un service séparé qui la consomme.
 
 Toutes les pages portent le bandeau heartbeat, et lui seul sonde : un
 `fetch` SWR toutes les 5 s sur `/api/heartbeat`, puis un rendu serveur
-rafraîchi. Rien n'est poussé par le serveur, rien n'est mis en cache. Pas
+rafraîchi. Il montre les deux battements — « rail vivant il y a 3 s · canal
+GitHub il y a 2 s » — et passe au rouge dès qu'un seul des deux se tait. Rien n'est poussé par le serveur, rien n'est mis en cache. Pas
 de state manager, pas d'auth applicative.
 
 ## Ce qu'il écrit

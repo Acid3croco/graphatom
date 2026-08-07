@@ -84,13 +84,15 @@ CREATE TABLE IF NOT EXISTS question (
     answered_at TIMESTAMPTZ
 );
 
--- Le battement du worker : une seule ligne, tamponnée à chaque tick.
--- L'ordonnanceur écrit, le frontend et le canal GitHub lisent — personne
--- ne décide d'un état avec. Plusieurs workers tamponnent la même ligne :
--- c'est « au moins un vivant » qu'on mesure, pas qui est vivant.
+-- Les battements : une ligne par producteur, tamponnée à chaque tour de sa
+-- boucle. Le worker bat sous `rail`, le canal GitHub sous `github-sync` ;
+-- le frontend et le canal lisent — personne ne décide d'un état avec.
+-- Plusieurs workers tamponnent la même ligne : c'est « au moins un vivant »
+-- qu'on mesure, pas qui est vivant.
 CREATE TABLE IF NOT EXISTS heartbeat (
-    id BIGINT      PRIMARY KEY,               -- toujours 1 : une table d'une ligne
-    at TIMESTAMPTZ NOT NULL DEFAULT now()
+    who TEXT       NOT NULL,                  -- rail | github-sync : le batteur
+    at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    -- unicité d'un batteur : voir l'index du passage, tout en bas
 );
 
 -- Le passage. `graphatom init-db` rejoue ce fichier à chaque déploiement, et
@@ -103,3 +105,12 @@ ALTER TABLE node_run  ADD COLUMN IF NOT EXISTS cycle INT NOT NULL DEFAULT 1;
 ALTER TABLE node_run  DROP CONSTRAINT IF EXISTS node_run_item_id_node_attempt_key;
 CREATE UNIQUE INDEX IF NOT EXISTS node_run_attempt_key
     ON node_run (item_id, node, cycle, attempt);
+-- Le battement prend l'identité de son batteur : la ligne unique `id = 1`
+-- devient une ligne par producteur, et celle du worker devient `rail` — sans
+-- perte, elle garde son horodatage. `id` part avec sa clé primaire ; l'unicité
+-- passe sur `who`, et c'est elle que l'UPSERT du tampon vise.
+ALTER TABLE heartbeat ADD COLUMN IF NOT EXISTS who TEXT;
+UPDATE      heartbeat SET who = 'rail' WHERE who IS NULL;
+ALTER TABLE heartbeat DROP COLUMN IF EXISTS id;
+ALTER TABLE heartbeat ALTER COLUMN who SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS heartbeat_who_key ON heartbeat (who);

@@ -187,9 +187,12 @@ def main() -> None:
         print("6. /api/questions : le jeton sort du HTML, les options avec ✓")
 
         # 5. le battement, et tout le reste sérialisable tel quel
-        beat = web._api_heartbeat(None)
-        assert beat == {"at": None, "ago_s": None, "stale": True}, beat
-        assert web._api_heartbeat(T0)["stale"] is True, "un vieux battement est à l'arrêt"
+        beat = web._api_heartbeat(None, None)
+        assert set(beat) == {"rail", "github-sync"}, beat
+        assert beat["rail"] == {"at": None, "ago_s": None, "stale": True}, beat
+        old = web._api_heartbeat(T0, T0)
+        assert old["rail"]["stale"] is True, "un vieux battement est à l'arrêt"
+        assert old["github-sync"]["stale"] is True, "et celui du canal aussi"
         body = json.dumps(payload, default=web._jsonable, ensure_ascii=False)
         assert T0.isoformat() in body, "les horodatages sortent en ISO 8601"
         assert json.loads(body)["item"]["id"] == 14
