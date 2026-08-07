@@ -11,10 +11,12 @@ qui autorise un nœud sans agent : il écrit toujours son `outcome.json`.
   4. un sujet sans numéro échoue — proprement, sans toucher au dépôt
   5. `deploy` et `verify_deploy` sans environnement : `failed` / `fail`,
      jamais un nœud coincé
-  6. `scripts/release.sh` nomme le pas qui a lâché et sort sur son code
-  7. la frontière tient dans le bundle : un nœud mécanique ne lance aucun
-     modèle, un nœud à modèle rend son `usage.json`, et les trois nœuds de
-     retrait sont le même shell
+  6. `deploy` accepte un clone de référence qui est un worktree, où `.git`
+     est un fichier de renvoi et non un répertoire
+  7. `scripts/release.sh` nomme le pas qui a lâché et sort sur son code
+  8. la frontière tient dans le bundle : un nœud mécanique ne lance aucun
+     modèle, un nœud à modèle rend son `usage.json`, les trois nœuds de
+     retrait sont le même shell, et aucun ne teste `.git` comme un chemin
 
 Usage : uv run python tests/shell_test.py
 """
@@ -57,7 +59,32 @@ def depot(tmp: Path) -> Path:
     return repo
 
 
-def joue(node: str, repo: Path, workspace: Path, subject: str = SUJET) -> dict:
+def reference_worktree(tmp: Path) -> Path:
+    """Un clone de référence qui est lui-même un worktree git.
+
+    C'est la forme du clone du worker : son `.git` est un fichier de renvoi,
+    pas un répertoire. L'hôte garde `main` libre pour que le worktree l'ait.
+    """
+    hote = tmp / "hote"
+    subprocess.run(["git", "clone", "-q", str(tmp / "origin.git"), str(hote)], check=True)
+    git(hote, "switch", "-q", "-c", "garage")
+    reference = tmp / "reference"
+    git(hote, "worktree", "add", "-q", str(reference), "main")
+    return reference
+
+
+def sans_gh(tmp: Path) -> str:
+    """Un PATH où `gh` échoue : le deploy s'arrête au jeton, avant docker."""
+    binaires = tmp / "bin"
+    binaires.mkdir(exist_ok=True)
+    faux = binaires / "gh"
+    faux.write_text("#!/bin/sh\nexit 1\n")
+    faux.chmod(0o755)
+    return f"{binaires}:{os.environ['PATH']}"
+
+
+def joue(node: str, repo: Path, workspace: Path, subject: str = SUJET,
+         plus: dict | None = None) -> dict:
     """Le `cmd` d'un nœud du graph, joué tel quel. Rend son outcome.json."""
     (workspace / "outcome.json").unlink(missing_ok=True)
     subprocess.run(
@@ -66,7 +93,7 @@ def joue(node: str, repo: Path, workspace: Path, subject: str = SUJET) -> dict:
         env=os.environ | {"GRAPHATOM_REPO_DIR": str(repo),
                           "GRAPHATOM_WORKSPACE": str(workspace),
                           "GRAPHATOM_SUBJECT_KEY": subject,
-                          "GRAPHATOM_WEB_URL": "http://127.0.0.1:9"},
+                          "GRAPHATOM_WEB_URL": "http://127.0.0.1:9"} | (plus or {}),
     )
     return json.loads((workspace / "outcome.json").read_text())
 
@@ -128,13 +155,25 @@ def main() -> None:
         assert (workspace / rapport).read_text().strip(), rapport
     print("5. deploy et verify_deploy sans environnement : outcome écrit ✓")
 
-    # 6. le script de release sort sur le code du pas qui a lâché
+    # 6. le clone de référence est parfois un worktree — son `.git` est alors
+    #    un fichier, et le garde-fou du deploy doit quand même le reconnaître.
+    #    Sans `gh`, les trois pas git se jouent puis le nœud s'arrête au jeton :
+    #    le test ne construit jamais d'image ni ne lance de service.
+    reference = reference_worktree(tmp)
+    assert (reference / ".git").is_file(), "le clone de référence n'est pas un worktree"
+    outcome = joue("deploy", reference, workspace, plus={"PATH": sans_gh(tmp)})
+    assert outcome["outcome"] == "failed", outcome
+    assert "pas 2" in outcome["summary"], outcome  # le jeton, pas le garde-fou
+    assert "$ git reset --hard origin/main" in (workspace / "deploy.md").read_text()
+    print(f"6. {outcome['summary']} ✓")
+
+    # 7. le script de release sort sur le code du pas qui a lâché
     assert release(repo, workspace, "pipeline-x:oom") == 2  # sujet illisible
     assert release(repo, workspace, "gh:Acid3croco/graphatom#999") == 3  # autre branche
     assert "code 3" in (workspace / "release.md").read_text()
-    print("6. release.sh : code 2 sur le sujet, code 3 sur le worktree ✓")
+    print("7. release.sh : code 2 sur le sujet, code 3 sur le worktree ✓")
 
-    # 7. la frontière du bundle, relue à chaque tour : les nœuds mécaniques
+    # 8. la frontière du bundle, relue à chaque tour : les nœuds mécaniques
     #    n'appellent aucun modèle, et ceux qui en appellent un rendent le
     #    coût de la tentative — un merge d'amont ne doit rien reprendre
     #    d'un côté ni de l'autre
@@ -151,8 +190,15 @@ def main() -> None:
     retraits = {BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
                 for nom in ("cleanup", "cleanup_unresolved", "cleanup_split")}
     assert len(retraits) == 1, "les nœuds de retrait ont divergé"
-    print("7. six nœuds sans modèle dont trois retraits identiques, "
-          "cinq agents qui rendent leur usage ✓")
+    # `.git` n'est un répertoire que dans un clone ordinaire : aucun shell du
+    # rail ne doit s'en servir pour reconnaître un dépôt
+    shells = {nom: node.get("config", {}).get("agent", {}).get("cmd", "")
+              for nom, node in BUNDLE["nodes"].items()}
+    shells["scripts/release.sh"] = (ROOT / "scripts" / "release.sh").read_text()
+    for nom, shell in shells.items():
+        assert "/.git" not in shell, f"{nom} teste .git comme un chemin"
+    print("8. six nœuds sans modèle dont trois retraits identiques, "
+          "cinq agents qui rendent leur usage, aucun test sur .git ✓")
 
     shutil.rmtree(tmp, ignore_errors=True)
     print("\nnœuds shell : OK — déterministes, et jamais sans outcome")
