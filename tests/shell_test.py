@@ -12,6 +12,8 @@ qui autorise un nœud sans agent : il écrit toujours son `outcome.json`.
   5. `deploy` et `verify_deploy` sans environnement : `failed` / `fail`,
      jamais un nœud coincé
   6. `scripts/release.sh` nomme le pas qui a lâché et sort sur son code
+  7. la frontière tient dans le bundle : un nœud mécanique ne lance aucun
+     modèle, un nœud à modèle rend son `usage.json`
 
 Usage : uv run python tests/shell_test.py
 """
@@ -130,6 +132,19 @@ def main() -> None:
     assert release(repo, workspace, "gh:Acid3croco/graphatom#999") == 3  # autre branche
     assert "code 3" in (workspace / "release.md").read_text()
     print("6. release.sh : code 2 sur le sujet, code 3 sur le worktree ✓")
+
+    # 7. la frontière du bundle, relue à chaque tour : les nœuds mécaniques
+    #    n'appellent aucun modèle, et ceux qui en appellent un rendent le
+    #    coût de la tentative — un merge d'amont ne doit rien reprendre
+    #    d'un côté ni de l'autre
+    for nom in ("worktree", "deploy", "verify_deploy", "cleanup", "cleanup_unresolved"):
+        cmd = BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
+        assert "claude " not in cmd, f"{nom} lance encore un modèle"
+    for nom in ("implement", "test_backend", "test_frontend", "release"):
+        cmd = BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
+        assert "claude " in cmd, f"{nom} n'est plus un agent"
+        assert "usage.json" in cmd, f"{nom} ne rend pas son usage.json"
+    print("7. cinq nœuds sans modèle, quatre agents qui rendent leur usage ✓")
 
     shutil.rmtree(tmp, ignore_errors=True)
     print("\nnœuds shell : OK — déterministes, et jamais sans outcome")

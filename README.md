@@ -67,6 +67,12 @@ uv run python tests/hermetic_test.py                 # ce qu'un agent lance ne v
 uv run python tests/passage_test.py                  # un retry d'escalade rend la
                                                      # marge de tentatives des nœuds,
                                                      # jamais le budget d'escalades
+uv run python tests/heartbeat_test.py                # le battement du worker : le
+                                                     # front et le canal GitHub disent
+                                                     # quand plus rien ne tourne
+uv run python tests/live_test.py                     # le marqueur de fraîcheur des
+                                                     # pages : stable à données
+                                                     # égales, sans base
 uv run python tests/shell_test.py                    # les nœuds shell de code-task,
                                                      # joués tels quels : sans base,
                                                      # sans modèle, sans docker
@@ -88,6 +94,22 @@ par option, et rien d'autre. Le canal n'écrit jamais l'état d'un item — il
 enregistre la réponse, l'ordonnanceur route au tick suivant. Une page
 disponible n'est pas un oncall notifié : `--notify-cmd` lance une commande
 à chaque question ouverte (au-moins-une-fois — au redémarrage, on renotifie).
+
+L'en-tête de chaque page porte le battement du worker — « rail vivant il y
+a 3 s », ou un bandeau rouge « rail à l'arrêt depuis HH:MM — les états
+affichés sont figés ». Une page qui montre des états doit dire quand plus
+personne ne les fait avancer : voir [le battement](#le-battement-du-worker--railstalled).
+
+Chaque page se suit sans rechargement : elle porte un marqueur de fraîcheur
+en meta (`graphatom-version` — la version de l'item, ou la plus haute des
+items listés, et l'état du battement), et une quinzaine de lignes de JS
+vanilla refont un `fetch` de la même URL toutes les 5 s. Marqueur identique :
+rien ne bouge. Marqueur différent : seul le contenu du conteneur `#live` est
+remplacé, donc le scroll reste où il est. Le polling s'arrête quand l'onglet
+est caché, et ne patche jamais pendant qu'un élément du conteneur a le focus
+— le formulaire de réponse ne bouge pas sous la souris. Le serveur, lui, ne
+change pas : toujours du rendu complet côté serveur, et sans JavaScript le
+rechargement d'avant tient toujours, dans un `noscript`.
 
 La boucle avec GitHub va dans les deux sens : les commentaires du rail
 pointent vers le frontend, et le frontend renvoie vers GitHub. Partout où
@@ -167,6 +189,36 @@ vérité du rail reste la ligne `Depends-on:`. Deux issues ouvertes qui
 dépendent l'une de l'autre se bloquent pour toujours — c'est visible (deux
 `rail:blocked`), et c'est à l'humain de casser le cycle en éditant un corps.
 
+### Le battement du worker : `rail:stalled`
+
+Un worker mort ne dit rien, et c'est le problème : les items gardent leurs
+états actifs — `test_frontend`, `review`… — alors que plus rien ne tourne.
+Pas de faucheur, donc pas de classement des agents expirés, donc pas
+d'escalade : aucune question, aucun signal, nulle part. C'est arrivé quatre
+fois en un jour, jusqu'à quarante minutes de stase invisible. L'absence de
+signal doit devenir un signal.
+
+L'ordonnanceur tamponne donc un battement à chaque tick — une ligne en base
+(`heartbeat`, `id = 1`, UPSERT), écrite dans le tick comme le reste : pas de
+thread dédié, pas de timer. Plusieurs workers tamponnent la même ligne :
+c'est « au moins un vivant » qu'on mesure, jamais qui est vivant.
+
+Deux surfaces le lisent, et deux suffisent :
+
+- **le frontend**, dans l'en-tête commun de chaque page — « rail vivant il y
+  a 3 s », et au-delà de deux minutes le bandeau rouge « rail à l'arrêt
+  depuis HH:MM — les états affichés sont figés » ; une requête d'une ligne
+  par rendu ;
+- **le canal GitHub**, qui pose `rail:stalled` sur les issues des items
+  actifs et le retire au retour du battement, comme les autres
+  labels-projections. C'est le point clé : le sync est un processus séparé
+  du worker et survit à sa mort — le problème se voit sur GitHub
+  précisément quand le worker ne peut plus parler.
+
+Pas d'alerte externe de plus : l'opérateur regarde déjà l'une des deux. Et
+le sync ne lit le battement que pour cette projection — il ne prend aucune
+décision d'état avec : GitHub reste une projection, la base reste l'autorité.
+
 ### Config de déploiement : épinglée dans le repo
 
 Un redéploiement (`docker compose up -d`) ne doit jamais dépendre des
@@ -217,6 +269,32 @@ codex, pi…) fait l'affaire ; le kernel n'en connaît aucun. Pas
 d'`outcome.json` valide → `crashed`, retenté puis escaladé — comme
 n'importe quel bloc.
 
+**Une extension optionnelle : `usage.json`.** Si la tentative en laisse
+un dans le workspace, le bloc le fusionne dans le résultat du run, sous
+la clé `usage` — les types de tokens tels que l'agent les rapporte
+(`input_tokens`, `output_tokens`, les caches, le coût), sans que
+personne ici les interprète. Pas de `usage.json` : rien, et l'agent
+reste un citoyen de première classe. C'est le `cmd` du graph qui produit
+ce fichier, jamais le noyau : pour le CLI claude, `--output-format json`
+sort un JSON final dont un `jq` extrait l'usage, le texte de la réponse
+partant dans le log comme avant.
+
+```sh
+claude … --output-format json -p "$(cat prompt.md)" > agent.json; RC=$?
+jq -r '.result // .' agent.json || cat agent.json
+jq -e 'select(.usage|objects) | .usage + {total_cost_usd}' agent.json > usage.json 2>/dev/null || rm -f usage.json
+rm -f agent.json
+exit $RC
+```
+
+**Les traces sont auditables, jamais écrasées.** Le journal, le prompt et
+l'usage d'une tentative portent le nœud, le passage et la tentative dans
+leur nom — `agent-<nœud>-<passage>-<tentative>.log`, `prompt-…md`,
+`usage-…json` : le nœud suivant n'écrase plus rien, et la section
+workspace de `/item/<id>` montre l'histoire complète d'un item. Seul
+`outcome.json` reste transitoire, purgé avant chaque tentative — son
+contenu vit déjà dans le résultat du run en base.
+
 **Un processus lancé par un agent ne voit jamais ni la base ni le dépôt de
 la production.** C'est la règle. Elle a coûté une implémentation : un agent
 de test avait lancé un ordonnanceur sur la base jetable *partagée*, en
@@ -266,10 +344,16 @@ pur (`os.killpg`), le kernel ne connaît toujours aucun agent.
 
 Une tentative crashée rend son **autopsie** dans le résultat du run —
 `exit_code` (négatif = le signal qui l'a tué), `log_tail` (les 20 dernières
-lignes d'`agent-<passage>-<tentative>.log`, bornées à 2 000 caractères) et `timeout`
-(vrai si c'est le bail du bloc qui a fauché l'agent). La table des runs de
-`/item/<id>` l'affiche : le post-mortem se lit sur la page, pas en fouillant
-le workspace à la main.
+lignes d'`agent-<nœud>-<passage>-<tentative>.log`, bornées à 2 000 caractères)
+et `timeout` (vrai si c'est le bail du bloc qui a fauché l'agent). La table
+des runs de `/item/<id>` l'affiche : le post-mortem se lit sur la page, pas en
+fouillant le workspace à la main.
+
+**Ce que coûte un cycle se lit sur la même page.** Chaque transition du
+journal porte sa durée — l'écart avec la précédente, tentatives comprises —,
+chaque run la sienne et ses tokens, et l'en-tête le temps total de l'item
+avec le total par type de token. Rien de nouveau en base : les durées
+sortent des horodatages du journal, les tokens du résultat des runs.
 
 [`examples/code-task.json`](examples/code-task.json) est le graph qui fait
 tourner ce repo : implémentation par agent, **agent de test backend**
@@ -307,7 +391,9 @@ ce qui interdit au graph de se coincer dans un nœud shell — et son compte
 rendu nomme le pas qui a lâché avec son code : un shell qui échoue doit
 être *plus* lisible qu'un agent qui improvise, pas moins.
 [`tests/shell_test.py`](tests/shell_test.py) joue ces `cmd` tels quels sur
-un dépôt jetable, sans modèle ni docker.
+un dépôt jetable, sans modèle ni docker. Un `cmd` sans modèle ne laisse pas
+d'`usage.json` : ces nœuds ne coûtent aucun token, et la page de l'item le
+montre — c'est exactement le gain que l'on cherchait.
 
 **`release` est le seul hybride : un agent script-first.** Tout le nominal
 vit dans [`scripts/release.sh`](scripts/release.sh) — commit (titre de
@@ -324,7 +410,11 @@ vrais conflits, donc pas de merge : l'arête renvoie la branche à
 `test_backend`, parce qu'une fusion est une combinaison que personne n'a
 testée. Cette arête referme un cycle release → test → … → release :
 `release` porte donc `escalade`, et le budget d'escalades de l'item borne
-la boucle.
+la boucle. Le noyau débite ce budget à *chaque* entrée dans un nœud
+d'escalade — le chemin nominal `review → release` compris, puisque tous les
+nœuds du cycle sont sur ce chemin. Le budget de `code-task` passe donc de
+trois à **quatre** : une escalade paie la release nominale, les trois autres
+restent aux vraies reprises humaines.
 
 Le trade-off du modèle le moins cher reste assumé, mais il ne porte plus
 que sur la panne de release. Si elle se met à rater, la marche arrière est
@@ -371,8 +461,8 @@ Deux items concurrents partent du même `origin/main` et divergent par leur
 branche ; s'ils touchent les mêmes fichiers, le second merge voit le conflit :
 release rebase quand le rebase passe tout seul, sort en `rebased` — retour aux
 tests — quand il a fallu résoudre à la main, et en `conflict` quand elle n'y
-arrive pas. Le retrait (worktree + branche
-locale) est un **nœud du graph** : toutes les sorties passent par `cleanup`
+arrive pas. Le retrait (worktree + branche locale) est un **nœud du
+graph** : toutes les sorties passent par `cleanup`
 ou `cleanup_unresolved` avant leur terminal — le graph *est* la garantie de
 cleanup, le noyau n'en sait rien. Les agents demandent un worker sur
 l'hôte (voir le commentaire dans `docker-compose.yml`) ; le bail par nœud
