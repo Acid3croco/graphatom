@@ -285,6 +285,26 @@ cran (`haiku` → `sonnet`, `low` → `medium`) dans
 tentatives et le journal disent lequel a lâché ; c'est la donnée qui
 tranche, pas l'intuition.
 
+**Une porte de pertinence avant chaque test.** Le test le plus cher du
+cycle est le test frontend (~8 min de navigateur) et il tournait même pour
+une issue qui ne touche que du JSON de graph. Les deux `cmd` de test
+commencent donc par quelques lignes de shell — pas du jugement d'agent —
+qui lisent le diff de l'item (`git diff --name-only origin/main` plus les
+fichiers neufs non encore suivis) et décident :
+
+- le diff ne touche aucun fichier front (`src/graphatom/web.py`, liste en
+  tête du `cmd`) → `outcome` `pass`, « aucun fichier front touché — test
+  non concerné », sans lancer l'agent ;
+- en miroir côté backend : ni `src/`, ni `tests/`, ni `schema.sql` → même
+  court-circuit ;
+- le diff **vide** n'est pas un skip, c'est un symptôme — implémentation
+  perdue, worktree absent → `outcome` `fail`, avec le chemin du worktree
+  dans le résumé. L'incident de l'item 10 aurait été vu dès `test_backend`.
+
+Le résumé dit toujours pourquoi le test n'a pas tourné : le journal et la
+page de l'item le lisent comme n'importe quel autre. Un chemin que la
+porte ne comprend pas ne court-circuite rien — l'agent tourne.
+
 Même motif côté fixtures : le test frontend peuple sa base avec
 [`tests/seed.py`](tests/seed.py) — publier, admettre, quelques ticks
 d'ordonnanceur, ~10 s — et non plus avec le crash-test, qui coûte 90 s
