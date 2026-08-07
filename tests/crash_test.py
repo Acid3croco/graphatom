@@ -29,6 +29,11 @@ ROOT = Path(__file__).resolve().parents[1]
 # le test travaille dans un répertoire à lui : jamais dans ROOT/data, qui
 # peut être le data/ vivant d'un rail (workspaces d'items en cours)
 WORK = Path(tempfile.mkdtemp(prefix="graphatom-crash-test-"))
+# hermétisme : ce dépôt-ci est le seul univers du test. L'agent qui nous
+# lance a dans son environnement le clone et l'instance de la production —
+# un ordonnanceur lancé d'ici n'en voit ni l'un ni l'autre.
+os.environ["GRAPHATOM_REPO_DIR"] = str(ROOT)
+os.environ.pop("GRAPHATOM_AGENT_DSN", None)
 KILL_AFTER_S = 2.0  # l'ACT dure 4 s et démarre vite : on tue en plein vol, garanti
 TIMEOUT_S = 90
 

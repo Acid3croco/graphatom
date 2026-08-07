@@ -38,6 +38,11 @@ from graphatom import db  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 WORK = Path(tempfile.mkdtemp(prefix="graphatom-seed-"))
+# hermétisme : ce dépôt-ci est le seul univers de la fixture. L'agent qui
+# nous lance a dans son environnement le clone et l'instance de la
+# production — l'ordonnanceur lancé d'ici n'en voit ni l'un ni l'autre.
+os.environ["GRAPHATOM_REPO_DIR"] = str(ROOT)
+os.environ.pop("GRAPHATOM_AGENT_DSN", None)
 TIMEOUT_S = 60
 
 
