@@ -17,17 +17,19 @@
  * zoom.
  *
  * Ce que l'œil a choisi vit ici, côté client, et nulle part ailleurs. La
- * page se refait rendre toutes les cinq secondes — le sondage du bandeau de
- * battement — et `graph` arrive alors en nouvel objet : rien de tout ça ne
- * doit toucher à la vue. D'où `view` à `null`, qui veut dire « l'ajustement
- * initial » : il se recalcule à chaque rendu depuis la géométrie du moment,
- * donc il suit les données sans jamais remettre à zéro un cadrage choisi.
- * Un rendu de plus n'est plus un événement.
+ * section du graph sonde ses données toutes les cinq secondes et `graph`
+ * arrive alors en nouvel objet — sans que la visionneuse soit remontée :
+ * rien de tout ça ne doit toucher à la vue. D'où `view` à `null`, qui veut
+ * dire « l'ajustement initial » : il se recalcule à chaque rendu depuis la
+ * géométrie du moment, donc il suit les données sans jamais remettre à zéro
+ * un cadrage choisi. Un rendu de plus n'est plus un événement.
  *
  * Ce choix se range dans `localStorage`, une entrée par item, sous
- * `graph-view:<item>` : l'orientation et le cadrage. Une entrée absente,
- * illisible ou d'une autre forme est ignorée en silence — la visionneuse
- * repart de l'ajustement initial, ce n'est pas une panne.
+ * `graph-view:<item>` : l'orientation et le cadrage. C'est ce qui le fait
+ * survivre au rechargement de la page — le seul moment où la mémoire du
+ * composant s'en va, puisque le sondage, lui, ne le remonte pas. Une entrée
+ * absente, illisible ou d'une autre forme est ignorée en silence — la
+ * visionneuse repart de l'ajustement initial, ce n'est pas une panne.
  *
  * `item` est ce qui nomme cette entrée, et il est facultatif : une vue qui
  * n'appartient à aucun item — la vitrine d'un graph publié — n'a pas de nom
