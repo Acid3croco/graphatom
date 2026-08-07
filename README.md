@@ -119,6 +119,13 @@ d'`outcome.json` valide → `crashed`, retenté puis escaladé — comme
 n'importe quel bloc. L'agent ne voit jamais la base du rail :
 `GRAPHATOM_AGENT_DSN` lui substitue une base jetable.
 
+Une tentative crashée rend son **autopsie** dans le résultat du run —
+`exit_code` (négatif = le signal qui l'a tué), `log_tail` (les 20 dernières
+lignes d'`agent-<tentative>.log`, bornées à 2 000 caractères) et `timeout`
+(vrai si c'est le bail du bloc qui a fauché l'agent). La table des runs de
+`/item/<id>` l'affiche : le post-mortem se lit sur la page, pas en fouillant
+le workspace à la main.
+
 [`examples/code-task.json`](examples/code-task.json) est le graph qui fait
 tourner ce repo : implémentation par agent, **agent de test backend**
 (imports, crash-test), **agent de test frontend au navigateur headless**
