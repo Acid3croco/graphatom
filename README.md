@@ -214,6 +214,32 @@ codex, pi…) fait l'affaire ; le kernel n'en connaît aucun. Pas
 d'`outcome.json` valide → `crashed`, retenté puis escaladé — comme
 n'importe quel bloc.
 
+**Une extension optionnelle : `usage.json`.** Si la tentative en laisse
+un dans le workspace, le bloc le fusionne dans le résultat du run, sous
+la clé `usage` — les types de tokens tels que l'agent les rapporte
+(`input_tokens`, `output_tokens`, les caches, le coût), sans que
+personne ici les interprète. Pas de `usage.json` : rien, et l'agent
+reste un citoyen de première classe. C'est le `cmd` du graph qui produit
+ce fichier, jamais le noyau : pour le CLI claude, `--output-format json`
+sort un JSON final dont un `jq` extrait l'usage, le texte de la réponse
+partant dans le log comme avant.
+
+```sh
+claude … --output-format json -p "$(cat prompt.md)" > agent.json; RC=$?
+jq -r '.result // .' agent.json || cat agent.json
+jq -e 'select(.usage|objects) | .usage + {total_cost_usd}' agent.json > usage.json 2>/dev/null || rm -f usage.json
+rm -f agent.json
+exit $RC
+```
+
+**Les traces sont auditables, jamais écrasées.** Le journal, le prompt et
+l'usage d'une tentative portent le nœud, le passage et la tentative dans
+leur nom — `agent-<nœud>-<passage>-<tentative>.log`, `prompt-…md`,
+`usage-…json` : le nœud suivant n'écrase plus rien, et la section
+workspace de `/item/<id>` montre l'histoire complète d'un item. Seul
+`outcome.json` reste transitoire, purgé avant chaque tentative — son
+contenu vit déjà dans le résultat du run en base.
+
 **Un processus lancé par un agent ne voit jamais ni la base ni le dépôt de
 la production.** C'est la règle. Elle a coûté une implémentation : un agent
 de test avait lancé un ordonnanceur sur la base jetable *partagée*, en
@@ -263,10 +289,16 @@ pur (`os.killpg`), le kernel ne connaît toujours aucun agent.
 
 Une tentative crashée rend son **autopsie** dans le résultat du run —
 `exit_code` (négatif = le signal qui l'a tué), `log_tail` (les 20 dernières
-lignes d'`agent-<passage>-<tentative>.log`, bornées à 2 000 caractères) et `timeout`
-(vrai si c'est le bail du bloc qui a fauché l'agent). La table des runs de
-`/item/<id>` l'affiche : le post-mortem se lit sur la page, pas en fouillant
-le workspace à la main.
+lignes d'`agent-<nœud>-<passage>-<tentative>.log`, bornées à 2 000 caractères)
+et `timeout` (vrai si c'est le bail du bloc qui a fauché l'agent). La table
+des runs de `/item/<id>` l'affiche : le post-mortem se lit sur la page, pas en
+fouillant le workspace à la main.
+
+**Ce que coûte un cycle se lit sur la même page.** Chaque transition du
+journal porte sa durée — l'écart avec la précédente, tentatives comprises —,
+chaque run la sienne et ses tokens, et l'en-tête le temps total de l'item
+avec le total par type de token. Rien de nouveau en base : les durées
+sortent des horodatages du journal, les tokens du résultat des runs.
 
 [`examples/code-task.json`](examples/code-task.json) est le graph qui fait
 tourner ce repo : implémentation par agent, **agent de test backend**
