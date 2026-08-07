@@ -172,7 +172,10 @@ export default async function ItemPage({
 
       <section className="flex flex-col gap-2">
         <h2 className="text-base font-semibold sm:text-lg">graph</h2>
-        <GraphSvg graph={graph} />
+        {/* la clé est l'item, pas les données : le sondage repeint le graph
+            toutes les cinq secondes et ne doit pas remonter la visionneuse,
+            qui garde le pan, le zoom et l'orientation de cet item-là */}
+        <GraphSvg key={item.id} graph={graph} item={item.id} />
       </section>
 
       <section className="flex flex-col gap-2">
