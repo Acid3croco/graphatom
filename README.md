@@ -29,7 +29,9 @@ L'idée : des portes successives dont l'exécution est certaine — du code atom
 tentative 1, pleine marge, parce que l'humain vient précisément de juger
 qu'un nouvel essai complet valait le coup. Le budget d'escalades, lui, ne
 se régénère jamais : c'est lui, et lui seul, qui garantit la terminaison.
-L'histoire n'est pas réécrite — les tentatives des passages précédents
+Il compte les tours de boucle, pas les traversées — la première visite
+d'un nœud d'escalade dans le passage courant est gratuite, la re-entrée
+décompte. L'histoire n'est pas réécrite — les tentatives des passages précédents
 restent dans `node_run`, et `/item/<id>` donne le passage de chaque run.
 
 Hors noyau, en modules : EVAL, ADMIT, dialogue durable, gouverneur de flotte.
@@ -555,9 +557,9 @@ et écrit `validate.md` dans le workspace — une ligne par critère, la case
 L'intelligence de correction reste donc dans `implement` : `validate`
 constate et route. L'arête `fail` referme un cycle `validate → implement →
 test → validate` — `validate` porte donc `escalade`, comme `release`, et le
-budget d'escalades de l'item le borne. Ce budget paie maintenant deux
-passages nominaux (`validate` puis `release`) : il passe de quatre à
-**cinq**, les trois autres restant aux vraies reprises humaines.
+budget d'escalades de l'item le borne. Le traverser une fois ne coûte
+rien : le budget ne paie que les tours de boucle, donc les **cinq** de
+`code-task` restent pour de vraies reprises.
 
 Pas de critères — `criteria.md` absent ou vide, cas d'un cycle antérieur à
 `scope` — → `pass`, et `validate.md` dit « aucun critère formalisé ». Une
@@ -638,11 +640,15 @@ vrais conflits, donc pas de merge : l'arête renvoie la branche à
 `test_backend`, parce qu'une fusion est une combinaison que personne n'a
 testée. Cette arête referme un cycle release → test → … → release :
 `release` porte donc `escalade`, et le budget d'escalades de l'item borne
-la boucle. Le noyau débite ce budget à *chaque* entrée dans un nœud
-d'escalade — le chemin nominal `review → release` compris, puisque tous les
-nœuds du cycle sont sur ce chemin. Le budget de `code-task` a donc grandi
-d'autant : **cinq**, une escalade pour le `validate` nominal, une pour la
-release nominale, les trois autres aux vraies reprises humaines.
+la boucle. Le noyau débite ce budget sur les **tours de boucle**, pas sur
+les traversées : entrer dans un nœud d'escalade que l'item n'a pas encore
+visité dans le passage courant est gratuit, y re-entrer décompte. Le chemin
+nominal `review → release` ne coûte donc rien, et un item au budget épuisé
+finit sa route — il ne peut juste plus boucler. Les nœuds d'escalade
+humaine (`escalate`, `clarify`, des `WAIT`) restent décomptés à chaque
+entrée : demander à un humain de relancer, c'est un tour par définition.
+Le budget de `code-task` reste à **cinq**, tous disponibles pour de vraies
+reprises.
 
 Le trade-off du modèle le moins cher reste assumé, mais il ne porte plus
 que sur la panne de release. Si elle se met à rater, la marche arrière est
