@@ -77,6 +77,9 @@ uv run python tests/live_test.py                     # le marqueur de fraîcheur
 uv run python tests/shell_test.py                    # les nœuds shell de code-task,
                                                      # joués tels quels : sans base,
                                                      # sans modèle, sans docker
+uv run python tests/checklist_test.py                # le nœud validate : le routage
+                                                     # du graph, et la checklist citée
+                                                     # dans la question de review
 ```
 
 Les tests ne touchent jamais au `data/` du repo : chacun travaille dans un
@@ -368,7 +371,8 @@ sortent des horodatages du journal, les tokens du résultat des runs.
 tourner ce repo : **jugement de la taille et des critères** (`scope`),
 implémentation par agent, **agent de test backend**
 (imports, crash-test), **agent de test frontend au navigateur headless**
-(le DOM rendu et des screenshots, pas du curl), puis review humaine —
+(le DOM rendu et des screenshots, pas du curl), **validation des critères
+un par un** (`validate`), puis review humaine —
 question fermée sur l'issue GitHub. La boucle se ferme ensuite toute
 seule : **release** (commit, push, PR, merge surveillé jusqu'au SHA),
 **deploy** (`docker compose up -d --build github-sync web`) et
@@ -400,9 +404,47 @@ au worktree : il lit, il écrit, il crée des issues.
 
 `criteria.md` est **contractuel** pour la suite du cycle : `implement` le
 lit comme cahier des charges, les deux agents de test comme checklist en
-plus de l'issue, et le futur nœud `validate` le cochera formellement. Une
+plus de l'issue, et le nœud `validate` le coche formellement. Une
 fille porte déjà ses critères dans son corps — figés au découpage : `scope`
 les reprend tels quels au lieu de les réinventer.
+
+**Une porte de constat avant la review.** Les critères étaient figés, mais
+rien ne les cochait : chaque agent de test relisait `criteria.md` à sa
+façon, au milieu de son propre travail, et l'humain jugeait sur « testé, on
+garde ? ». Le nœud **`validate`**, entre `test_frontend` et `review`, ne
+fait que ça. C'est un JUDGE à contexte neuf — il n'a pas implémenté, il ne
+lit le worktree qu'en lecture, et il ne corrige **jamais** rien : il reprend
+`criteria.md` critère par critère, rejoue la preuve que chacun nomme (une
+commande, un fichier, un élément du DOM déjà capturé par `test_frontend`)
+et écrit `validate.md` dans le workspace — une ligne par critère, la case
+`[x]`/`[ ]` et la preuve constatée.
+
+- toutes les cases cochées → `pass`, la review s'ouvre ;
+- une seule case vide → `fail`, retour en `implement`, qui lit le workspace
+  et prend `validate.md` comme la liste de ce qui reste à tenir.
+
+L'intelligence de correction reste donc dans `implement` : `validate`
+constate et route. L'arête `fail` referme un cycle `validate → implement →
+test → validate` — `validate` porte donc `escalade`, comme `release`, et le
+budget d'escalades de l'item le borne. Ce budget paie maintenant deux
+passages nominaux (`validate` puis `release`) : il passe de quatre à
+**cinq**, les trois autres restant aux vraies reprises humaines.
+
+Pas de critères — `criteria.md` absent ou vide, cas d'un cycle antérieur à
+`scope` — → `pass`, et `validate.md` dit « aucun critère formalisé ». Une
+checklist qui n'existe pas ne bloque rien rétroactivement ; la review reste
+le juge.
+
+**La question de review embarque la checklist.** Le canal GitHub cite
+`validate.md` dans le commentaire de la question — en bloc de citation,
+borné aux quarante premières lignes, avec le lien vers la preview du
+fichier entier. L'humain voit les critères cochés et leurs preuves, pas
+seulement une option à choisir. Le sync lit le fichier dans le workspace de
+l'item, comme le frontend : `./data` est donc monté en lecture seule dans
+le conteneur `github-sync`, comme il l'était déjà dans `web`. Pas de
+fichier — question posée avant `validate`, cycle plus ancien, `data/` hors
+de portée — pas de citation, et la question reste exactement ce qu'elle
+était.
 
 **La découpe est bornée.** Une ligne `Lineage-budget: <n>` dans le corps dit
 combien de découpes restent permises sous cette issue : le pendant lisible
@@ -427,7 +469,7 @@ donc ils ne paient pas le même tarif :
 | nœuds | modèle / effort | pourquoi |
 | --- | --- | --- |
 | `scope`, `implement` | défaut, `--effort high` | le jugement d'avant la construction, puis le seul vrai travail de conception |
-| `test_backend`, `test_frontend` | `--model sonnet --effort medium` | procéduraux, mais avec du jugement |
+| `test_backend`, `test_frontend`, `validate` | `--model sonnet --effort medium` | procéduraux, mais avec du jugement — `validate` est du constat outillé, pas de la conception |
 | `release` | `--model haiku --effort low`, script-first | le script fait le nominal ; l'agent ne sert qu'à la panne |
 | `worktree`, `deploy`, `verify_deploy`, `cleanup`, `cleanup_unresolved`, `cleanup_split` | pas d'agent | du shell pur, qui écrit son `outcome.json` |
 
@@ -466,9 +508,9 @@ testée. Cette arête referme un cycle release → test → … → release :
 `release` porte donc `escalade`, et le budget d'escalades de l'item borne
 la boucle. Le noyau débite ce budget à *chaque* entrée dans un nœud
 d'escalade — le chemin nominal `review → release` compris, puisque tous les
-nœuds du cycle sont sur ce chemin. Le budget de `code-task` passe donc de
-trois à **quatre** : une escalade paie la release nominale, les trois autres
-restent aux vraies reprises humaines.
+nœuds du cycle sont sur ce chemin. Le budget de `code-task` a donc grandi
+d'autant : **cinq**, une escalade pour le `validate` nominal, une pour la
+release nominale, les trois autres aux vraies reprises humaines.
 
 Le trade-off du modèle le moins cher reste assumé, mais il ne porte plus
 que sur la panne de release. Si elle se met à rater, la marche arrière est

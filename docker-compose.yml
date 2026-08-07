@@ -71,6 +71,9 @@ services:
       GRAPHATOM_TAKE_ALL: ${GRAPHATOM_TAKE_ALL:-}
       GRAPHATOM_WEB_URL: ${GRAPHATOM_WEB_URL:-http://127.0.0.1:8850}
     restart: unless-stopped
+    volumes:
+      - ./data:/app/data:ro   # les workspaces du worker hôte — la question de
+                              # review y lit le `validate.md` qu'elle cite
     depends_on:
       init:
         condition: service_completed_successfully
