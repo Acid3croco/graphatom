@@ -2,6 +2,11 @@
 #
 #   GITHUB_TOKEN=$(gh auth token) docker compose up -d --build
 #
+# La config de cette instance vit dans le `.env` commité à côté, que compose
+# lit tout seul : un redéploiement ne dépend d'aucune variable du shell qui
+# l'invoque, le token excepté. Les défauts ci-dessous restent ceux d'un
+# déploiement générique.
+#
 # Puis : poser le label `graphatom` sur une issue du repo. Le rail admet,
 # pose sa question en commentaire, attend `/answer <id> <option>`, route,
 # et rapporte le terminal — chaque prise de parole étant un effet réconciliable.
@@ -57,6 +62,7 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN:?GITHUB_TOKEN requis}
       GRAPHATOM_ANSWERERS: ${GRAPHATOM_ANSWERERS:-Acid3croco}
       GRAPHATOM_TAKE_ALL: ${GRAPHATOM_TAKE_ALL:-}
+      GRAPHATOM_WEB_URL: ${GRAPHATOM_WEB_URL:-http://127.0.0.1:8850}
     restart: unless-stopped
     depends_on:
       init:
@@ -71,9 +77,22 @@ services:
       - ./data:/app/data:ro   # les workspaces du worker hôte — previews en lecture seule
     ports:
       - "127.0.0.1:8850:8848"
+    networks: [default, proxy]   # `proxy` : voir plus bas
     depends_on:
       init:
         condition: service_completed_successfully
+
+networks:
+  default:
+
+  # Le réseau du proxy qui expose l'UI. Déclaré ici pour survivre à
+  # `up -d` : un `docker network connect` posé à la main se perd dès que le
+  # conteneur est recréé — panne silencieuse. Par défaut compose crée son
+  # propre réseau, donc aucun prérequis ; l'instance qui vit derrière un
+  # proxy déjà en place le nomme dans son `.env` avec EXTERNAL=true.
+  proxy:
+    name: ${GRAPHATOM_PROXY_NET:-graphatom-proxy}
+    external: ${GRAPHATOM_PROXY_NET_EXTERNAL:-false}
 
 volumes:
   pgdata:
