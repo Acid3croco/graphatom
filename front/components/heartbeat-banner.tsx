@@ -77,16 +77,18 @@ export function HeartbeatBanner({ initial }: { initial: Heartbeat | null }) {
       id="heartbeat"
       data-stale={alert ? "true" : "false"}
       className={cn(
-        "flex items-center gap-2 rounded-md px-3 py-1.5 text-sm",
+        // sur téléphone le texte tient sur deux ou trois lignes : il passe
+        // en entier, jamais tronqué, et l'icône s'aligne sur la première
+        "flex items-start gap-2 rounded-md px-3 py-1.5 text-xs sm:items-center sm:text-sm",
         alert
           ? "border border-red-300 bg-red-50 font-semibold text-red-800"
           : "text-emerald-700",
       )}
     >
       {alert ? (
-        <TriangleAlert className="size-4 shrink-0" />
+        <TriangleAlert className="mt-0.5 size-4 shrink-0 sm:mt-0" />
       ) : (
-        <Activity className="size-4 shrink-0" />
+        <Activity className="mt-0.5 size-4 shrink-0 sm:mt-0" />
       )}
       {text(beat)}
     </p>

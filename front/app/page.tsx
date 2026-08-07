@@ -25,7 +25,7 @@ export default async function QuestionsPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <h1 className="text-xl font-semibold">questions</h1>
+      <h1 className="text-lg font-semibold sm:text-xl">questions</h1>
       {!open.questions.length && (
         <p className="text-muted-foreground">
           Aucune question ouverte. La page se rafraîchit toute seule.
@@ -34,7 +34,7 @@ export default async function QuestionsPage() {
       {open.questions.map((question) => (
         <Card key={question.question_id}>
           <CardHeader>
-            <CardTitle className="text-sm font-normal text-muted-foreground">
+            <CardTitle className="text-sm font-normal break-words text-muted-foreground">
               [{question.question_id}]{" "}
               {question.issue_url ? (
                 <a href={question.issue_url} className="underline">

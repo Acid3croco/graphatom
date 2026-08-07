@@ -7,6 +7,9 @@
  * leur durée et leurs tokens, les critères de succès du cycle tels que le
  * nœud `validate` les a cochés — sa preuve avec —, les effets,
  * et le workspace, dont les screenshots des agents s'affichent en preview.
+ *
+ * C'est la page la plus large du front, et elle doit tenir dans 360 px :
+ * le graph et les tables glissent chacun dans leur bloc, jamais la page.
  */
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -49,7 +52,7 @@ function Result({ run }: { run: Run }) {
   ];
   const tail = result.log_tail;
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-1 break-words">
       <span>
         {keys.map((key) => (
           <span key={key} className="mr-2">
@@ -105,9 +108,9 @@ export default async function ItemPage({
   return (
     <div className="flex flex-col gap-6">
       <section className="flex flex-col gap-2">
-        <h1 className="text-xl font-semibold">
+        <h1 className="text-lg font-semibold break-words sm:text-xl">
           item {item.id}
-          <span className="ml-2 text-sm font-normal text-muted-foreground">
+          <span className="ml-2 text-xs font-normal text-muted-foreground sm:text-sm">
             {item.issue_url ? (
               <a href={item.issue_url} className="underline">
                 {item.subject_key}
@@ -149,7 +152,7 @@ export default async function ItemPage({
 
       {open.length > 0 && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-lg font-semibold">questions ouvertes</h2>
+          <h2 className="text-base font-semibold sm:text-lg">questions ouvertes</h2>
           {open.map((question) => (
             <Card key={question.question_id}>
               <CardHeader>
@@ -168,12 +171,12 @@ export default async function ItemPage({
       )}
 
       <section className="flex flex-col gap-2">
-        <h2 className="text-lg font-semibold">graph</h2>
+        <h2 className="text-base font-semibold sm:text-lg">graph</h2>
         <GraphSvg graph={graph} />
       </section>
 
       <section className="flex flex-col gap-2">
-        <h2 className="text-lg font-semibold">journal</h2>
+        <h2 className="text-base font-semibold sm:text-lg">journal</h2>
         <Table>
           <TableHeader>
             <TableRow>
@@ -245,7 +248,7 @@ export default async function ItemPage({
 
       {runs.length > 0 && (
         <section className="flex flex-col gap-2">
-          <h2 className="text-lg font-semibold">runs</h2>
+          <h2 className="text-base font-semibold sm:text-lg">runs</h2>
           <Table>
             <TableHeader>
               <TableRow>
@@ -277,7 +280,9 @@ export default async function ItemPage({
                   <TableCell className="whitespace-nowrap">
                     {tokens(run.usage)}
                   </TableCell>
-                  <TableCell className="text-xs">
+                  {/* le post-mortem est le plus large de la table : on le
+                      borne au doigt pour raccourcir le glissement */}
+                  <TableCell className="max-w-80 text-xs md:max-w-none">
                     <Result run={run} />
                   </TableCell>
                 </TableRow>
@@ -289,14 +294,14 @@ export default async function ItemPage({
 
       {criteria && (
         <section className="flex flex-col gap-2">
-          <h2 className="text-lg font-semibold">critères de succès</h2>
+          <h2 className="text-base font-semibold sm:text-lg">critères de succès</h2>
           <CriteriaList criteria={criteria} validate={validate} />
         </section>
       )}
 
       {effects.length > 0 && (
         <section className="flex flex-col gap-2">
-          <h2 className="text-lg font-semibold">effets</h2>
+          <h2 className="text-base font-semibold sm:text-lg">effets</h2>
           <Table>
             <TableHeader>
               <TableRow>
@@ -328,12 +333,12 @@ export default async function ItemPage({
 
       {files.length > 0 && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-lg font-semibold">workspace</h2>
+          <h2 className="text-base font-semibold sm:text-lg">workspace</h2>
           {images.map((file) => (
             // les screenshots des agents = la preview ; le `href` vient de
             // l'API et le front monte le même chemin, rien à réécrire
             <figure key={file.name} className="flex flex-col gap-1">
-              <figcaption className="text-sm text-muted-foreground">
+              <figcaption className="text-sm break-all text-muted-foreground">
                 {file.name}
               </figcaption>
               <a href={file.href}>
@@ -341,12 +346,12 @@ export default async function ItemPage({
                 <img
                   src={file.href}
                   alt={file.name}
-                  className="max-w-full rounded-md border"
+                  className="h-auto w-full rounded-md border md:w-auto md:max-w-full"
                 />
               </a>
             </figure>
           ))}
-          <ul className="flex flex-col gap-1 text-sm">
+          <ul className="flex flex-col gap-1 text-sm break-words">
             {files.map((file) => (
               <li key={file.name}>
                 <a href={file.href} className="underline">
