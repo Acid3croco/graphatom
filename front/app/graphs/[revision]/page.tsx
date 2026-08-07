@@ -37,9 +37,9 @@ export default async function GraphPage({
   return (
     <div className="flex flex-col gap-6">
       <section className="flex flex-col gap-2">
-        <h1 className="text-xl font-semibold">
+        <h1 className="text-lg font-semibold break-words sm:text-xl">
           {bundle.name}
-          <span className="ml-2 text-sm font-normal text-muted-foreground">
+          <span className="ml-2 text-xs font-normal text-muted-foreground sm:text-sm">
             rév. {bundle.revision.slice(0, 12)}… · publiée{" "}
             {moment(bundle.published_at)} · {bundle.items} item
             {bundle.items > 1 ? "s" : ""} · entrée {bundle.entry}

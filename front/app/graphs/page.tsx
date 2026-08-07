@@ -42,7 +42,7 @@ export default async function GraphsPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <h1 className="text-xl font-semibold">graphs</h1>
+      <h1 className="text-lg font-semibold sm:text-xl">graphs</h1>
       {!rows.length && (
         <p className="text-muted-foreground">Aucun graph publié.</p>
       )}

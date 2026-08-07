@@ -7,6 +7,9 @@
  * posée pendant qu'on lit la page apparaît, une question répondue s'en va,
  * et rien d'autre de la page ne bouge — la carte qu'on est en train de
  * lire garde son focus et sa position.
+ *
+ * L'en-tête d'une carte cite un sujet et un titre d'item : le texte se
+ * coupe au milieu d'un mot plutôt que de pousser la page hors de l'écran.
  */
 import Link from "next/link";
 
@@ -32,7 +35,7 @@ export function QuestionsList({ initial }: { initial: Question[] }) {
       {questions.map((question) => (
         <Card key={question.question_id}>
           <CardHeader>
-            <CardTitle className="text-sm font-normal text-muted-foreground">
+            <CardTitle className="text-sm font-normal break-words text-muted-foreground">
               [{question.question_id}]{" "}
               {question.issue_url ? (
                 <a href={question.issue_url} className="underline">

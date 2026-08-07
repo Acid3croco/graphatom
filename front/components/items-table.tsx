@@ -7,6 +7,10 @@
  * lui-même : un item qui change d'état voit sa ligne bouger, la coquille
  * de la page ne bouge pas. Le rendu serveur pose la première liste
  * (`initial`), donc rien n'attend le premier tour.
+ *
+ * Sur téléphone la table glisse dans son conteneur et le titre se coupe
+ * en une ligne : une ligne par item, le texte complet dans l'infobulle.
+ * Au-delà de `md:` le titre revient sur autant de lignes qu'il en veut.
  */
 import Link from "next/link";
 
@@ -22,6 +26,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+
+// coupé au doigt, entier au bureau
+const TITLE = "block truncate md:overflow-visible md:whitespace-normal";
 
 export function ItemsTable({ initial }: { initial: Item[] }) {
   const items = useItems(initial);
@@ -44,42 +51,53 @@ export function ItemsTable({ initial }: { initial: Item[] }) {
         </TableRow>
       </TableHeader>
       <TableBody>
-        {items.map((item) => (
-          <TableRow key={item.id}>
-            <TableCell>
-              <Link href={`/item/${item.id}`} className="underline">
-                item {item.id}
-              </Link>
-            </TableCell>
-            <TableCell>
-              {item.issue_url && (
-                <a href={item.issue_url} className="underline">
-                  {issueNumber(item.issue_url)}
-                </a>
-              )}
-            </TableCell>
-            <TableCell>
-              <Link href={`/item/${item.id}`} className="underline">
-                {item.title ?? item.subject_key}
-              </Link>
-            </TableCell>
-            <TableCell className="text-muted-foreground">{item.graph}</TableCell>
-            <TableCell className="text-muted-foreground">
-              g{item.generation}
-            </TableCell>
-            <TableCell>
-              <Badge variant={tone(item.status)}>{item.state}</Badge>
-            </TableCell>
-            <TableCell className="text-muted-foreground">
-              v{item.version}
-            </TableCell>
-            <TableCell className="text-muted-foreground whitespace-nowrap">
-              {item.terminal_at
-                ? moment(item.terminal_at)
-                : (moment(item.updated_at) || "actif")}
-            </TableCell>
-          </TableRow>
-        ))}
+        {items.map((item) => {
+          const title = item.title ?? item.subject_key;
+          return (
+            <TableRow key={item.id}>
+              {/* « item 40 » sur une ligne tant que la place manque ;
+                  au-delà de `lg:` la table respire et on la laisse faire */}
+              <TableCell className="whitespace-nowrap lg:whitespace-normal">
+                <Link href={`/item/${item.id}`} className="underline">
+                  item {item.id}
+                </Link>
+              </TableCell>
+              <TableCell>
+                {item.issue_url && (
+                  <a href={item.issue_url} className="underline">
+                    {issueNumber(item.issue_url)}
+                  </a>
+                )}
+              </TableCell>
+              <TableCell className="max-w-56 md:max-w-none">
+                <Link
+                  href={`/item/${item.id}`}
+                  title={title}
+                  className={`${TITLE} underline`}
+                >
+                  {title}
+                </Link>
+              </TableCell>
+              <TableCell className="text-muted-foreground">
+                {item.graph}
+              </TableCell>
+              <TableCell className="text-muted-foreground">
+                g{item.generation}
+              </TableCell>
+              <TableCell>
+                <Badge variant={tone(item.status)}>{item.state}</Badge>
+              </TableCell>
+              <TableCell className="text-muted-foreground">
+                v{item.version}
+              </TableCell>
+              <TableCell className="text-muted-foreground whitespace-nowrap">
+                {item.terminal_at
+                  ? moment(item.terminal_at)
+                  : (moment(item.updated_at) || "actif")}
+              </TableCell>
+            </TableRow>
+          );
+        })}
       </TableBody>
     </Table>
   );

@@ -22,7 +22,7 @@ export default async function QuestionsPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <h1 className="text-xl font-semibold">questions</h1>
+      <h1 className="text-lg font-semibold sm:text-xl">questions</h1>
       <QuestionsList initial={open.questions} />
     </div>
   );
