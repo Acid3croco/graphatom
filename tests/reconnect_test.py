@@ -37,6 +37,11 @@ ROOT = Path(__file__).resolve().parents[1]
 # dans ROOT/data, qui peut être le data/ vivant d'un rail (workspaces d'items)
 WORK = Path(tempfile.mkdtemp(prefix="graphatom-reconnect-test-"))
 blocks.DATA_DIR = WORK / "data"  # les blocs joués en direct écrivent là aussi
+# hermétisme : ce dépôt-ci est le seul univers du test. L'agent qui nous
+# lance a dans son environnement le clone et l'instance de la production —
+# un ordonnanceur lancé d'ici n'en voit ni l'un ni l'autre.
+os.environ["GRAPHATOM_REPO_DIR"] = str(ROOT)
+os.environ.pop("GRAPHATOM_AGENT_DSN", None)
 COUPURES = 3       # trois coupures d'affilée : le backoff doit rester borné
 ENTRE_S = 2.0      # temps laissé au worker pour retravailler entre deux
 TIMEOUT_S = 150    # un run fauché en vol coûte un bail (30 s) avant d'être retenté
