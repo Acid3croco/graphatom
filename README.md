@@ -81,8 +81,9 @@ canal web (secours, port 8850). Ensuite tout se passe sur GitHub :
 3. le rail pose sa question fermée en commentaire
 4. répondre par un commentaire `/answer <id> <option>` (auteurs autorisés :
    `GRAPHATOM_ANSWERERS`, défaut : le propriétaire du repo)
-5. le rail route — le label suit chaque transition — puis poste le rapport
-   terminal, le journal en table, et retire le label d'état
+5. le rail route — le label suit chaque transition, et l'accusé est réécrit
+   pour porter la trajectoire en direct — puis poste le rapport terminal,
+   le journal en table, et retire le label d'état
 
 Règles : GitHub est l'interface humaine et la cible des effets, Postgres
 reste l'unique autorité d'exécution. Chaque prise de parole du rail est un
@@ -91,7 +92,13 @@ dans les commentaires : un crash entre le POST et le marquage ne produit
 jamais de doublon. Le label `rail:<état>` n'est pas un état : c'est une
 projection possédée par le rail, comme la colonne d'un board — jamais lue,
 repeinte à chaque tick depuis la base ; un label bricolé à la main revient
-à sa place tout seul. Aucun parsing de langage naturel, aucune lecture de
+à sa place tout seul. Le repeint ne voit que les issues ouvertes, mais le
+retrait au terminal vise l'issue par son numéro : une issue fermée par le
+merge de sa propre PR ne garde pas son label. La trajectoire est une
+projection de même nature — le commentaire d'accusé est réécrit à chaque
+transition, reconstruit depuis la base, jamais complété à l'aveugle ; une
+édition ne notifie personne, donc l'issue est un tableau de bord en direct
+sans un seul mail. Aucun parsing de langage naturel, aucune lecture de
 GitHub comme état d'item. La démo : issues [#7](https://github.com/Acid3croco/graphatom/issues/7)
 et [#8](https://github.com/Acid3croco/graphatom/issues/8).
 
