@@ -35,7 +35,10 @@ services:
   # l'ordonnanceur conteneurisé convient aux graphs à stubs ; les graphs à
   # agents (claude, chromium headless) demandent un worker sur l'hôte :
   #   GRAPHATOM_DSN=postgresql://graphatom:graphatom@127.0.0.1:54322/graphatom \
-  #   GRAPHATOM_AGENT_DSN=<base jetable> GRAPHATOM_REPO_DIR=<repo> graphatom run
+  #   GRAPHATOM_AGENT_DSN=<base jetable> GRAPHATOM_REPO_DIR=<clone de référence> graphatom run
+  #
+  # GRAPHATOM_REPO_DIR est le clone de référence, pas l'atelier : code-task y
+  # crée un worktree par item (.worktrees/rail-item-N) et le retire à la sortie.
   scheduler:
     profiles: ["stub"]
     build: .

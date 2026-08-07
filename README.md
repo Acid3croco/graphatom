@@ -127,7 +127,22 @@ question fermée sur l'issue GitHub. La boucle se ferme ensuite toute
 seule : **release** (commit, push, PR, merge surveillé jusqu'au SHA),
 **deploy** (`docker compose up -d --build github-sync web`) et
 **verify_deploy** (conteneurs `Up`, `/items` en 200, logs du sync
-propres). Les agents demandent un worker sur
+propres).
+
+**Un worktree git par item** — le pendant git du workspace `data/item-N`.
+`GRAPHATOM_REPO_DIR` est le clone de référence, plus l'atelier : le nœud
+`worktree` crée `$GRAPHATOM_REPO_DIR/.worktrees/rail-item-N` sur la branche
+`rail/issue-<num>` depuis `origin/main` fraîchement fetché — jamais depuis
+l'état local. Tous les blocs de l'item partagent ce worktree (implement
+écrit, les tests vérifient sur place, release commite et pushe depuis là) ;
+seul **deploy** revient au clone de référence, qu'il aligne sur `origin/main`
+avant de reconstruire — c'est le merge qui part en prod, pas la branche.
+Deux items concurrents partent du même `origin/main` et divergent par leur
+branche ; s'ils touchent les mêmes fichiers, le second merge voit le conflit,
+et release a déjà sa sortie `conflict`. Le retrait (worktree + branche
+locale) est un **nœud du graph** : toutes les sorties passent par `cleanup`
+ou `cleanup_unresolved` avant leur terminal — le graph *est* la garantie de
+cleanup, le noyau n'en sait rien. Les agents demandent un worker sur
 l'hôte (voir le commentaire dans `docker-compose.yml`) ; le bail par nœud
 (`config.lease_s`) couvre leur durée, et l'ordonnanceur exécute chaque
 bloc dans son propre thread — un agent de dix minutes ne bloque ni le

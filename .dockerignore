@@ -1,0 +1,8 @@
+# Le clone de référence héberge un worktree par item (.worktrees/) et les
+# workspaces du worker (data/) : rien de tout ça n'entre dans une image.
+.git
+.worktrees
+data
+.venv
+__pycache__
+*.egg-info
