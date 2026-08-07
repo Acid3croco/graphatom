@@ -73,6 +73,9 @@ uv run python tests/heartbeat_test.py                # le battement du worker : 
 uv run python tests/live_test.py                     # le marqueur de fraîcheur des
                                                      # pages : stable à données
                                                      # égales, sans base
+uv run python tests/shell_test.py                    # les nœuds shell de code-task,
+                                                     # joués tels quels : sans base,
+                                                     # sans modèle, sans docker
 ```
 
 Les tests ne touchent jamais au `data/` du repo : chacun travaille dans un
@@ -359,8 +362,9 @@ tourner ce repo : implémentation par agent, **agent de test backend**
 question fermée sur l'issue GitHub. La boucle se ferme ensuite toute
 seule : **release** (commit, push, PR, merge surveillé jusqu'au SHA),
 **deploy** (`docker compose up -d --build github-sync web`) et
-**verify_deploy** (conteneurs `Up`, `/items` en 200, logs du sync
-propres).
+**verify_deploy** (conteneurs en marche, `/items` en 200, logs du sync
+propres) — ces deux derniers sans aucun modèle, comme la préparation du
+worktree : du shell.
 
 **Un modèle et un effort par atome.** Le `cmd` d'un nœud est une ligne de
 shell : il porte aussi le coût. Tous les nœuds ne font pas le même travail,
@@ -370,17 +374,54 @@ donc ils ne paient pas le même tarif :
 | --- | --- | --- |
 | `implement` | défaut, `--effort high` | le seul vrai travail de conception |
 | `test_backend`, `test_frontend` | `--model sonnet --effort medium` | procéduraux, mais avec du jugement |
-| `worktree`, `release`, `deploy`, `verify_deploy` | `--model haiku --effort low` | scriptés pas à pas dans le prompt |
-| `cleanup`, `cleanup_unresolved` | pas d'agent | du shell pur, qui écrit son `outcome.json` |
+| `release` | `--model haiku --effort low`, script-first | le script fait le nominal ; l'agent ne sert qu'à la panne |
+| `worktree`, `deploy`, `verify_deploy`, `cleanup`, `cleanup_unresolved` | pas d'agent | du shell pur, qui écrit son `outcome.json` |
 
-Le trade-off est assumé, pas gratuit : `release` et `deploy` touchent git et
-docker avec le modèle le moins cher. Ils sont scriptés pas à pas et leurs
-sorties d'échec (`conflict`, `failed`) mènent à l'escalade — mais si l'un
-se met à rater, la marche arrière est *une ligne de JSON* : remonter d'un
-cran (`haiku` → `sonnet`, `low` → `medium`) dans
-[`examples/code-task.json`](examples/code-task.json). Les compteurs de
-tentatives et le journal disent lequel a lâché ; c'est la donnée qui
-tranche, pas l'intuition.
+**Les nœuds mécaniques n'ont pas d'agent.** `worktree`, `deploy` et
+`verify_deploy` étaient des agents qui suivaient un prompt scripté pas à
+pas : on payait un modèle — du temps, des tokens, de la variance
+d'interprétation — pour ce qu'un shell fait à l'identique, plus vite et
+sans surprise. Ce sont maintenant des `cmd`, comme `cleanup` depuis
+toujours : le numéro d'issue tiré du sujet et un `worktree add` idempotent
+qui attend les verrous `.lock` des items voisins ; `docker compose up -d
+--build` et son code de retour ; trois portes binaires (les deux services
+en marche, `/items` en 200, aucun `Traceback` dans les 50 dernières lignes
+du sync). Chacun écrit toujours son `outcome.json`, échec compris — c'est
+ce qui interdit au graph de se coincer dans un nœud shell — et son compte
+rendu nomme le pas qui a lâché avec son code : un shell qui échoue doit
+être *plus* lisible qu'un agent qui improvise, pas moins.
+[`tests/shell_test.py`](tests/shell_test.py) joue ces `cmd` tels quels sur
+un dépôt jetable, sans modèle ni docker. Un `cmd` sans modèle ne laisse pas
+d'`usage.json` : ces nœuds ne coûtent aucun token, et la page de l'item le
+montre — c'est exactement le gain que l'on cherchait.
+
+**`release` est le seul hybride : un agent script-first.** Tout le nominal
+vit dans [`scripts/release.sh`](scripts/release.sh) — commit (titre de
+l'issue, puis `Closes #<num>`), push, PR ouverte ou retrouvée, merge
+surveillé jusqu'au SHA, un code de retour par pas. Le prompt du nœud tient
+en une phrase : lance le script ; sortie 0 → `done`, rien d'autre — le
+nominal coûte un aller-retour de modèle. Si le script lâche, l'agent a le
+droit d'agir, dans une frontière stricte : réparer la mécanique — relancer
+un push, recréer une PR obsolète d'un cycle passé, rebaser quand le rebase
+passe tout seul — puis relancer le script, oui ; merger du code qu'il a
+modifié, jamais. D'où trois issues fermées : `done`, `conflict` (l'agent
+n'y arrive pas, l'humain reprend) et **`rebased`** — il a fallu résoudre de
+vrais conflits, donc pas de merge : l'arête renvoie la branche à
+`test_backend`, parce qu'une fusion est une combinaison que personne n'a
+testée. Cette arête referme un cycle release → test → … → release :
+`release` porte donc `escalade`, et le budget d'escalades de l'item borne
+la boucle. Le noyau débite ce budget à *chaque* entrée dans un nœud
+d'escalade — le chemin nominal `review → release` compris, puisque tous les
+nœuds du cycle sont sur ce chemin. Le budget de `code-task` passe donc de
+trois à **quatre** : une escalade paie la release nominale, les trois autres
+restent aux vraies reprises humaines.
+
+Le trade-off du modèle le moins cher reste assumé, mais il ne porte plus
+que sur la panne de release. Si elle se met à rater, la marche arrière est
+*une ligne de JSON* : remonter d'un cran (`haiku` → `sonnet`, `low` →
+`medium`) dans [`examples/code-task.json`](examples/code-task.json). Les
+compteurs de tentatives et le journal disent ce qui a lâché ; c'est la
+donnée qui tranche, pas l'intuition.
 
 **Une porte de pertinence avant chaque test.** Le test le plus cher du
 cycle est le test frontend (~8 min de navigateur) et il tournait même pour
@@ -417,9 +458,11 @@ l'état local. Tous les blocs de l'item partagent ce worktree (implement
 seul **deploy** revient au clone de référence, qu'il aligne sur `origin/main`
 avant de reconstruire — c'est le merge qui part en prod, pas la branche.
 Deux items concurrents partent du même `origin/main` et divergent par leur
-branche ; s'ils touchent les mêmes fichiers, le second merge voit le conflit,
-et release a déjà sa sortie `conflict`. Le retrait (worktree + branche
-locale) est un **nœud du graph** : toutes les sorties passent par `cleanup`
+branche ; s'ils touchent les mêmes fichiers, le second merge voit le conflit :
+release rebase quand le rebase passe tout seul, sort en `rebased` — retour aux
+tests — quand il a fallu résoudre à la main, et en `conflict` quand elle n'y
+arrive pas. Le retrait (worktree + branche locale) est un **nœud du
+graph** : toutes les sorties passent par `cleanup`
 ou `cleanup_unresolved` avant leur terminal — le graph *est* la garantie de
 cleanup, le noyau n'en sait rien. Les agents demandent un worker sur
 l'hôte (voir le commentaire dans `docker-compose.yml`) ; le bail par nœud
