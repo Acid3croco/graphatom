@@ -95,9 +95,36 @@ repeinte à chaque tick depuis la base ; un label bricolé à la main revient
 GitHub comme état d'item. La démo : issues [#7](https://github.com/Acid3croco/graphatom/issues/7)
 et [#8](https://github.com/Acid3croco/graphatom/issues/8).
 
-Config de déploiement : `GRAPHATOM_TAKE_ALL=1` fait prendre en charge
-toute issue ouverte, sans attendre le label — pour un repo dont le rail
-est le seul mainteneur.
+### Config de déploiement : épinglée dans le repo
+
+Un redéploiement (`docker compose up -d`) ne doit jamais dépendre des
+variables du shell qui l'invoque — le token excepté. Sinon le rail se
+redéploie lui-même sans elles et perd sa config sans un mot : c'est
+arrivé, `GRAPHATOM_TAKE_ALL` vidé, admission éteinte neuf heures.
+
+La config de cette instance vit donc dans le [`.env`](.env) commité à la
+racine, que compose lit tout seul :
+
+| variable | rôle |
+| --- | --- |
+| `GRAPHATOM_TAKE_ALL=1` | prendre en charge toute issue ouverte, sans attendre le label — pour un repo dont le rail est le seul mainteneur |
+| `GRAPHATOM_ANSWERERS` | les auteurs autorisés à répondre `/answer` |
+| `GRAPHATOM_WEB_URL` | l'URL publique de l'UI, celle des liens « Trajectoire » postés sur GitHub |
+| `GRAPHATOM_PROXY_NET` / `..._EXTERNAL` | le réseau docker du proxy que le service `web` rejoint |
+
+Pas de secret dedans : `GITHUB_TOKEN` reste fourni par le shell et garde
+son garde-fou (`${GITHUB_TOKEN:?…}`). Les défauts du `docker-compose.yml`
+restent ceux d'un déploiement générique — le compose est générique, le
+`.env` est cette instance.
+
+**Le raccordement au proxy suit la même règle.** L'UI est exposée sur
+`graphatom.veyxzer.com` par le Traefik de l'hôte, avec basicauth au bord
+— l'app reste sans auth, refus assumé. Le routeur Traefik vit dans le
+proxy, hors de ce repo ; seul le raccordement réseau est déclaré ici, dans
+le compose, sur le service `web`. Un `docker network connect` à la main
+n'aurait pas survécu au premier `up -d` — même panne silencieuse que
+`TAKE_ALL`. Sans les deux variables du `.env`, compose crée son propre
+réseau `graphatom-proxy` : un déploiement sans proxy ne casse pas.
 
 ## De vrais agents dans les blocs (milestone 3b)
 
