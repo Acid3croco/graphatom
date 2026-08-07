@@ -7,14 +7,18 @@ tout le reste :
   1. admission  — une issue ouverte portant le label `graphatom` devient
                   un sujet (une seule admission automatique par issue)
   2. accusé     — l'occurrence ouverte reçoit son commentaire de prise en
-                  charge : item, graph, lien trajectoire — une seule fois
+                  charge : item, graph, lien trajectoire — une seule fois ;
+                  ce commentaire est ensuite réécrit à chaque transition
+                  pour porter la trajectoire en direct (une édition ne
+                  notifie personne : le tableau de bord ne coûte aucun spam)
   3. questions  — chaque WAIT ouvert est publié en commentaire d'issue ;
                   la publication est un effet réconciliable par marqueur
   4. réponses   — un commentaire `/answer <id> <option>` d'un auteur
                   autorisé, postérieur à l'armement de la question,
                   enregistre la réponse ; l'ordonnanceur route
   5. état       — un label `rail:<état>` projette l'état de l'item actif,
-                  repeint à chaque tick, retiré au terminal
+                  repeint à chaque tick sur les issues ouvertes, retiré au
+                  terminal sans condition — l'issue peut être déjà fermée
   6. rapports   — un item terminal reçoit son commentaire de clôture
 
 Aucun parsing de langage naturel. Aucune lecture de GitHub comme état
@@ -71,6 +75,17 @@ class GitHub:
         self._call("POST", f"/repos/{self.repo}/issues/{number}/comments",
                    {"body": body})
 
+    def edit_comment(self, comment_id: int, body: str) -> None:
+        # éditer ne notifie personne : c'est ce qui rend la trajectoire vivante gratuite
+        self._call("PATCH", f"/repos/{self.repo}/issues/comments/{comment_id}",
+                   {"body": body})
+
+    def issue_labels(self, number: int) -> list[str]:
+        # vise l'issue par son numéro : ouverte ou fermée, l'API répond pareil
+        rows = self._call(
+            "GET", f"/repos/{self.repo}/issues/{number}/labels?per_page=100")
+        return [r["name"] for r in rows]
+
     def create_label(self, name: str) -> None:
         # les labels du rail naissent à la volée ; 422 = il existe déjà, tant mieux
         try:
@@ -103,31 +118,41 @@ def _web() -> str:
     return os.environ.get("GRAPHATOM_WEB_URL", "http://127.0.0.1:8850")
 
 
-def _speak(conn: Connection, gh: GitHub, number: int, item_id: int,
-           key: str, body: str) -> None:
-    """Une prise de parole du rail = un effet : commis avant, réconcilié par marqueur."""
-    marker = f"<!-- graphatom:{key} -->"
-    target = f"gh:{gh.repo}#{number}"
+def _pending(conn: Connection, item_id: int, target: str, key: str,
+             intent: dict) -> bool:
+    """Commet l'intention d'un effet ; faux si cet effet est déjà appliqué."""
     with conn.transaction():
         conn.execute(
             "INSERT INTO effect (item_id, run_id, logical_key, target_uri, intent) "
             "VALUES (%s, NULL, %s, %s, %s) ON CONFLICT (target_uri, logical_key) DO NOTHING",
-            (item_id, key, target, json.dumps({"comment": body})),
+            (item_id, key, target, json.dumps(intent)),
         )
     row = conn.execute(
         "SELECT observation FROM effect WHERE target_uri = %s AND logical_key = %s",
         (target, key),
     ).fetchone()
-    if row["observation"] == "applied":
+    return row["observation"] != "applied"
+
+
+def _applied(conn: Connection, target: str, key: str) -> None:
+    conn.execute(
+        "UPDATE effect SET observation = 'applied' "
+        "WHERE target_uri = %s AND logical_key = %s", (target, key),
+    )
+
+
+def _speak(conn: Connection, gh: GitHub, number: int, item_id: int,
+           key: str, body: str) -> None:
+    """Une prise de parole du rail = un effet : commis avant, réconcilié par marqueur."""
+    marker = f"<!-- graphatom:{key} -->"
+    target = f"gh:{gh.repo}#{number}"
+    if not _pending(conn, item_id, target, key, {"comment": body}):
         return
     # réconciliation : la cible sait-elle déjà ? (crash possible entre POST et marquage)
     if not any(marker in c["body"] for c in gh.comments(number)):
         gh.post_comment(number, f"{marker}\n{body}")
         print(f"#{number} ← {key}", flush=True)
-    conn.execute(
-        "UPDATE effect SET observation = 'applied' "
-        "WHERE target_uri = %s AND logical_key = %s", (target, key),
-    )
+    _applied(conn, target, key)
 
 
 def _admit_labeled(conn: Connection, gh: GitHub, revision: str) -> None:
@@ -147,6 +172,29 @@ def _admit_labeled(conn: Connection, gh: GitHub, revision: str) -> None:
             print(f"#{issue['number']} refusé : {exc}", flush=True)
 
 
+def _gh_items(conn: Connection, gh: GitHub, where: str = "") -> list[dict]:
+    return conn.execute(
+        "SELECT w.*, s.subject_key, s.graph FROM work_item w "
+        "JOIN subject s ON s.id = w.subject_id "
+        f"WHERE s.subject_key LIKE %s {where} ORDER BY w.id",
+        (f"gh:{gh.repo}#%",),
+    ).fetchall()
+
+
+def _ack_key(item: dict) -> str:
+    # la clé porte le graph et la génération : chaque occurrence a droit à
+    # son accusé, une ré-admission n'est pas un doublon
+    return f"{item['graph']}-g{item['generation']}-admitted"
+
+
+def _ack_body(item: dict) -> str:
+    return (f"**Prise en charge par le rail** — item {item['id']}, "
+            f"graph `{item['graph']}` (génération {item['generation']}).\n\n"
+            f"Le label `{RAIL}<état>` suit la trajectoire ; les questions "
+            f"arrivent ici en commentaire.\n"
+            f"Trajectoire et artefacts : {_web()}/item/{item['id']}")
+
+
 def _acknowledge(conn: Connection, gh: GitHub) -> None:
     """Accusé de prise en charge : entre l'admission et la première question,
     l'issue dit déjà qu'on travaille dessus.
@@ -154,23 +202,9 @@ def _acknowledge(conn: Connection, gh: GitHub) -> None:
     Un acte de parole comme les autres — une fois l'effet appliqué, le geste
     ne coûte plus qu'une lecture en base : jamais deux accusés par occurrence.
     """
-    rows = conn.execute(
-        "SELECT w.*, s.subject_key, s.graph FROM work_item w "
-        "JOIN subject s ON s.id = w.subject_id "
-        "WHERE s.subject_key LIKE %s ORDER BY w.id",
-        (f"gh:{gh.repo}#%",),
-    ).fetchall()
-    for item in rows:
-        number = _issue_number(item["subject_key"])
-        body = (f"**Prise en charge par le rail** — item {item['id']}, "
-                f"graph `{item['graph']}` (génération {item['generation']}).\n\n"
-                f"Le label `{RAIL}<état>` suit la trajectoire ; les questions "
-                f"arrivent ici en commentaire.\n"
-                f"Trajectoire et artefacts : {_web()}/item/{item['id']}")
-        # la clé porte le graph et la génération : chaque occurrence a droit
-        # à son accusé, une ré-admission n'est pas un doublon
-        _speak(conn, gh, number, item["id"],
-               f"{item['graph']}-g{item['generation']}-admitted", body)
+    for item in _gh_items(conn, gh):
+        _speak(conn, gh, _issue_number(item["subject_key"]), item["id"],
+               _ack_key(item), _ack_body(item))
 
 
 def _gh_questions(conn: Connection, gh: GitHub) -> list[dict]:
@@ -237,12 +271,7 @@ def _paint_states(conn: Connection, gh: GitHub) -> None:
     """
     active = {
         _issue_number(r["subject_key"]): f"{RAIL}{r['state']}"
-        for r in conn.execute(
-            "SELECT w.state, s.subject_key FROM work_item w "
-            "JOIN subject s ON s.id = w.subject_id "
-            "WHERE w.terminal_at IS NULL AND s.subject_key LIKE %s ORDER BY w.id",
-            (f"gh:{gh.repo}#%",),
-        ).fetchall()
+        for r in _gh_items(conn, gh, "AND w.terminal_at IS NULL")
     }
     for issue in gh.labeled_issues():
         number = issue["number"]
@@ -258,14 +287,82 @@ def _paint_states(conn: Connection, gh: GitHub) -> None:
             print(f"#{number} ⌫ {stale}", flush=True)
 
 
+def _clear_terminal_labels(conn: Connection, gh: GitHub) -> None:
+    """Le retrait du label d'état au terminal — inconditionnel.
+
+    Le repeint par tick ne voit que les issues ouvertes : une issue fermée
+    par le merge de sa propre PR garderait son `rail:<état>` pour toujours.
+    Ici on vise l'issue par son numéro, ouverte ou fermée, et l'effet retient
+    que c'est fait. Le premier tick réconcilie donc l'existant — tout item
+    déjà terminal dont l'issue porte encore un label du rail — et les ticks
+    suivants ne relisent plus rien.
+    """
+    active = {_issue_number(r["subject_key"])
+              for r in _gh_items(conn, gh, "AND w.terminal_at IS NULL")}
+    for item in _gh_items(conn, gh, "AND w.terminal_at IS NOT NULL"):
+        number = _issue_number(item["subject_key"])
+        if number in active:
+            continue  # une autre génération tourne : le label est à elle
+        key = f"{item['graph']}-g{item['generation']}-unlabeled"
+        target = f"gh:{gh.repo}#{number}"
+        if not _pending(conn, item["id"], target, key, {"unlabel": RAIL}):
+            continue
+        for name in gh.issue_labels(number):
+            if name.startswith(RAIL):
+                gh.remove_label(number, name)
+                print(f"#{number} ⌫ {name}", flush=True)
+        _applied(conn, target, key)
+
+
+def _journal(events: list[dict]) -> str:
+    """La trajectoire au format du journal : une ligne par transition."""
+    return "\n".join(
+        f"v{e['item_version']:>2} {e['at']:%H:%M:%S} {e['kind']:<9} "
+        f"{(e['from_state'] + ' → ') if e['from_state'] else ''}{e['to_state']}"
+        f"{(' [' + e['outcome'] + ']') if e['outcome'] else ''}" for e in events)
+
+
+def _paint_trajectories(conn: Connection, gh: GitHub, drawn: dict[int, int]) -> None:
+    """La trajectoire vivante : l'accusé tient le journal à jour.
+
+    Le label ne dit que le présent ; l'histoire n'arrivait qu'au rapport
+    terminal. À chaque transition, le commentaire d'accusé est réécrit —
+    une édition ne notifie personne, donc zéro spam, et l'issue devient le
+    tableau de bord en direct.
+
+    Comme les labels, c'est une projection : le corps est reconstruit depuis
+    la base, jamais complété à l'aveugle. `drawn` retient la version déjà
+    peinte pour ne rien faire quand rien n'a bougé ; un PATCH raté n'y entre
+    pas et se retente au tick suivant, sans bloquer le rail.
+    """
+    for item in _gh_items(conn, gh):
+        if drawn.get(item["id"]) == item["version"]:
+            continue
+        number = _issue_number(item["subject_key"])
+        marker = f"<!-- graphatom:{_ack_key(item)} -->"
+        events = conn.execute(
+            "SELECT * FROM event WHERE item_id = %s ORDER BY item_version",
+            (item["id"],),
+        ).fetchall()
+        body = (f"{marker}\n{_ack_body(item)}\n\n"
+                f"**Trajectoire** (v{item['version']}, {len(events)} transitions)\n\n"
+                f"```\n{_journal(events)}\n```")
+        try:
+            comment = next(
+                (c for c in gh.comments(number) if marker in c["body"]), None)
+            if comment is None:
+                continue  # l'accusé n'est pas encore posté — au prochain tick
+            if comment["body"] != body:
+                gh.edit_comment(comment["id"], body)
+                print(f"#{number} ✎ trajectoire v{item['version']}", flush=True)
+        except (urllib.error.URLError, OSError) as exc:
+            print(f"#{number} trajectoire non éditée : {exc} — on réessaie", flush=True)
+            continue
+        drawn[item["id"]] = item["version"]
+
+
 def _report_terminals(conn: Connection, gh: GitHub) -> None:
-    rows = conn.execute(
-        "SELECT w.*, s.subject_key, s.graph FROM work_item w "
-        "JOIN subject s ON s.id = w.subject_id "
-        "WHERE w.terminal_at IS NOT NULL AND s.subject_key LIKE %s",
-        (f"gh:{gh.repo}#%",),
-    ).fetchall()
-    for item in rows:
+    for item in _gh_items(conn, gh, "AND w.terminal_at IS NOT NULL"):
         number = _issue_number(item["subject_key"])
         events = conn.execute(
             "SELECT * FROM event WHERE item_id = %s ORDER BY item_version",
@@ -291,6 +388,7 @@ def sync_forever(repo: str, bundle_path: str, poll_s: float = 15.0) -> None:
     allowed = set(filter(None, os.environ.get(
         "GRAPHATOM_ANSWERERS", repo.split("/")[0]).split(",")))
     gh = GitHub(repo, token)
+    drawn: dict[int, int] = {}   # item → version de trajectoire déjà peinte
 
     with db.connect() as conn:
         revision = graph.publish(conn, json.loads(open(bundle_path).read()))
@@ -303,7 +401,9 @@ def sync_forever(repo: str, bundle_path: str, poll_s: float = 15.0) -> None:
                 _publish_questions(conn, gh)
                 _collect_answers(conn, gh, allowed)
                 _paint_states(conn, gh)
+                _paint_trajectories(conn, gh, drawn)
                 _report_terminals(conn, gh)
+                _clear_terminal_labels(conn, gh)
             except (urllib.error.URLError, OSError) as exc:
                 print(f"github injoignable : {exc} — on réessaie", flush=True)
             time.sleep(poll_s)
