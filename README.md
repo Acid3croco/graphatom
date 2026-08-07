@@ -45,6 +45,8 @@ uv run python tests/orphans_test.py                  # un bail expiré tue tout 
                                                      # groupe de l'agent, sans base
 uv run python tests/reconnect_test.py                # couper la base sous le worker :
                                                      # il se reconnecte et reprend
+uv run python tests/links_test.py                    # les liens du frontend vers
+                                                     # l'issue et la PR, sans base
 ```
 
 ## Le canal humain (milestone 2)
@@ -59,6 +61,15 @@ par option, et rien d'autre. Le canal n'écrit jamais l'état d'un item — il
 enregistre la réponse, l'ordonnanceur route au tick suivant. Une page
 disponible n'est pas un oncall notifié : `--notify-cmd` lance une commande
 à chaque question ouverte (au-moins-une-fois — au redémarrage, on renotifie).
+
+La boucle avec GitHub va dans les deux sens : les commentaires du rail
+pointent vers le frontend, et le frontend renvoie vers GitHub. Partout où
+un sujet a la forme `gh:<owner>/<repo>#<num>` — page des questions, `/items`,
+en-tête de `/item/<id>` — il devient un lien vers l'issue ; et quand le cycle
+a produit une PR, `/item/<id>` l'affiche à côté, lue dans le `release.json`
+que le nœud release écrit dans le workspace. Tout se construit depuis la base
+et le workspace : aucun appel à l'API GitHub depuis le web. Un sujet d'une
+autre forme reste du texte brut — le kernel, lui, ne connaît pas GitHub.
 
 Refusé, exprès : auth, comptes, exposition Internet, WebSocket, édition de
 graphs, mutation d'items, dashboard. Voir les WAIT, répondre une fois parmi
