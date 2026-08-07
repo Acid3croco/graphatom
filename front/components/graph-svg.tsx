@@ -29,6 +29,11 @@
  * illisible ou d'une autre forme est ignorée en silence — la visionneuse
  * repart de l'ajustement initial, ce n'est pas une panne.
  *
+ * `item` est ce qui nomme cette entrée, et il est facultatif : une vue qui
+ * n'appartient à aucun item — la vitrine d'un graph publié — n'a pas de nom
+ * de rangement, donc elle ne lit ni n'écrit rien. Tout le reste marche
+ * pareil ; seul le cadrage ne survit pas au rechargement.
+ *
  * Le nœud courant est peint en orange : c'est là qu'est l'item. Un graph
  * sans exécution — la vitrine d'une révision publiée — n'en a pas : son
  * `current` est vide, aucun nœud n'est peint, et c'est `onSelect` qui rend
@@ -104,7 +109,7 @@ export function GraphSvg({
   onSelect,
 }: {
   graph: Graph;
-  item: number;
+  item?: number;
   selected?: string | null;
   onSelect?: (name: string) => void;
 }) {
@@ -124,6 +129,9 @@ export function GraphSvg({
   // au montage, la vue rangée pour cet item revient. La page monte un graph
   // par item, donc `item` ne change jamais sous les pieds du composant.
   useEffect(() => {
+    if (item === undefined) {
+      return; // sans item, il n'y a pas d'entrée à relire
+    }
     const kept = read(item);
     if (kept) {
       setOrient(kept.orient);
@@ -134,6 +142,9 @@ export function GraphSvg({
   // et chaque geste range à son tour — sauf le premier tour, qui vient de lire
   const first = useRef(true);
   useEffect(() => {
+    if (item === undefined) {
+      return; // ni d'entrée où ranger
+    }
     if (first.current) {
       first.current = false;
       return;
