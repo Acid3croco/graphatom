@@ -57,6 +57,7 @@ STALLED_COLOR = "d73a4a"    # le rouge de l'alarme, seule exception à la couleu
 DEPENDS = "Depends-on:"     # la grammaire fermée des dépendances, dans le corps
 CHECKLIST = "validate.md"   # la checklist du nœud validate, dans le workspace de l'item
 CHECKLIST_LINES = 40        # ce qu'on en cite : de quoi tenir sans noyer la question
+TIMEOUT_S = 30.0            # tout appel sortant est borné : au-delà, GitHub est injoignable
 
 
 class GitHub:
@@ -64,6 +65,13 @@ class GitHub:
         self.repo, self.token = repo, token
 
     def _call(self, method: str, path: str, body: dict | None = None):
+        """Le seul appel sortant du module — donc le seul endroit à borner.
+
+        Sans `timeout`, un serveur qui accepte la connexion et ne répond
+        jamais gèle le canal pour toujours : pas d'erreur, pas de tick
+        suivant, rien à voir nulle part. Avec, l'attente a une fin, et cette
+        fin est un `TimeoutError` — l'incident réseau déjà géré par `tick`.
+        """
         req = urllib.request.Request(
             f"{API}{path}", method=method,
             data=json.dumps(body).encode() if body else None,
@@ -71,7 +79,7 @@ class GitHub:
                      "Accept": "application/vnd.github+json",
                      "X-GitHub-Api-Version": "2022-11-28"},
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
             return json.loads(resp.read() or "null")
 
     def labeled_issues(self) -> list[dict]:
@@ -559,6 +567,31 @@ def _report_terminals(conn: Connection, gh: GitHub) -> None:
                f"{item['graph']}-g{item['generation']}-terminal", body)
 
 
+def tick(conn: Connection, gh: GitHub, revision: str, allowed: set[str],
+         drawn: dict[int, int], said: set[tuple[int, str]]) -> None:
+    """Un tour du canal : les gestes dans l'ordre, et l'incident réseau au bout.
+
+    Injoignable, lent ou muet : GitHub casse toujours de la même façon, une
+    `OSError` — et un timeout n'est rien d'autre. Le tour s'arrête là, la
+    ligne le dit, le tick suivant repart. Rien n'est perdu : chaque geste est
+    un effet, commis en base avant d'être fait, donc réconcilié à la reprise.
+    """
+    try:
+        # le battement ne sert qu'à cette projection : le sync ne
+        # décide d'aucun état avec — la base reste l'autorité
+        stalled = heartbeat.stalled(heartbeat.last(conn))
+        blocked = _admit_labeled(conn, gh, revision, said)
+        _acknowledge(conn, gh)
+        _publish_questions(conn, gh)
+        _collect_answers(conn, gh, allowed)
+        _paint_states(conn, gh, blocked, stalled)
+        _paint_trajectories(conn, gh, drawn)
+        _report_terminals(conn, gh)
+        _clear_terminal_labels(conn, gh)
+    except (urllib.error.URLError, OSError) as exc:
+        print(f"github injoignable : {exc} — on réessaie", flush=True)
+
+
 def sync_forever(repo: str, bundle_path: str, poll_s: float = 15.0) -> None:
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
@@ -574,18 +607,5 @@ def sync_forever(repo: str, bundle_path: str, poll_s: float = 15.0) -> None:
         print(f"canal github sur {repo} — révision {revision[:12]}…, "
               f"répondants : {', '.join(sorted(allowed))}", flush=True)
         while True:
-            try:
-                # le battement ne sert qu'à cette projection : le sync ne
-                # décide d'aucun état avec — la base reste l'autorité
-                stalled = heartbeat.stalled(heartbeat.last(conn))
-                blocked = _admit_labeled(conn, gh, revision, said)
-                _acknowledge(conn, gh)
-                _publish_questions(conn, gh)
-                _collect_answers(conn, gh, allowed)
-                _paint_states(conn, gh, blocked, stalled)
-                _paint_trajectories(conn, gh, drawn)
-                _report_terminals(conn, gh)
-                _clear_terminal_labels(conn, gh)
-            except (urllib.error.URLError, OSError) as exc:
-                print(f"github injoignable : {exc} — on réessaie", flush=True)
+            tick(conn, gh, revision, allowed, drawn, said)
             time.sleep(poll_s)
