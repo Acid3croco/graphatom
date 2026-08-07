@@ -80,6 +80,9 @@ uv run python tests/shell_test.py                    # les nœuds shell de code-
 uv run python tests/checklist_test.py                # le nœud validate : le routage
                                                      # du graph, et la checklist citée
                                                      # dans la question de review
+uv run python tests/api_test.py                      # l'API JSON du canal web : les
+                                                     # mêmes vues en données, sans
+                                                     # base ni serveur
 ```
 
 Les tests ne touchent jamais au `data/` du repo : chacun travaille dans un
@@ -131,6 +134,33 @@ l'édite. `/items` porte donc une colonne `issue` (le numéro, vers GitHub) et
 une colonne `titre` (vers `/item/<id>`), l'en-tête de `/item/<id>` l'affiche
 à côté du sujet, et chaque question dit de quel travail elle parle. Un sujet
 d'un autre canal n'a pas de titre : cellule vide, rien de cassé.
+
+### Les mêmes vues en JSON
+
+```sh
+curl -s localhost:8848/api/items | jq '.[0]'
+curl -s localhost:8848/api/item/1 | jq 'keys'
+curl -s localhost:8848/api/questions | jq '.token'
+curl -s -H 'Accept: application/json' \
+     -d "question_id=1&option=retry&token=<jeton>" localhost:8848/answer
+```
+
+Quatre lectures, pour un client qui rend les pages lui-même : `/api/items`
+(la table, avec l'état, le statut et les liens issue et PR), `/api/item/<id>`
+(l'item entier : `item`, `graph`, `journal`, `runs`, `effects`, `questions`,
+`criteria`, `files`), `/api/questions` (les questions ouvertes) et
+`/api/heartbeat` (le battement brut). Une projection, pas un second modèle :
+mêmes requêtes, mêmes durées tirées du journal, mêmes totaux de tokens que
+les pages — seul le rendu change. Le `graph` porte les nœuds, les arêtes et
+le nœud courant : le SVG se redessine sans relire la base. Toujours zéro
+dépendance : `json.dumps` et le `http.server` de la stdlib.
+
+Le jeton anti-rejeu, jusqu'ici enfoui dans le formulaire rendu, se lit dans
+`/api/questions` — c'est ce qui permet de répondre sans charger la page.
+`POST /answer` reste l'unique porte d'écriture et sert les deux clients :
+avec `Accept: application/json` il rend `{"ok": …, "message": "…"}`, sans lui
+la redirection 303 du formulaire, inchangée. Une route `/api/` qui rate rend
+un objet à `error` — jamais une page, jamais une trace.
 
 Refusé, exprès : auth, comptes, exposition Internet, WebSocket, édition de
 graphs, mutation d'items, dashboard. Voir les WAIT, répondre une fois parmi
