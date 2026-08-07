@@ -43,6 +43,8 @@ uv run python tests/crash_test.py                    # le critère du milestone 
 uv run python tests/validate_test.py                 # la validation statique, sans base
 uv run python tests/orphans_test.py                  # un bail expiré tue tout le
                                                      # groupe de l'agent, sans base
+uv run python tests/reconnect_test.py                # couper la base sous le worker :
+                                                     # il se reconnecte et reprend
 ```
 
 ## Le canal humain (milestone 2)
