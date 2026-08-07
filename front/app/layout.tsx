@@ -7,8 +7,12 @@
  *
  * Tout est rendu à la demande : ces pages montrent un rail qui bouge, rien
  * ne se pré-rend au build (où l'API n'existe pas).
+ *
+ * Le petit écran est le cas de base : marges et polices partent serrées et
+ * s'élargissent à `sm:`. Tout le front suit cette convention — la classe
+ * nue vaut pour le téléphone, le point de rupture rend la vue de bureau.
  */
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 
 import "./globals.css";
 import { getHeartbeat } from "@/lib/api";
@@ -22,6 +26,13 @@ export const metadata: Metadata = {
   description: "Le rail : items, trajectoires, questions ouvertes.",
 };
 
+// Next.js pose déjà ce viewport par défaut ; on l'écrit quand même, parce
+// que tout le responsive du front en dépend et qu'un défaut ne se lit pas.
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+};
+
 export default async function RootLayout({
   children,
 }: {
@@ -31,8 +42,8 @@ export default async function RootLayout({
 
   return (
     <html lang="fr">
-      <body className="mx-auto max-w-5xl px-4 py-6">
-        <header className="mb-6 flex flex-col gap-2">
+      <body className="mx-auto max-w-5xl px-3 py-4 sm:px-4 sm:py-6">
+        <header className="mb-4 flex flex-col gap-2 sm:mb-6">
           <Nav />
           <HeartbeatBanner initial={beat} />
         </header>
