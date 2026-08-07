@@ -174,8 +174,9 @@ Le rail branché sur un repo — dogfoodé sur ce repo même :
 GITHUB_TOKEN=$(gh auth token) docker compose up -d --build
 ```
 
-Quatre services : Postgres, l'ordonnanceur, le canal GitHub (polling), le
-canal web (secours, port 8850). Ensuite tout se passe sur GitHub :
+Cinq services : Postgres, l'ordonnanceur, le canal GitHub (polling), le
+canal web (API et secours, port 8850) et le front Next.js (public, port
+8851). Ensuite tout se passe sur GitHub :
 
 1. poser le label `graphatom` sur une issue → admission (une seule fois par
    issue ; différée si le corps déclare une dépendance encore ouverte)
@@ -276,7 +277,7 @@ racine, que compose lit tout seul :
 | `GRAPHATOM_TAKE_ALL=1` | prendre en charge toute issue ouverte, sans attendre le label — pour un repo dont le rail est le seul mainteneur |
 | `GRAPHATOM_ANSWERERS` | les auteurs autorisés à répondre `/answer` |
 | `GRAPHATOM_WEB_URL` | l'URL publique de l'UI, celle des liens « Trajectoire » postés sur GitHub |
-| `GRAPHATOM_PROXY_NET` / `..._EXTERNAL` | le réseau docker du proxy que le service `web` rejoint |
+| `GRAPHATOM_PROXY_NET` / `..._EXTERNAL` | le réseau docker du proxy que le service `front` rejoint |
 
 Pas de secret dedans : `GITHUB_TOKEN` reste fourni par le shell et garde
 son garde-fou (`${GITHUB_TOKEN:?…}`). Les défauts du `docker-compose.yml`
@@ -285,12 +286,60 @@ restent ceux d'un déploiement générique — le compose est générique, le
 
 **Le raccordement au proxy suit la même règle.** L'UI est exposée sur
 `graphatom.veyxzer.com` par le Traefik de l'hôte, avec basicauth au bord
-— l'app reste sans auth, refus assumé. Le routeur Traefik vit dans le
-proxy, hors de ce repo ; seul le raccordement réseau est déclaré ici, dans
-le compose, sur le service `web`. Un `docker network connect` à la main
+— l'app reste sans auth, refus assumé. Le raccordement réseau est déclaré
+dans le compose, jamais par un `docker network connect` à la main : celui-là
 n'aurait pas survécu au premier `up -d` — même panne silencieuse que
 `TAKE_ALL`. Sans les deux variables du `.env`, compose crée son propre
 réseau `graphatom-proxy` : un déploiement sans proxy ne casse pas.
+
+### La bordure : `front` public, `web` interne
+
+Un seul service est à la bordure, et c'est le **front Next.js** :
+
+| service | réseaux | port local | qui le joint |
+| --- | --- | --- | --- |
+| `front` | `default`, `proxy` | `127.0.0.1:8851` | le Traefik de l'hôte, sur `graphatom.veyxzer.com` |
+| `web` | `default` | `127.0.0.1:8850` | `front`, par le réseau interne (`http://web:8848`) |
+
+`web` ne rejoint plus le réseau du proxy : l'API ne sort pas. Elle garde
+tout ce qu'elle avait — les quatre lectures `/api/…`, l'unique porte
+d'écriture `POST /answer`, la route des fichiers de workspace
+(`/item/<id>/file/<nom>`, les screenshots des agents) et ses pages HTML
+complètes. Le front ne fait que la consommer : il relaie `POST /answer` par
+sa route serveur `/api/answer`, et les previews par sa route
+`/item/<id>/file/<nom>`, montée au même chemin que celle de l'API — le
+navigateur ne joint donc que le front, `web` sert derrière. **Et c'est le
+canal de secours** : le jour où le front ne builde pas,
+`http://127.0.0.1:8850/items` répond toujours, depuis la même base.
+
+Le routeur de bordure est déclaré en labels sur `front` dans le
+[`docker-compose.yml`](docker-compose.yml) — `traefik.enable`, la règle
+``Host(`graphatom.veyxzer.com`)``, le port `3000` du conteneur, et
+`traefik.docker.network` sur `${GRAPHATOM_PROXY_NET}`, sans quoi Traefik
+choisirait un réseau au hasard parmi les deux.
+
+**Ces labels ne servent qu'à un Traefik qui lit les labels docker.** Si le
+routeur de l'hôte est configuré par fichier — c'est le cas ici, le Traefik
+de Coolify porte la basicauth dans sa config dynamique —, les labels sont
+inertes et il reste **un pas à la main, une fois** : dans le fichier de
+config dynamique de l'hôte, faire pointer le service du routeur
+`graphatom.veyxzer.com` vers `http://<conteneur front>:3000` au lieu de
+`http://<conteneur web>:8848`. Tant que ce pas n'est pas fait, la bordure
+sert encore les pages du web stdlib : tout répond 200, et rien ne le dit —
+la preuve qui tranche est un `_next` dans le HTML. La basicauth, elle, n'a
+pas à bouger : elle est sur le routeur, pas sur le service.
+
+**Où lire cette preuve.** Pas depuis Internet sans les identifiants : la
+basicauth du routeur rend `401` à toute requête anonyme, sur `/` comme sur
+`/items` ou `/item/<id>` — un `curl` nu ne distingue donc pas un front en
+place d'un stdlib en place. La preuve se lit en local, sur les deux ports
+que publie le compose, et c'est ce que fait `verify_deploy` après chaque
+déploiement :
+
+```sh
+curl -s http://127.0.0.1:8851/items | grep -c _next   # le front rendu
+curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8850/items  # le secours
+```
 
 ## De vrais agents dans les blocs (milestone 3b)
 
@@ -405,10 +454,10 @@ implémentation par agent, **agent de test backend**
 un par un** (`validate`), puis review humaine —
 question fermée sur l'issue GitHub. La boucle se ferme ensuite toute
 seule : **release** (commit, push, PR, merge surveillé jusqu'au SHA),
-**deploy** (`docker compose up -d --build github-sync web`) et
-**verify_deploy** (conteneurs en marche, `/items` en 200, logs du sync
-propres) — ces deux derniers sans aucun modèle, comme la préparation du
-worktree : du shell.
+**deploy** (`docker compose up -d --build github-sync web front`) et
+**verify_deploy** (conteneurs en marche, `/items` rendu par le front, le
+secours en 200, logs du sync propres) — ces deux derniers sans aucun
+modèle, comme la préparation du worktree : du shell.
 
 **Une porte de jugement avant la construction.** Toute issue partait droit
 en implémentation, quelle que soit sa taille : une issue trop grande
@@ -556,9 +605,9 @@ commencent donc par quelques lignes de shell — pas du jugement d'agent —
 qui lisent le diff de l'item (`git diff --name-only origin/main` plus les
 fichiers neufs non encore suivis) et décident :
 
-- le diff ne touche aucun fichier front (`src/graphatom/web.py`, liste en
-  tête du `cmd`) → `outcome` `pass`, « aucun fichier front touché — test
-  non concerné », sans lancer l'agent ;
+- le diff ne touche aucun fichier front (`src/graphatom/web.py` et `front/`,
+  liste en tête du `cmd`) → `outcome` `pass`, « diff sans src/graphatom/web.py
+  ni front/ — test frontend non concerné », sans lancer l'agent ;
 - en miroir côté backend : ni `src/`, ni `tests/`, ni `schema.sql` → même
   court-circuit ;
 - le diff **vide** n'est pas un skip, c'est un symptôme — implémentation
