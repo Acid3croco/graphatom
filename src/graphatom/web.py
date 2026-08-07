@@ -51,6 +51,9 @@ th { color: #666; font-weight: 600; }
 .badge.faulted, .badge.stale, .badge.superseded, .badge.rejected { background: #fde2e2; }
 .badge.uncertain { background: #fff3cd; }
 svg { max-width: 100%; height: auto; }
+pre { white-space: pre-wrap; word-break: break-word; font-size: .8rem;
+      background: #f6f6f6; border-radius: 6px; padding: .4rem .6rem;
+      margin: .4rem 0 0; max-height: 16rem; overflow: auto; }
 """
 
 REFRESH = "<meta http-equiv='refresh' content='5'>"
@@ -212,6 +215,25 @@ def _table(headers: list[str], rows: list[str]) -> str:
     return f"<table><tr>{head}</tr>{''.join(rows)}</table>"
 
 
+# jsonb ne garde pas l'ordre des clés : le post-mortem d'abord, la trace après
+RESULT_ORDER = ["outcome", "exit_code", "timeout", "error"]
+
+
+def _result(result: dict | None) -> str:
+    """Le résultat d'un run : les champs en ligne, la queue de log en bloc.
+
+    L'autopsie d'une tentative crashée (`exit_code`, `timeout`, `log_tail`)
+    se lit ici — sans elle, il fallait fouiller le workspace à la main.
+    """
+    if not result:
+        return ""
+    keys = [k for k in RESULT_ORDER if k in result]
+    keys += sorted(k for k in result if k not in RESULT_ORDER and k != "log_tail")
+    fields = " · ".join(f"{_e(k)} <b>{_e(result[k])}</b>" for k in keys)
+    tail = result.get("log_tail")
+    return fields + (f"<pre>{_e(tail)}</pre>" if tail else "")
+
+
 def _item_page(conn, item_id: int) -> str | None:
     item = conn.execute(
         "SELECT w.*, s.subject_key, s.graph, s.lineage_budget FROM work_item w "
@@ -248,11 +270,12 @@ def _item_page(conn, item_id: int) -> str | None:
     ).fetchall()
     if runs:
         body.append("<h2>runs</h2>" + _table(
-            ["run", "nœud", "tentative", "statut", "issue", "fence", "bail"],
+            ["run", "nœud", "tentative", "statut", "issue", "fence", "bail", "résultat"],
             [f"<tr><td>{r['id']}</td><td>{_e(r['node'])}</td><td>{r['attempt']}</td>"
              f"<td><span class='badge {_e(r['status'])}'>{_e(r['status'])}</span></td>"
              f"<td>{_e(r['outcome'] or '')}</td><td>{r['fence']}</td>"
-             f"<td>{r['lease_expires_at']:%H:%M:%S}</td></tr>" for r in runs]))
+             f"<td>{r['lease_expires_at']:%H:%M:%S}</td>"
+             f"<td>{_result(r['result'])}</td></tr>" for r in runs]))
 
     effects = conn.execute(
         "SELECT * FROM effect WHERE item_id = %s ORDER BY op_id", (item_id,)
