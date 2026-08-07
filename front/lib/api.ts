@@ -1,5 +1,6 @@
 /**
- * Le client de l'API JSON du rail : les quatre lectures, et rien d'autre.
+ * Le client de l'API du rail : les quatre lectures JSON, plus les fichiers
+ * du workspace que l'API sert en texte, et rien d'autre.
  *
  * Une projection, pas un second modèle — les types ci-dessous décrivent ce
  * que `src/graphatom/web.py` rend, tel quel. Aucune écriture ici : répondre
@@ -140,6 +141,18 @@ async function get<T>(path: string): Promise<T> {
     throw new Error(`${path} : l'API a répondu ${res.status}`);
   }
   return res.json() as Promise<T>;
+}
+
+/**
+ * Le contenu d'un fichier du workspace, en texte.
+ *
+ * Le `href` vient de la liste `files` de l'item — on ne le fabrique pas.
+ * Un fichier que l'API refuse de servir rend `null` : la page se passe de
+ * ce qu'elle voulait y lire plutôt que de disparaître pour autant.
+ */
+export async function getFileText(href: string): Promise<string | null> {
+  const res = await fetch(`${API_URL}${href}`, { cache: "no-store" });
+  return res.ok ? res.text() : null;
 }
 
 export const getItems = () => get<Item[]>("/api/items");
