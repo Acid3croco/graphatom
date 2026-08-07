@@ -42,7 +42,9 @@ uv run python tests/crash_test.py                    # le critère du milestone 
                                                      # SIGKILL en plein vol = cas nominal
 uv run python tests/validate_test.py                 # la validation statique, sans base
 uv run python tests/orphans_test.py                  # un bail expiré tue tout le
-                                                     # groupe de l'agent, sans base
+                                                     # groupe de l'agent, et le
+                                                     # faucheur tue l'orphelin d'un
+                                                     # worker mort, sans base
 uv run python tests/reconnect_test.py                # couper la base sous le worker :
                                                      # il se reconnecte et reprend
 uv run python tests/links_test.py                    # les liens du frontend vers
@@ -167,6 +169,21 @@ codex, pi…) fait l'affaire ; le kernel n'en connaît aucun. Pas
 d'`outcome.json` valide → `crashed`, retenté puis escaladé — comme
 n'importe quel bloc. L'agent ne voit jamais la base du rail :
 `GRAPHATOM_AGENT_DSN` lui substitue une base jetable.
+
+**La révocation a deux moitiés** : l'autorité en base, et le processus.
+L'agent tourne dans sa propre session — au timeout, le bloc révoque tout
+le groupe (SIGTERM, grâce, SIGKILL), pas seulement le shell : un
+descendant ne survit pas au bail. Mais si c'est le *worker* qui meurt,
+il n'y a plus de handle pour tuer quoi que ce soit ; le faucheur du
+suivant bumpe bien le fence, et l'orphelin travaille quand même. Alors le
+bloc persiste son pgid dans `data/item-N/agent.pgid` au lancement, et
+l'efface à la fin normale — succès comme crash collecté. Le faucheur, en
+fauchant un run, y trouve de quoi appliquer la même séquence sans handle.
+Trois garde-fous, parce que tuer un innocent est pire qu'un orphelin : la
+trace doit appartenir au run fauché, le chef du groupe doit toujours être
+celui qu'on a lancé — un pid se recycle, pas son couple (boot, date de
+naissance) — et le faucheur ne se fauche jamais lui-même. C'est du POSIX
+pur (`os.killpg`), le kernel ne connaît toujours aucun agent.
 
 Une tentative crashée rend son **autopsie** dans le résultat du run —
 `exit_code` (négatif = le signal qui l'a tué), `log_tail` (les 20 dernières

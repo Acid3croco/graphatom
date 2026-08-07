@@ -20,6 +20,7 @@ import json
 
 import psycopg
 
+from .blocks import revoke_orphan
 from .graph import KERNEL_OUTCOMES, load_bundle
 
 LEASE_SECONDS = 30
@@ -231,7 +232,12 @@ def _route(conn, item, bundle, run, outcome: str, kind: str) -> None:
 
 
 def reap(conn: psycopg.Connection) -> int:
-    """Runs au bail expiré : révoque (fence++), classe crashed, route."""
+    """Runs au bail expiré : révoque (fence++ et pgid), classe crashed, route.
+
+    La révocation a deux moitiés : l'autorité en base, et le processus. Un
+    agent lancé par un worker mort ne peut plus rien appliquer, mais il
+    travaille encore — le pgid laissé dans le workspace le tue.
+    """
     expired = conn.execute(
         "SELECT id FROM node_run WHERE status = 'running' AND lease_expires_at < %s",
         (now(),),
@@ -255,4 +261,6 @@ def reap(conn: psycopg.Connection) -> int:
             )
             bundle = load_bundle(conn, item["revision"])
             _route(conn, item, bundle, run, "crashed", kind="reaped")
+        # hors transaction : la grâce du SIGTERM ne tient pas les verrous
+        revoke_orphan(item["id"], run["id"])
     return len(expired)

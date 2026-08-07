@@ -1,6 +1,7 @@
-"""Le test des orphelins : le bail révoque aussi les descendants de l'agent.
+"""Le test des orphelins : ni le bail ni la mort du worker ne laissent d'agent.
 
-Scénario, sans base ni ordonnanceur — seul le bloc agent est en jeu :
+Scénario, sans base ni ordonnanceur — seuls le bloc agent et la révocation
+par le faucheur sont en jeu :
 
   1. un agent factice qui laisse un sous-processus derrière lui est fauché
      au timeout, et la tentative est classée crashed avec son autopsie
@@ -9,13 +10,20 @@ Scénario, sans base ni ordonnanceur — seul le bloc agent est en jeu :
   4. un agent qui répond normalement passe toujours
   5. un agent qui sort en erreur sans `outcome.json` rend son autopsie :
      code de sortie, queue de log, et pas de flag timeout
+  6. worker tué en plein vol : l'agent survit, et sa trace `agent.pgid` aussi
+  7. `revoke_orphan` — ce que fait le faucheur — tue le groupe et efface la trace
+  8. garde-fou : une trace d'une autre tentative n'est ni suivie ni effacée
+  9. garde-fou : une identité qui ne colle plus (naissance ou boot) ne tue personne
+ 10. une trace illisible ou amputée ne fait pas tomber le faucheur
 
 Usage : uv run python tests/orphans_test.py
 """
 
+import json
 import os
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -30,6 +38,8 @@ FACTICE = "ps -o pgid= -p $$ > pgid.txt; sleep 300 & sleep 300"
 REPOND = """printf '{"outcome": "ok", "summary": "fait"}' > outcome.json"""
 ECHOUE = "echo 'Execution error' >&2; exit 42"  # sort mal, sans outcome.json
 TIMEOUT_S = 2
+ITEM_ID = 7  # l'item du contexte de test : son workspace porte la trace
+RUN_ID = 1  # le run du contexte de test : la trace lui appartient
 
 
 class FakeConn:
@@ -42,15 +52,16 @@ class FakeConn:
         return {"subject_key": "orphelins:test"}
 
 
-def context(workdir: Path, cmd: str, attempt: int) -> blocks.Context:
+def context(workdir: Path, cmd: str, attempt: int,
+            timeout_s: float = TIMEOUT_S) -> blocks.Context:
     blocks.DATA_DIR = workdir
     node = {"block": "ACT", "edges": {"ok": "done"},
             "config": {"agent": {"cmd": cmd, "prompt": "ne fais rien",
-                                 "timeout_s": TIMEOUT_S}}}
+                                 "timeout_s": timeout_s}}}
     return blocks.Context(
         FakeConn(),
-        {"id": 1, "node": "travail", "attempt": attempt},
-        {"id": 7, "subject_id": 1},
+        {"id": RUN_ID, "node": "travail", "attempt": attempt},
+        {"id": ITEM_ID, "subject_id": 1},
         node,
         {"name": "orphelins"},
     )
@@ -67,6 +78,29 @@ def group_alive(pgid: int) -> list[int]:
         if int(fields[2]) == pgid and fields[0] != "Z":
             alive.append(int(stat.parent.name))
     return alive
+
+
+def wait_dead(pgid: int, seconds: float = 2.0) -> list[int]:
+    """Les survivants du groupe, une fois laissé à init le temps de récolter."""
+    deadline = time.time() + seconds
+    while time.time() < deadline and group_alive(pgid):
+        time.sleep(0.1)
+    return group_alive(pgid)
+
+
+def worker(workdir: Path) -> None:
+    """Le bloc agent dans un processus jetable — le test tue ce worker-là."""
+    blocks.act(context(workdir, FACTICE, attempt=4, timeout_s=300))
+
+
+def foreign(pgid: int) -> bool:
+    """Le groupe est-il bien étranger au test ? Rien ne se révoque sans ça.
+
+    Le test tourne lui-même dans un groupe de processus, parfois celui d'un
+    agent. Un cobaye qui partagerait ce groupe ferait d'une révocation
+    réussie un suicide silencieux : plus de sortie, plus de verdict.
+    """
+    return pgid != os.getpgid(0)
 
 
 def main() -> None:
@@ -86,10 +120,8 @@ def main() -> None:
 
     # 2. le groupe entier est révoqué, descendants compris
     pgid = int((ctx.workspace / "pgid.txt").read_text())
-    deadline = time.time() + 2  # laisser init récolter les tués
-    while time.time() < deadline and group_alive(pgid):
-        time.sleep(0.1)
-    survivants = group_alive(pgid)
+    assert foreign(pgid), "l'agent doit avoir sa propre session, pas celle du test"
+    survivants = wait_dead(pgid)
     if survivants:
         for pid in survivants:
             os.kill(pid, 9)
@@ -104,6 +136,8 @@ def main() -> None:
     # 4. non-régression : un agent qui répond passe toujours
     result = blocks.act(context(workdir, REPOND, attempt=2))
     assert result == {"outcome": "ok", "summary": "fait"}, result
+    trace_path = ctx.workspace / blocks.PGID_FILE
+    assert not trace_path.exists(), "une exécution collectée n'a plus de trace"
     print(f"4. agent nominal appliqué : {result} ✓")
 
     # 5. l'agent qui sort en erreur rend son autopsie, sans flag timeout
@@ -115,9 +149,69 @@ def main() -> None:
     print(f"5. autopsie du crash : sortie {result['exit_code']}, "
           f"queue « {result['log_tail'].strip()} » ✓")
 
+    # 6. le worker meurt en plein vol : l'agent et sa trace lui survivent
+    # session dédiée pour le cobaye : ni lui ni son agent ne partagent le
+    # groupe du test, que la révocation de l'étape 7 balaiera
+    proc = subprocess.Popen([sys.executable, __file__, "--worker", str(workdir)],
+                            stdout=subprocess.DEVNULL, start_new_session=True)
+    deadline = time.time() + 10
+    while time.time() < deadline and not trace_path.exists():
+        time.sleep(0.1)
+    proc.kill()  # SIGKILL du seul worker : l'agent, lui, a sa propre session
+    proc.wait()
+    if not trace_path.exists():
+        sys.exit("ÉCHEC : le bloc n'a pas persisté agent.pgid")
+    trace = json.loads(trace_path.read_text())
+    if not foreign(trace["pgid"]):
+        sys.exit("ÉCHEC : l'orphelin est dans le groupe du test — révocation refusée")
+    if not group_alive(trace["pgid"]):
+        sys.exit("ÉCHEC : l'agent n'a pas survécu à son worker — rien à révoquer")
+    print(f"6. worker tué, agent orphelin toujours vivant : groupe {trace['pgid']} ✓")
+
+    # 7. le faucheur révoque l'orphelin à partir de la seule trace
+    tue = blocks.revoke_orphan(ITEM_ID, RUN_ID)
+    assert tue == trace["pgid"], tue
+    survivants = wait_dead(trace["pgid"])
+    if survivants:
+        for pid in survivants:
+            os.kill(pid, 9)
+        sys.exit(f"ÉCHEC : l'orphelin a survécu au faucheur : {survivants}")
+    assert not trace_path.exists(), "la trace consommée doit disparaître"
+    print("7. orphelin révoqué par le faucheur, trace effacée ✓")
+
+    # 8. garde-fou : la trace d'une autre tentative ne regarde pas ce run
+    innocent = subprocess.Popen(["sleep", "300"], start_new_session=True)
+    identite = blocks._identity(innocent.pid)
+    vivant = {"run": RUN_ID + 1, "pgid": innocent.pid, "cmd": "sleep 300",
+              "identity": identite}
+    trace_path.write_text(json.dumps(vivant))
+    assert blocks.revoke_orphan(ITEM_ID, RUN_ID) is None
+    assert innocent.poll() is None, "l'agent d'une autre tentative doit vivre"
+    assert trace_path.exists(), "sa trace doit rester armée pour son propre run"
+    print("8. trace d'une autre tentative : ni suivie ni effacée ✓")
+
+    # 9. garde-fou : une identité qui ne colle plus ne tue personne
+    for faux in (identite | {"starttime": -1}, identite | {"boot": "un-autre-boot"}):
+        trace_path.write_text(json.dumps(vivant | {"run": RUN_ID, "identity": faux}))
+        assert blocks.revoke_orphan(ITEM_ID, RUN_ID) is None
+        assert innocent.poll() is None, "un pid recyclé ne doit jamais être tué"
+        assert not trace_path.exists(), "la trace périmée, elle, doit disparaître"
+    innocent.kill()
+    innocent.wait()
+    print("9. identité périmée (naissance, boot) : le faucheur ne tue personne ✓")
+
+    # 10. une trace abîmée ne fait pas tomber le tick du faucheur
+    for abime in ("{ceci n'est pas du json", json.dumps({"run": RUN_ID})):
+        trace_path.write_text(abime)
+        assert blocks.revoke_orphan(ITEM_ID, RUN_ID) is None
+    print("10. trace illisible ou amputée : le faucheur passe son chemin ✓")
+
     shutil.rmtree(workdir, ignore_errors=True)
-    print("\norphelins : OK — un descendant ne survit pas au bail de l'agent")
+    print("\norphelins : OK — ni le bail ni la mort du worker ne laissent d'agent")
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:2] == ["--worker"]:
+        worker(Path(sys.argv[2]))
+    else:
+        main()
