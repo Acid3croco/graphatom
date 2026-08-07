@@ -10,10 +10,16 @@
  */
 import { API_URL } from "@/lib/config";
 
-export type Heartbeat = {
+export type Beat = {
   at: string | null;
   ago_s: number;
   stale: boolean;
+};
+
+/** Un battement par producteur, sous son identité en base. */
+export type Heartbeat = {
+  rail: Beat;
+  "github-sync": Beat;
 };
 
 export type Item = {

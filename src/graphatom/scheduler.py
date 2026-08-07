@@ -32,7 +32,7 @@ RECONNECT_MAX_S = 30.0  # plafond du backoff : une base absente n'est jamais aba
 
 
 def tick(conn: psycopg.Connection) -> int:
-    heartbeat.beat(conn)
+    heartbeat.beat(conn, heartbeat.RAIL)
     did = kernel.reap(conn)
     did += _settle_waits(conn)
     did += _dispatch(conn)

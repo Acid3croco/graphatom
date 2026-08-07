@@ -577,9 +577,9 @@ def tick(conn: Connection, gh: GitHub, revision: str, allowed: set[str],
     un effet, commis en base avant d'être fait, donc réconcilié à la reprise.
     """
     try:
-        # le battement ne sert qu'à cette projection : le sync ne
+        # le battement du worker ne sert qu'à cette projection : le sync ne
         # décide d'aucun état avec — la base reste l'autorité
-        stalled = heartbeat.stalled(heartbeat.last(conn))
+        stalled = heartbeat.stalled(heartbeat.last(conn, heartbeat.RAIL))
         blocked = _admit_labeled(conn, gh, revision, said)
         _acknowledge(conn, gh)
         _publish_questions(conn, gh)
@@ -607,5 +607,8 @@ def sync_forever(repo: str, bundle_path: str, poll_s: float = 15.0) -> None:
         print(f"canal github sur {repo} — révision {revision[:12]}…, "
               f"répondants : {', '.join(sorted(allowed))}", flush=True)
         while True:
+            # hors du tick, donc hors de sa rattrape d'incident réseau : ce
+            # battement dit que la boucle tourne, pas que GitHub répond
+            heartbeat.beat(conn, heartbeat.GITHUB_SYNC)
             tick(conn, gh, revision, allowed, drawn, said)
             time.sleep(poll_s)

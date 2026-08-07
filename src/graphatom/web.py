@@ -13,7 +13,7 @@ Les mêmes vues se lisent en JSON, pour un client qui rend la page lui-même :
     /api/item/<id>   l'item entier : graph, journal, runs, questions,
                      critères, fichiers du workspace
     /api/questions   les questions ouvertes, et le jeton de `POST /answer`
-    /api/heartbeat   le battement du worker, brut
+    /api/heartbeat   les deux battements bruts : le worker, et le canal GitHub
 
 Une projection, pas un second modèle : mêmes requêtes, mêmes durées, mêmes
 totaux de tokens que les pages — seul le rendu change. Rien ne s'y écrit :
@@ -775,9 +775,19 @@ def _api_questions(conn, token: str) -> dict:
             "questions": [_api_question(q) for q in channel.open_questions(conn)]}
 
 
-def _api_heartbeat(beat: dt.datetime | None) -> dict:
-    """Le battement brut, pour un client qui pose l'en-tête lui-même."""
-    return {"at": beat, "ago_s": heartbeat.age_s(beat), "stale": heartbeat.stalled(beat)}
+def _api_beat(at: dt.datetime | None) -> dict:
+    """Un battement brut : son horodatage, son âge, et s'il est périmé."""
+    return {"at": at, "ago_s": heartbeat.age_s(at), "stale": heartbeat.stalled(at)}
+
+
+def _api_heartbeat(rail: dt.datetime | None, sync: dt.datetime | None) -> dict:
+    """Les deux battements, pour un client qui pose l'en-tête lui-même.
+
+    Un objet par batteur, sous son identité en base : le worker et le canal
+    GitHub sont deux processus séparés, chacun peut mourir seul, et un
+    client qui n'en lit qu'un ne verrait pas l'autre se taire.
+    """
+    return {heartbeat.RAIL: _api_beat(rail), heartbeat.GITHUB_SYNC: _api_beat(sync)}
 
 
 # --------------------------------------------------------------------- notify
@@ -849,7 +859,9 @@ def serve(port: int = 8848, by: str = "web", notify_cmd: str | None = None,
                     if path == "/api/questions":
                         return self._json(200, _api_questions(conn, token))
                     if path == "/api/heartbeat":
-                        return self._json(200, _api_heartbeat(heartbeat.last(conn)))
+                        return self._json(200, _api_heartbeat(
+                            heartbeat.last(conn, heartbeat.RAIL),
+                            heartbeat.last(conn, heartbeat.GITHUB_SYNC)))
                     if path.startswith("/api/item/") and path[10:].isdigit():
                         payload = _api_item(conn, int(path[10:]))
                         if payload is None:
@@ -875,7 +887,8 @@ def serve(port: int = 8848, by: str = "web", notify_cmd: str | None = None,
                 return self._api(path)
             try:
                 with db.connect() as conn:
-                    beat = heartbeat.last(conn)  # une ligne : l'en-tête de toute page
+                    # une ligne : l'en-tête de toute page, le battement du worker
+                    beat = heartbeat.last(conn, heartbeat.RAIL)
                     if path == "/":
                         flash = parse_qs(query).get("m", [None])[0]
                         page = _questions_page(channel.open_questions(conn), by, token,

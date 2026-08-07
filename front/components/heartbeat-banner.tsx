@@ -1,11 +1,13 @@
 "use client";
 
 /**
- * Le battement du worker, en tête de chaque page.
+ * Les deux battements du rail, en tête de chaque page.
  *
- * Un rail vivant tamponne à chaque tick ; sans battement depuis deux
- * minutes, plus rien ne tourne et tout ce que la page montre est figé. Ça
- * se dit en grand : l'absence de signal est le signal.
+ * Le worker tamponne à chaque tick, le canal GitHub à chaque tour de sa
+ * boucle ; sans battement depuis deux minutes, le processus concerné ne
+ * tourne plus et ce que la page montre est figé. Ça se dit en grand :
+ * l'absence de signal est le signal. Les deux processus sont séparés,
+ * chacun peut mourir seul — l'alarme sonne donc dès qu'un seul se tait.
  *
  * Le rafraîchissement du front tient entièrement ici : un sondage SWR
  * toutes les 5 s sur la route `/api/heartbeat` du front, et un
@@ -19,25 +21,44 @@ import useSWR from "swr";
 import { useRouter } from "next/navigation";
 import { Activity, TriangleAlert } from "lucide-react";
 
-import type { Heartbeat } from "@/lib/api";
+import type { Beat, Heartbeat } from "@/lib/api";
 import { ago, moment } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const POLL_MS = 5000;
 
-const fetcher = (url: string) => fetch(url).then((res) => res.json());
+// une API muette rend un 502 à corps d'erreur, qui n'a aucun battement :
+// c'est une erreur pour SWR, pas un objet à lire — sinon le bandeau tombe
+const fetcher = async (url: string) => {
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`heartbeat : ${res.status}`);
+  }
+  return res.json();
+};
+
+/** Un battement en toutes lettres : son âge, ou l'heure où il s'est tu. */
+function one(name: string, beat: Beat): string {
+  if (!beat.stale) {
+    return `${name} vivant il y a ${ago(beat.ago_s)}`;
+  }
+  if (beat.at) {
+    return `${name} à l'arrêt depuis ${moment(beat.at)}`;
+  }
+  return `${name} à l'arrêt — jamais tamponné`;
+}
+
+/** L'alarme sonne dès qu'un seul des deux battements est périmé. */
+function alarm(beat: Heartbeat | null): boolean {
+  return !beat || beat.rail.stale || beat["github-sync"].stale;
+}
 
 function text(beat: Heartbeat | null): string {
   if (!beat) {
     return "rail injoignable — l'API ne répond pas, les états affichés sont figés.";
   }
-  if (!beat.stale) {
-    return `rail vivant il y a ${ago(beat.ago_s)}`;
-  }
-  if (beat.at) {
-    return `rail à l'arrêt depuis ${moment(beat.at)} — les états affichés sont figés.`;
-  }
-  return "rail à l'arrêt — aucun battement en base : le worker n'a jamais tamponné.";
+  const both = `${one("rail", beat.rail)} · ${one("canal GitHub", beat["github-sync"])}`;
+  return alarm(beat) ? `${both} — les états affichés sont figés.` : both;
 }
 
 export function HeartbeatBanner({ initial }: { initial: Heartbeat | null }) {
@@ -49,7 +70,7 @@ export function HeartbeatBanner({ initial }: { initial: Heartbeat | null }) {
     onSuccess: () => router.refresh(),
   });
   const beat = data ?? null;
-  const alert = !beat || beat.stale;
+  const alert = alarm(beat);
 
   return (
     <p
