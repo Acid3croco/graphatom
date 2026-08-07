@@ -40,6 +40,22 @@ const TOKEN_LABELS: Record<string, string> = {
   total_cost_usd: "$",
 };
 
+/** Un nombre de tokens en français — vide quand il n'y en a pas. */
+export function count(value: number | null | undefined): string {
+  if (typeof value !== "number") {
+    return "";
+  }
+  return value.toLocaleString("fr-FR").replace(/ | /g, " ");
+}
+
+/** Un coût en dollars, à quatre décimales — vide quand il n'y en a pas. */
+export function cost(value: number | null | undefined): string {
+  if (typeof value !== "number") {
+    return "";
+  }
+  return value.toFixed(4);
+}
+
 /** Un usage en une ligne : les types tels qu'ils viennent, rien d'inventé. */
 export function tokens(usage: Usage | null | undefined): string {
   if (!usage) {
@@ -48,10 +64,8 @@ export function tokens(usage: Usage | null | undefined): string {
   return Object.entries(usage)
     .filter(([, value]) => typeof value === "number")
     .map(([key, value]) => {
-      const count = Number.isInteger(value)
-        ? value.toLocaleString("fr-FR").replace(/ | /g, " ")
-        : value.toFixed(4);
-      return `${count} ${TOKEN_LABELS[key] ?? key}`;
+      const written = Number.isInteger(value) ? count(value) : cost(value);
+      return `${written} ${TOKEN_LABELS[key] ?? key}`;
     })
     .join(" · ");
 }
