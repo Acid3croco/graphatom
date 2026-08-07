@@ -6,7 +6,8 @@ Scénario, sans base ni réseau — GitHub et le kernel sont des doublures :
   2. une déclaration invalide — illisible, soi-même, issue inexistante —
      est ignorée, mais dite une fois
   3. une dépendance ouverte diffère l'admission — aucun item, un commentaire
-     à clé logique, le label `rail:blocked`
+     à clé logique, le label `rail:blocked` ; le titre de l'issue part avec
+     l'admission, et se range sur le sujet à chaque tick
   4. le tick suivant ne redit rien ; la dépendance fermée, l'admission part
      par le chemin normal et le label s'en va
 
@@ -33,14 +34,19 @@ class FakeCursor:
 
 
 class FakeConn:
-    """La base : seulement ce que le canal lui demande — l'issue est-elle connue."""
+    """La base : seulement ce que le canal lui demande — l'issue est-elle
+    connue, et le titre du sujet qu'on lui range."""
 
     def __init__(self):
         self.known: set[str] = set()
+        self.updated: list[tuple] = []
 
     def execute(self, sql: str, params: tuple = ()):
         if "FROM subject s JOIN work_item" in sql:
             return FakeCursor([{"?column?": 1}] if params[1] in self.known else [])
+        if "UPDATE subject SET title" in sql:
+            self.updated.append((params[1], params[2], params[0]))
+            return FakeCursor([])
         return FakeCursor([])   # _gh_items : aucun item actif
 
 
@@ -86,9 +92,12 @@ class FakeGraph:
 class FakeKernel:
     def __init__(self):
         self.admitted: list[str] = []
+        self.titles: list[str | None] = []
 
-    def admit(self, conn, revision: str, subject_key: str) -> int:
+    def admit(self, conn, revision: str, subject_key: str,
+              title: str | None = None) -> int:
         self.admitted.append(subject_key)
+        self.titles.append(title)
         return len(self.admitted)
 
 
@@ -131,8 +140,10 @@ def main() -> None:
     # les doublures prennent la place du kernel et du graph dans le canal
     gs.graph, gs.kernel = FakeGraph(), FakeKernel()
     kernel = gs.kernel
-    issues = [{"number": 41, "body": "Depends-on: #29", "labels": []},
-              {"number": 42, "body": "aucune dépendance", "labels": []}]
+    issues = [{"number": 41, "body": "Depends-on: #29", "labels": [],
+               "title": "Le titre de #41"},
+              {"number": 42, "body": "aucune dépendance", "labels": [],
+               "title": "Le titre de #42"}]
     gh = FakeGitHub(issues, {29: "open"})
     conn, said = FakeConn(), set()
 
@@ -140,6 +151,11 @@ def main() -> None:
     blocked = gs._admit_labeled(conn, gh, "rev", said)
     assert blocked == {41} and kernel.admitted == ["gh:o/r#42"], (blocked, kernel.admitted)
     assert "en attente de #29" in gh.posted[0][1], gh.posted
+    # le titre part avec l'admission : le canal l'a sous la main, le web
+    # ne rappellera jamais GitHub pour l'obtenir
+    assert kernel.titles == ["Le titre de #42"], kernel.titles
+    assert conn.updated == [("code-task", "gh:o/r#41", "Le titre de #41"),
+                            ("code-task", "gh:o/r#42", "Le titre de #42")], conn.updated
     gs._paint_states(conn, gh, blocked, stalled=False)
     assert gh.labels == [("+", 41, gs.BLOCKED)], gh.labels
     print("3. dépendance ouverte : pas d'item, `rail:blocked`, un commentaire ✓")

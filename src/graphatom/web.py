@@ -3,7 +3,7 @@
 Un http.server stdlib, zéro dépendance. Trois pages :
 
     /            les questions ouvertes — la seule surface d'écriture
-    /items       tous les items : sujet, état, version, escalades
+    /items       tous les items : issue, titre, graph, état, version…
     /item/<id>   la trajectoire : graph SVG avec l'état courant marqué,
                  journal v1..vN, runs, effets, questions
 
@@ -28,6 +28,10 @@ Un sujet de la forme `gh:<owner>/<repo>#<num>` devient partout un lien vers
 l'issue, et la page d'un item porte le lien de sa PR quand le nœud release
 en a laissé une dans `release.json` — la boucle se ferme dans les deux sens,
 sans jamais appeler GitHub depuis ici.
+
+Le titre de l'issue s'affiche partout où l'item se montre : le canal l'a
+rangé sur le sujet à l'admission, et cette page ne fait que le lire en
+base. Un sujet d'un autre canal n'en a pas : la cellule reste vide.
 
 Tout le reste est en lecture seule : cette interface montre le rail,
 elle ne le pilote pas. Pas d'auth, pas d'exposition Internet, pas de
@@ -163,18 +167,39 @@ def _e(v) -> str:
 GH_SUBJECT = re.compile(r"gh:([\w.-]+/[\w.-]+)#(\d+)")
 
 
-def _subject(subject_key: str) -> str:
-    """Le sujet en HTML : un lien vers l'issue quand il en est une, sinon du texte.
+def _issue_href(subject_key: str) -> str | None:
+    """L'URL de l'issue quand le sujet en est une, sinon None.
 
     Le frontend ne connaît GitHub que comme un format de sujet parmi
-    d'autres : tout ce qui ne matche pas `gh:<owner>/<repo>#<num>` reste
-    du texte brut, et le noyau reste agnostique.
+    d'autres : tout ce qui ne matche pas `gh:<owner>/<repo>#<num>` n'a ni
+    lien ni numéro, et le noyau reste agnostique.
     """
     m = GH_SUBJECT.fullmatch(subject_key)
+    return f"https://github.com/{_e(m[1])}/issues/{_e(m[2])}" if m else None
+
+
+def _subject(subject_key: str) -> str:
+    """Le sujet en HTML : un lien vers l'issue quand il en est une, sinon du texte."""
+    href = _issue_href(subject_key)
+    return f"<a href='{href}'>{_e(subject_key)}</a>" if href else _e(subject_key)
+
+
+def _issue(subject_key: str) -> str:
+    """Le numéro d'issue seul, en lien — cellule vide pour un autre canal."""
+    m = GH_SUBJECT.fullmatch(subject_key)
     if not m:
-        return _e(subject_key)
-    return (f"<a href='https://github.com/{_e(m[1])}/issues/{_e(m[2])}'>"
-            f"{_e(subject_key)}</a>")
+        return ""
+    return f"<a href='{_issue_href(subject_key)}'>#{_e(m[2])}</a>"
+
+
+def _title(item_id: int, title: str | None) -> str:
+    """Le titre du sujet, cliquable vers la page de l'item.
+
+    Le titre vient de la base — le canal l'y a rangé à l'admission. Un sujet
+    qui n'est pas une issue GitHub n'en a jamais eu : cellule vide, la ligne
+    reste lisible et rien n'est inventé.
+    """
+    return f"<a href='/item/{item_id}'>{_e(title)}</a>" if title else ""
 
 
 def _pr(item_id: int) -> str:
@@ -216,7 +241,8 @@ def _questions_page(questions: list[dict], by: str, token: str, flash: str | Non
         parts.append(
             f"<div class='q'><div class='meta'>"
             f"[{q['id']}] {_subject(q['subject_key'])} · <a href='/item/{q['item_id']}'>item {q['item_id']}</a> "
-            f"en <b>{_e(q['item_state'])}</b> · pour {_e(q['owner'])} "
+            + (f"« {_e(q['item_title'])} » " if q["item_title"] else "")
+            + f"en <b>{_e(q['item_state'])}</b> · pour {_e(q['owner'])} "
             f"· avant {q['deadline']:%d/%m %H:%M} · escalades restantes {q['escalations']}"
             f"</div><div class='text'>{_e(q['text'])}</div>"
             f"<form method='post' action='/answer'>"
@@ -232,7 +258,7 @@ def _questions_page(questions: list[dict], by: str, token: str, flash: str | Non
 
 def _items_page(conn, beat: dt.datetime | None) -> str:
     rows = conn.execute(
-        "SELECT w.*, s.subject_key, s.graph FROM work_item w "
+        "SELECT w.*, s.subject_key, s.graph, s.title FROM work_item w "
         "JOIN subject s ON s.id = w.subject_id ORDER BY w.id DESC"
     ).fetchall()
     body = ["<h1>items</h1>"]
@@ -241,14 +267,17 @@ def _items_page(conn, beat: dt.datetime | None) -> str:
     else:
         lines = "".join(
             f"<tr><td><a href='/item/{r['id']}'>{r['id']}</a></td>"
-            f"<td>{_e(r['graph'])}</td><td>{_subject(r['subject_key'])}</td>"
+            f"<td>{_issue(r['subject_key'])}</td>"
+            f"<td>{_title(r['id'], r['title'])}</td>"
+            f"<td>{_e(r['graph'])}</td>"
             f"<td>g{r['generation']}</td>"
             f"<td><span class='badge {'terminal' if r['terminal_at'] else 'active'}'>"
             f"{_e(r['state'])}</span></td>"
             f"<td>v{r['version']}</td><td>{r['escalations']}</td>"
             f"<td>{r['terminal_at'].strftime('%d/%m %H:%M') if r['terminal_at'] else 'actif'}</td></tr>"
             for r in rows)
-        body.append("<table><tr><th>item</th><th>graph</th><th>sujet</th><th>gén.</th>"
+        body.append("<table><tr><th>item</th><th>issue</th><th>titre</th>"
+                    "<th>graph</th><th>gén.</th>"
                     "<th>état</th><th>version</th><th>escalades</th><th>fin</th></tr>"
                     f"{lines}</table>")
     version = max((r["version"] for r in rows), default=0)
@@ -435,8 +464,9 @@ def _result(result: dict | None) -> str:
 
 def _item_page(conn, item_id: int, beat: dt.datetime | None) -> str | None:
     item = conn.execute(
-        "SELECT w.*, s.subject_key, s.graph, s.lineage_budget FROM work_item w "
-        "JOIN subject s ON s.id = w.subject_id WHERE w.id = %s", (item_id,)
+        "SELECT w.*, s.subject_key, s.graph, s.title, s.lineage_budget "
+        "FROM work_item w JOIN subject s ON s.id = w.subject_id WHERE w.id = %s",
+        (item_id,)
     ).fetchone()
     if item is None:
         return None
@@ -461,7 +491,9 @@ def _item_page(conn, item_id: int, beat: dt.datetime | None) -> str | None:
     state = "terminal" if item["terminal_at"] else "active"
     body = [
         f"<h1>item {item['id']} <small>· {_subject(item['subject_key'])}{_pr(item_id)} · "
-        f"g{item['generation']} · {_e(item['graph'])} · rév. {item['revision'][:12]}…</small></h1>",
+        + (f"« {_e(item['title'])} » · " if item["title"] else "")
+        + f"g{item['generation']} · {_e(item['graph'])} · rév. {item['revision'][:12]}…"
+        "</small></h1>",
         f"<p><span class='badge {state}'>{_e(item['state'])}</span> "
         f"v{item['version']} · passage {item['cycle']} · "
         f"escalades restantes {item['escalations']} · "

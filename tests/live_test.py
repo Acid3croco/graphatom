@@ -52,12 +52,13 @@ class FakeConn:
 
 def item_row(item_id: int, version: int) -> dict:
     return {"id": item_id, "graph": "code-task", "subject_key": f"sujet-{item_id}",
-            "generation": 1, "state": "implement", "version": version,
+            "title": None, "generation": 1, "state": "implement", "version": version,
             "escalations": 3, "terminal_at": None}
 
 
 def question(version: int) -> dict:
-    return {"id": 5, "item_id": 14, "subject_key": "gh:o/r#27", "item_state": "review",
+    return {"id": 5, "item_id": 14, "subject_key": "gh:o/r#27", "item_title": None,
+            "item_state": "review",
             "item_version": version, "owner": "Acid3croco", "escalations": 3,
             "deadline": dt.datetime(2026, 8, 8, 9, 30), "text": "On garde ?",
             "options": ["merger", "abandonner"]}

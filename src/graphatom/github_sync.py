@@ -7,7 +7,9 @@ tout le reste :
   1. admission  — une issue ouverte portant le label `graphatom` devient
                   un sujet (une seule admission automatique par issue) ;
                   une ligne `Depends-on: #N` dans le corps diffère
-                  l'admission tant que l'issue visée est ouverte
+                  l'admission tant que l'issue visée est ouverte ; le titre
+                  de l'issue est posé sur le sujet au passage — le canal l'a
+                  sous la main, le frontend le lira en base et jamais ici
   2. accusé     — l'occurrence ouverte reçoit son commentaire de prise en
                   charge : item, graph, lien trajectoire — une seule fois ;
                   ce commentaire est ensuite réécrit à chaque transition
@@ -244,6 +246,23 @@ def _pending_deps(gh: GitHub, issue: dict, name: str, states: dict[int, str | No
     return waiting
 
 
+def _remember_title(conn: Connection, name: str, subject_key: str,
+                    title: str) -> None:
+    """Range le titre de l'issue sur le sujet, quand il a bougé.
+
+    L'admission le pose une première fois ; ce rafraîchissement ne coûte
+    rien — le titre est déjà dans la liste des issues du tick — et rattrape
+    les deux cas où l'admission ne suffit pas : un titre édité sur GitHub,
+    et les sujets admis avant que la colonne existe. Un sujet inconnu n'a
+    pas de ligne : la mise à jour ne touche rien, et c'est bien ainsi.
+    """
+    conn.execute(
+        "UPDATE subject SET title = %s WHERE graph = %s AND subject_key = %s "
+        "AND title IS DISTINCT FROM %s",
+        (title, name, subject_key, title),
+    )
+
+
 def _admit_labeled(conn: Connection, gh: GitHub, revision: str,
                    said: set[tuple[int, str]]) -> set[int]:
     """L'admission automatique, et son seul frein : les dépendances déclarées.
@@ -258,6 +277,7 @@ def _admit_labeled(conn: Connection, gh: GitHub, revision: str,
     states: dict[int, str | None] = {}
     for issue in gh.labeled_issues():
         subject_key = f"gh:{gh.repo}#{issue['number']}"
+        _remember_title(conn, name, subject_key, issue["title"])
         known = conn.execute(
             "SELECT 1 FROM subject s JOIN work_item w ON w.subject_id = s.id "
             "WHERE s.graph = %s AND s.subject_key = %s LIMIT 1", (name, subject_key),
@@ -275,7 +295,7 @@ def _admit_labeled(conn: Connection, gh: GitHub, revision: str,
                       "dépendance.", said)
             continue
         try:
-            item_id = kernel.admit(conn, revision, subject_key)
+            item_id = kernel.admit(conn, revision, subject_key, issue["title"])
             print(f"#{issue['number']} admis → item {item_id}", flush=True)
         except RuntimeError as exc:
             print(f"#{issue['number']} refusé : {exc}", flush=True)
