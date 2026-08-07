@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS subject (
     id             BIGSERIAL PRIMARY KEY,
     graph          TEXT NOT NULL,
     subject_key    TEXT NOT NULL,
+    title          TEXT,                      -- le titre lisible du sujet, posé par le canal
     lineage_budget INT  NOT NULL DEFAULT 3,   -- ré-admissions restantes, jamais régénéré
     UNIQUE (graph, subject_key)
 );
@@ -96,6 +97,7 @@ CREATE TABLE IF NOT EXISTS heartbeat (
 -- un CREATE TABLE ne voit rien d'une table déjà là : tout ce qui arrive après
 -- coup s'écrit ici, idempotent, et vaut aussi bien sur une base neuve que sur
 -- une base peuplée. Sans perte : les tentatives d'avant sont du passage 1.
+ALTER TABLE subject   ADD COLUMN IF NOT EXISTS title TEXT;
 ALTER TABLE work_item ADD COLUMN IF NOT EXISTS cycle INT NOT NULL DEFAULT 1;
 ALTER TABLE node_run  ADD COLUMN IF NOT EXISTS cycle INT NOT NULL DEFAULT 1;
 ALTER TABLE node_run  DROP CONSTRAINT IF EXISTS node_run_item_id_node_attempt_key;

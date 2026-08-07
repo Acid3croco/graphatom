@@ -7,6 +7,13 @@ Scénario, sans base ni serveur — le rendu est pur :
   2. tout autre sujet reste du texte brut, échappé
   3. `release.json` du workspace donne le lien de la PR de l'item ;
      pas de fichier, ou pas d'URL dedans : pas de lien
+  4. la table `/items` porte le numéro d'issue en lien vers GitHub et le
+     titre en lien vers `/item/<id>` — un sujet d'un autre canal n'a ni
+     l'un ni l'autre, deux cellules vides et rien de cassé
+  5. la question mentionne le titre de son item, pas seulement son numéro
+
+Le titre vient de la base, jamais de GitHub : ces pages ne connaissent
+que ce que le canal a rangé sur le sujet à l'admission.
 
 Usage : uv run python tests/links_test.py
 """
@@ -23,11 +30,37 @@ from graphatom import blocks, web  # noqa: E402
 
 ISSUE_URL = "https://github.com/Acid3croco/graphatom/issues/27"
 PR_URL = "https://github.com/Acid3croco/graphatom/pull/31"
+TITRE = "Le titre de l'issue partout <27>"   # avec de quoi vérifier l'échappement
 
 
-def question_page() -> str:
+class FakeCursor:
+    def __init__(self, rows: list):
+        self.rows = rows
+
+    def fetchall(self):
+        return self.rows
+
+
+class FakeConn:
+    """La base : elle rend les items qu'on lui donne, et rien d'autre."""
+
+    def __init__(self, items: list[dict]):
+        self.items = items
+
+    def execute(self, sql: str, params: tuple = ()):
+        return FakeCursor(self.items)
+
+
+def item_row(item_id: int, subject_key: str, title: str | None) -> dict:
+    return {"id": item_id, "graph": "code-task", "subject_key": subject_key,
+            "title": title, "generation": 1, "state": "implement", "version": 12,
+            "escalations": 3, "terminal_at": None}
+
+
+def question_page(title: str | None = None) -> str:
     question = {
         "id": 5, "item_id": 14, "subject_key": "gh:Acid3croco/graphatom#27",
+        "item_title": title,
         "item_state": "review", "item_version": 12, "owner": "Acid3croco",
         "escalations": 3,
         "deadline": dt.datetime(2026, 8, 8, 9, 30), "text": "On garde ?",
@@ -74,7 +107,29 @@ def main() -> None:
         assert "illisible" in web._pr(14)  # le dire, sans emporter la page
     print(f"3. release.json → {PR_URL} ✓")
 
-    print("\nliens : OK — l'issue et la PR sont atteignables depuis le frontend")
+    # 4. la table des items, dans le DOM rendu : le numéro vers GitHub, le
+    #    titre vers la page de l'item
+    page = web._items_page(
+        FakeConn([item_row(14, "gh:Acid3croco/graphatom#27", TITRE),
+                  item_row(9, "pipeline-x:oom", None)]),
+        dt.datetime.now(dt.timezone.utc))
+    assert "<th>issue</th><th>titre</th>" in page, page
+    assert f"<a href='{ISSUE_URL}'>#27</a>" in page, page
+    assert f"<a href='/item/14'>{web._e(TITRE)}</a>" in page, page
+    assert TITRE not in page, "le titre est échappé, jamais rendu tel quel"
+    # le sujet d'un autre canal : deux cellules vides, et la ligne tient
+    assert "<td></td><td></td>" in page, page
+    assert "pipeline-x:oom" not in page, "aucun titre inventé pour un autre canal"
+    print("4. /items : #27 → GitHub, titre → /item/14, autre canal → vide ✓")
+
+    # 5. la question dit de quoi il s'agit — le titre, pas seulement le numéro
+    page = question_page(TITRE)
+    assert f"« {web._e(TITRE)} »" in page, page
+    assert "item 14" in page and TITRE not in page, page
+    assert "« " not in question_page(), "sans titre, la question n'invente rien"
+    print("5. question : le titre de l'item à côté de son numéro ✓")
+
+    print("\nliens : OK — l'issue, la PR et le titre sont lisibles depuis le frontend")
 
 
 if __name__ == "__main__":

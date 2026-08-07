@@ -58,7 +58,8 @@ uv run python tests/orphans_test.py                  # un bail expiré tue tout 
 uv run python tests/reconnect_test.py                # couper la base sous le worker :
                                                      # il se reconnecte et reprend
 uv run python tests/links_test.py                    # les liens du frontend vers
-                                                     # l'issue et la PR, sans base
+                                                     # l'issue et la PR, et le titre
+                                                     # dans la table, sans base
 uv run python tests/depends_test.py                  # `Depends-on: #N` : l'admission
                                                      # attend, sans base ni réseau
 uv run python tests/hermetic_test.py                 # ce qu'un agent lance ne voit
@@ -116,6 +117,14 @@ a produit une PR, `/item/<id>` l'affiche à côté, lue dans le `release.json`
 que le nœud release écrit dans le workspace. Tout se construit depuis la base
 et le workspace : aucun appel à l'API GitHub depuis le web. Un sujet d'une
 autre forme reste du texte brut — le kernel, lui, ne connaît pas GitHub.
+
+Le titre de l'issue se lit partout, et un numéro nu ne dit plus rien tout
+seul : le canal GitHub le range sur le sujet (`subject.title`) au moment de
+l'admission — il l'a sous la main — et le repose à chaque tick si quelqu'un
+l'édite. `/items` porte donc une colonne `issue` (le numéro, vers GitHub) et
+une colonne `titre` (vers `/item/<id>`), l'en-tête de `/item/<id>` l'affiche
+à côté du sujet, et chaque question dit de quel travail elle parle. Un sujet
+d'un autre canal n'a pas de titre : cellule vide, rien de cassé.
 
 Refusé, exprès : auth, comptes, exposition Internet, WebSocket, édition de
 graphs, mutation d'items, dashboard. Voir les WAIT, répondre une fois parmi

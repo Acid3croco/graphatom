@@ -42,15 +42,22 @@ def now() -> dt.datetime:
 # ---------------------------------------------------------------- admission
 
 
-def admit(conn: psycopg.Connection, revision: str, subject_key: str) -> int:
-    """Crée (ou retrouve) le sujet, ouvre une occurrence — si la lignée le permet."""
+def admit(conn: psycopg.Connection, revision: str, subject_key: str,
+          title: str | None = None) -> int:
+    """Crée (ou retrouve) le sujet, ouvre une occurrence — si la lignée le permet.
+
+    Le titre est celui que le canal a sous la main au moment de l'admission :
+    il est stocké là, une fois, et personne n'ira le rechercher ailleurs. Un
+    sujet sans titre — un autre canal, un autre format — reste sans titre.
+    """
     with conn.transaction():
         bundle = load_bundle(conn, revision)
         subject = conn.execute(
-            "INSERT INTO subject (graph, subject_key) VALUES (%s, %s) "
-            "ON CONFLICT (graph, subject_key) DO UPDATE SET graph = EXCLUDED.graph "
+            "INSERT INTO subject (graph, subject_key, title) VALUES (%s, %s, %s) "
+            "ON CONFLICT (graph, subject_key) DO UPDATE "
+            "SET title = COALESCE(EXCLUDED.title, subject.title) "
             "RETURNING id, lineage_budget",
-            (bundle["name"], subject_key),
+            (bundle["name"], subject_key, title),
         ).fetchone()
 
         active = conn.execute(
