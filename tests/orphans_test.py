@@ -6,7 +6,7 @@ par le faucheur sont en jeu :
   1. un agent factice qui laisse un sous-processus derrière lui est fauché
      au timeout, et la tentative est classée crashed avec son autopsie
   2. plus aucun processus vivant de son groupe après la tentative
-  3. le journal `agent-<tentative>.log` est écrit comme d'habitude
+  3. le journal `agent-<passage>-<tentative>.log` est écrit comme d'habitude
   4. un agent qui répond normalement passe toujours
   5. un agent qui sort en erreur sans `outcome.json` rend son autopsie :
      code de sortie, queue de log, et pas de flag timeout
@@ -44,6 +44,7 @@ os.environ.pop("GRAPHATOM_AGENT_DSN", None)
 TIMEOUT_S = 2
 ITEM_ID = 7  # l'item du contexte de test : son workspace porte la trace
 RUN_ID = 1  # le run du contexte de test : la trace lui appartient
+CYCLE = 1  # le passage du contexte de test : il nomme le journal de l'agent
 
 
 class FakeConn:
@@ -64,7 +65,7 @@ def context(workdir: Path, cmd: str, attempt: int,
                                  "timeout_s": timeout_s}}}
     return blocks.Context(
         FakeConn(),
-        {"id": RUN_ID, "node": "travail", "attempt": attempt},
+        {"id": RUN_ID, "node": "travail", "cycle": CYCLE, "attempt": attempt},
         {"id": ITEM_ID, "subject_id": 1},
         node,
         {"name": "orphelins"},
@@ -133,7 +134,7 @@ def main() -> None:
     print(f"2. groupe {pgid} entièrement révoqué ✓")
 
     # 3. le journal de la tentative reste écrit
-    log = ctx.workspace / "agent-1.log"
+    log = ctx.workspace / f"agent-{CYCLE}-1.log"
     assert log.exists(), log
     print(f"3. journal {log.name} écrit ✓")
 

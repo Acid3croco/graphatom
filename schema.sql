@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS work_item (
     state         TEXT   NOT NULL,
     version       INT    NOT NULL DEFAULT 0,
     fence         INT    NOT NULL DEFAULT 0,
+    cycle         INT    NOT NULL DEFAULT 1,  -- passage courant, +1 par retry d'escalade
     escalations   INT    NOT NULL,            -- budget fini, décrémenté, jamais régénéré
     wall_deadline TIMESTAMPTZ NOT NULL,
     terminal_at   TIMESTAMPTZ,
@@ -33,14 +34,15 @@ CREATE TABLE IF NOT EXISTS node_run (
     id               BIGSERIAL PRIMARY KEY,
     item_id          BIGINT NOT NULL REFERENCES work_item(id),
     node             TEXT   NOT NULL,
-    attempt          INT    NOT NULL,
+    cycle            INT    NOT NULL DEFAULT 1,  -- le passage dont la tentative fait partie
+    attempt          INT    NOT NULL,         -- tentative dans ce passage, repart à 1
     status           TEXT   NOT NULL,         -- running | applied | superseded | stale | faulted
     fence            INT    NOT NULL,
     expected_version INT    NOT NULL,
     lease_expires_at TIMESTAMPTZ NOT NULL,
     outcome          TEXT,
-    result           JSONB,
-    UNIQUE (item_id, node, attempt)
+    result           JSONB
+    -- unicité d'une tentative : voir l'index du passage, tout en bas
 );
 
 CREATE TABLE IF NOT EXISTS event (
@@ -80,3 +82,13 @@ CREATE TABLE IF NOT EXISTS question (
     answered_by TEXT,
     answered_at TIMESTAMPTZ
 );
+
+-- Le passage. `graphatom init-db` rejoue ce fichier à chaque déploiement, et
+-- un CREATE TABLE ne voit rien d'une table déjà là : tout ce qui arrive après
+-- coup s'écrit ici, idempotent, et vaut aussi bien sur une base neuve que sur
+-- une base peuplée. Sans perte : les tentatives d'avant sont du passage 1.
+ALTER TABLE work_item ADD COLUMN IF NOT EXISTS cycle INT NOT NULL DEFAULT 1;
+ALTER TABLE node_run  ADD COLUMN IF NOT EXISTS cycle INT NOT NULL DEFAULT 1;
+ALTER TABLE node_run  DROP CONSTRAINT IF EXISTS node_run_item_id_node_attempt_key;
+CREATE UNIQUE INDEX IF NOT EXISTS node_run_attempt_key
+    ON node_run (item_id, node, cycle, attempt);

@@ -22,6 +22,16 @@ L'idée : des portes successives dont l'exécution est certaine — du code atom
 5. **Baux et fencing** — un bail expiré révoque l'autorité, pas seulement l'acceptation du résultat.
 6. **Terminaison structurelle** — budget d'escalade fini que rien ne régénère, deadlines partout.
 
+**Deux compteurs, jamais confondus.** Les tentatives par nœud
+(`MAX_ATTEMPTS`) sont un amortisseur local : elles se comptent sur le
+*passage* courant de l'item. Une réponse humaine sur un nœud d'escalade —
+`retry` — ouvre le passage suivant : en aval, les nœuds repartent à la
+tentative 1, pleine marge, parce que l'humain vient précisément de juger
+qu'un nouvel essai complet valait le coup. Le budget d'escalades, lui, ne
+se régénère jamais : c'est lui, et lui seul, qui garantit la terminaison.
+L'histoire n'est pas réécrite — les tentatives des passages précédents
+restent dans `node_run`, et `/item/<id>` donne le passage de chaque run.
+
 Hors noyau, en modules : EVAL, ADMIT, dialogue durable, gouverneur de flotte.
 
 ## Lancer le squelette (milestone 1)
@@ -54,6 +64,9 @@ uv run python tests/depends_test.py                  # `Depends-on: #N` : l'admi
 uv run python tests/hermetic_test.py                 # ce qu'un agent lance ne voit
                                                      # ni la base ni le dépôt de la
                                                      # production
+uv run python tests/passage_test.py                  # un retry d'escalade rend la
+                                                     # marge de tentatives des nœuds,
+                                                     # jamais le budget d'escalades
 ```
 
 Les tests ne touchent jamais au `data/` du repo : chacun travaille dans un
@@ -250,7 +263,7 @@ pur (`os.killpg`), le kernel ne connaît toujours aucun agent.
 
 Une tentative crashée rend son **autopsie** dans le résultat du run —
 `exit_code` (négatif = le signal qui l'a tué), `log_tail` (les 20 dernières
-lignes d'`agent-<tentative>.log`, bornées à 2 000 caractères) et `timeout`
+lignes d'`agent-<passage>-<tentative>.log`, bornées à 2 000 caractères) et `timeout`
 (vrai si c'est le bail du bloc qui a fauché l'agent). La table des runs de
 `/item/<id>` l'affiche : le post-mortem se lit sur la page, pas en fouillant
 le workspace à la main.

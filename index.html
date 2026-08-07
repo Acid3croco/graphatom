@@ -190,7 +190,7 @@
     <div class="card"><h4>3 · issues fermées</h4><p>Chaque nœud déclare son énuméré ; chaque issue a exactement une arête ; une issue non mappée est une faute. Rien d'autre ne route — pas de conversation, pas d'exception.</p></div>
     <div class="card"><h4>4 · passerelle d'effets</h4><p>Intention et clé logique commises <em>avant</em> tout accès au monde. États : <code>applied / rejected / uncertain / possibly_sent</code>. « Inconnu » est un état de première classe, réconcilié en interrogeant la cible.</p></div>
     <div class="card"><h4>5 · baux et fencing</h4><p>Chaque run tient un bail ; l'expiration révoque l'<em>autorité</em> (annulation, terminaison, quarantaine du workspace), pas seulement l'acceptation du résultat. Le jeton se compare par égalité.</p></div>
-    <div class="card"><h4>6 · terminaison</h4><p>Sous-graph non-escalade acyclique + budget d'escalade fini que rien ne régénère + deadlines partout ⇒ tout item termine. C'est la garantie qui distingue un rail d'un tableau de suivi.</p></div>
+    <div class="card"><h4>6 · terminaison</h4><p>Sous-graph non-escalade acyclique + budget d'escalade fini que rien ne régénère + deadlines partout ⇒ tout item termine. C'est la garantie qui distingue un rail d'un tableau de suivi. Les tentatives par nœud sont un autre compteur : un amortisseur local, remis à zéro pour le passage qu'ouvre un <code>retry</code> humain — jamais le budget d'escalade.</p></div>
   </div>
 
   <pre><code>apply(run_id, submitted):
@@ -248,9 +248,10 @@
   <pre><code>graph_revision(id, content_hash, bundle)
 subject(id, graph, subject_key, lineage_budget, UNIQUE(graph, subject_key))
 work_item(id, subject_id, generation, revision, state, version, fence,
-          UNIQUE(subject_id, generation))
-node_run(id, item_id, node, attempt, status, fence, expected_version,
-         lease_expires_at, outcome, result_ref, UNIQUE(item_id, node, attempt))
+          cycle, UNIQUE(subject_id, generation))
+node_run(id, item_id, node, cycle, attempt, status, fence, expected_version,
+         lease_expires_at, outcome, result_ref,
+         UNIQUE(item_id, node, cycle, attempt))
 event(item_id, item_version, edge, run_id, PRIMARY KEY(item_id, item_version))
 effect(op_id, item_id, logical_key, target_uri, expected_target_version,
        intent_hash, observation, UNIQUE(target_uri, logical_key))
