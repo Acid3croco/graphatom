@@ -1,7 +1,7 @@
 """Le canal GitHub — module hors noyau, par polling.
 
 GitHub est l'interface humaine et la cible des effets ; Postgres reste
-l'unique autorité d'exécution. Ce module fait six choses, et refuse
+l'unique autorité d'exécution. Ce module fait sept choses, et refuse
 tout le reste :
 
   1. admission  — une issue ouverte portant le label `graphatom` devient
@@ -15,19 +15,26 @@ tout le reste :
                   ce commentaire est ensuite réécrit à chaque transition
                   pour porter la trajectoire en direct (une édition ne
                   notifie personne : le tableau de bord ne coûte aucun spam)
-  3. questions  — chaque WAIT ouvert est publié en commentaire d'issue ;
+  3. critères   — le `criteria.md` laissé par `scope` dans le workspace est
+                  publié en commentaire : l'humain lit ce que le rail a
+                  compris avant tout code, et peut encore commenter. La clé
+                  logique porte le contenu, donc des critères réécrits — une
+                  reformulation, une escalade — se redisent, et des critères
+                  inchangés jamais deux fois
+  4. questions  — chaque WAIT ouvert est publié en commentaire d'issue ;
                   la publication est un effet réconciliable par marqueur ;
-                  le `validate.md` du workspace, quand il est là, part avec
-                  la question — l'humain voit les critères cochés et leurs
-                  preuves, pas seulement « on garde ? »
-  4. réponses   — un commentaire `/answer <id> <option>` d'un auteur
+                  le `criteria.md` et le `validate.md` du workspace, quand
+                  ils sont là, partent avec la question — l'humain voit ce
+                  qui est demandé et ce qui est coché, pas seulement
+                  « on garde ? »
+  5. réponses   — un commentaire `/answer <id> <option>` d'un auteur
                   autorisé, postérieur à l'armement de la question,
                   enregistre la réponse ; l'ordonnanceur route
-  5. état       — un label `rail:<état>` projette l'état de l'item actif,
+  6. état       — un label `rail:<état>` projette l'état de l'item actif,
                   repeint à chaque tick sur les issues ouvertes, retiré au
                   terminal sans condition — l'issue peut être déjà fermée ;
                   `rail:stalled` s'y ajoute quand le worker ne bat plus
-  6. rapports   — un item terminal reçoit son commentaire de clôture
+  7. rapports   — un item terminal reçoit son commentaire de clôture
 
 Aucun parsing de langage naturel. Aucune lecture de GitHub comme état
 d'item. Chaque prise de parole du rail est un effet : clé logique,
@@ -35,6 +42,7 @@ intention commise avant, réconciliation en relisant les commentaires.
 """
 
 import datetime as dt
+import hashlib
 import json
 import os
 import time
@@ -57,6 +65,10 @@ STALLED_COLOR = "d73a4a"    # le rouge de l'alarme, seule exception à la couleu
 DEPENDS = "Depends-on:"     # la grammaire fermée des dépendances, dans le corps
 CHECKLIST = "validate.md"   # la checklist du nœud validate, dans le workspace de l'item
 CHECKLIST_LINES = 40        # ce qu'on en cite : de quoi tenir sans noyer la question
+CHECKLIST_TITLE = "**Critères de succès, cochés par `validate`**"
+CRITERIA = "criteria.md"    # les critères figés par le nœud scope, même workspace
+CRITERIA_LINES = 80         # une spécification proposée est plus longue qu'une checklist
+CRITERIA_TITLE = "**Ce que le rail a compris** — critères figés par `scope`"
 TIMEOUT_S = 30.0            # tout appel sortant est borné : au-delà, GitHub est injoignable
 
 
@@ -363,32 +375,60 @@ def _gh_questions(conn: Connection, gh: GitHub) -> list[dict]:
     ))
 
 
-def _checklist(item_id: int, web: str) -> str:
-    """Les critères cochés par `validate`, cités dans la question qui suit.
+def _cite(item_id: int, name: str, limit: int, title: str, web: str) -> str:
+    """Un fichier du workspace, cité en bloc, avec le lien vers sa preview.
 
-    Le nœud `validate` laisse `validate.md` dans le workspace de l'item :
-    une ligne par critère, la case, la preuve constatée. Une question posée
-    après lui l'embarque telle quelle — répondre « on garde ? » sans la
-    checklist, c'était juger sur la seule bonne foi des agents de test.
+    Les agents laissent leur travail en clair dans le workspace : `scope` y
+    pose `criteria.md` — ce qui est demandé —, `validate` y pose
+    `validate.md` — ce qui est tenu. Le rail ne réécrit pas ce qu'un agent
+    a écrit : il le montre, borné aux premières lignes, avec de quoi lire
+    le reste. Répondre « on garde ? » sans ces deux fichiers, c'était juger
+    sur la seule bonne foi des agents.
 
-    Le fichier est cité en bloc de citation, borné aux premières lignes :
-    le rail ne réécrit pas ce qu'un agent a écrit, il le montre. Pas de
-    fichier — cycle d'avant `validate`, question posée avant lui, workspace
-    hors de portée du conteneur : rien, et la question reste ce qu'elle était.
+    Pas de fichier — cycle plus ancien que le nœud qui l'écrit, question
+    posée avant lui, `data/` hors de portée du conteneur : rien du tout, et
+    le texte autour reste exactement ce qu'il était.
     """
     try:
-        lines = (item_workspace(item_id) / CHECKLIST).read_text().splitlines()
+        lines = (item_workspace(item_id) / name).read_text().splitlines()
     except OSError:
         return ""
     if not lines:  # fichier vide : rien à citer, et surtout pas un bloc vide
         return ""
-    quoted = [f"> {line}".rstrip() for line in lines[:CHECKLIST_LINES]]
-    reste = len(lines) - CHECKLIST_LINES
+    quoted = [f"> {line}".rstrip() for line in lines[:limit]]
+    reste = len(lines) - limit
     if reste > 0:
         quoted.append(f"> *(… {reste} lignes de plus)*")
-    return ("**Critères de succès, cochés par `validate`** — "
-            f"[{CHECKLIST}]({web}/item/{item_id}/file/{CHECKLIST})\n\n"
+    return (f"{title} — [{name}]({web}/item/{item_id}/file/{name})\n\n"
             + "\n".join(quoted) + "\n\n")
+
+
+def _publish_criteria(conn: Connection, gh: GitHub) -> None:
+    """Les critères de `scope`, dits sur l'issue avant la première ligne de code.
+
+    Le rail devinait en silence : l'humain découvrait le contresens à la
+    review, au prix d'un cycle entier. Publier `criteria.md` dès qu'il
+    existe rend la lecture du rail visible pendant qu'elle coûte encore un
+    commentaire — le passage suivant le lira.
+
+    Une prise de parole comme les autres, à ceci près que sa clé logique
+    porte l'empreinte du fichier : deux ticks sur des critères inchangés ne
+    laissent qu'un commentaire, et des critères réécrits — reformulation,
+    escalade, nouveau passage de `scope` — se redisent au lieu de rester
+    muets. Les items terminaux sont hors de portée : leur cycle est fini,
+    et le premier tick d'un déploiement n'a pas à réveiller les issues
+    closes.
+    """
+    web = _web()
+    for item in _gh_items(conn, gh, "AND w.terminal_at IS NULL"):
+        body = _cite(item["id"], CRITERIA, CRITERIA_LINES, CRITERIA_TITLE, web)
+        if not body:  # `scope` n'a pas encore écrit, ou n'écrira jamais : rien à dire
+            continue
+        empreinte = hashlib.sha256(body.encode()).hexdigest()[:12]
+        _speak(conn, gh, _issue_number(item["subject_key"]), item["id"],
+               f"{item['graph']}-g{item['generation']}-criteria-{empreinte}",
+               body + "Un commentaire sur l'issue est lu au passage suivant ; "
+                      "le corps de l'issue, lui, reste à l'humain.")
 
 
 def _publish_questions(conn: Connection, gh: GitHub) -> None:
@@ -398,7 +438,8 @@ def _publish_questions(conn: Connection, gh: GitHub) -> None:
         web = _web()
         body = (f"**Question du rail** — pour @{q['owner']}, "
                 f"avant le {q['deadline']:%d/%m %H:%M} UTC\n\n{q['text']}\n\n"
-                f"{_checklist(q['item_id'], web)}"
+                f"{_cite(q['item_id'], CRITERIA, CRITERIA_LINES, CRITERIA_TITLE, web)}"
+                f"{_cite(q['item_id'], CHECKLIST, CHECKLIST_LINES, CHECKLIST_TITLE, web)}"
                 f"Options : {options}\n"
                 f"Répondre par un commentaire : `/answer {q['id']} <option>`\n"
                 f"Trajectoire et artefacts (previews) : {web}/item/{q['item_id']}")
@@ -582,6 +623,7 @@ def tick(conn: Connection, gh: GitHub, revision: str, allowed: set[str],
         stalled = heartbeat.stalled(heartbeat.last(conn, heartbeat.RAIL))
         blocked = _admit_labeled(conn, gh, revision, said)
         _acknowledge(conn, gh)
+        _publish_criteria(conn, gh)
         _publish_questions(conn, gh)
         _collect_answers(conn, gh, allowed)
         _paint_states(conn, gh, blocked, stalled)
