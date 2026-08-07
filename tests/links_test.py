@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import web  # noqa: E402
+from graphatom import blocks, web  # noqa: E402
 
 ISSUE_URL = "https://github.com/Acid3croco/graphatom/issues/27"
 PR_URL = "https://github.com/Acid3croco/graphatom/pull/31"
@@ -51,8 +51,8 @@ def main() -> None:
 
     # 3. la PR vient de release.json, écrit par le nœud release
     with tempfile.TemporaryDirectory() as tmp:
-        web.DATA_DIR = Path(tmp)
-        workspace = web.DATA_DIR / "item-14"
+        blocks.DATA_DIR = Path(tmp)  # le seul répertoire de données, celui des blocs
+        workspace = blocks.item_workspace(14)
         workspace.mkdir()
         assert web._pr(14) == ""  # pas de release : rien à dire
 

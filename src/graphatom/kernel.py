@@ -13,6 +13,12 @@ Le cycle de vie d'un nœud :
 Toute mutation d'état d'item passe par _route() sous verrou : résultat de
 bloc (apply), réponse humaine ou échéance (apply_item), faucheur (reap).
 Rien d'autre ne bouge un item.
+
+Deux compteurs bornent un item, et ils ne se confondent jamais. Les
+tentatives par nœud sont un amortisseur local : elles se comptent sur le
+passage courant, et une réponse humaine d'escalade en ouvre un nouveau —
+« nouveau cycle, pleine marge ». Le budget d'escalades de l'item, lui, ne
+se régénère jamais : c'est lui, et lui seul, qui termine.
 """
 
 import datetime as dt
@@ -24,7 +30,7 @@ from .blocks import revoke_orphan
 from .graph import KERNEL_OUTCOMES, load_bundle
 
 LEASE_SECONDS = 30
-MAX_ATTEMPTS = 3  # défaut central : réessayer, puis escalader
+MAX_ATTEMPTS = 3  # défaut central, par passage : réessayer, puis escalader
 
 UTC = dt.timezone.utc
 
@@ -105,18 +111,21 @@ def claim(conn: psycopg.Connection, item_id: int) -> dict | None:
         if running:
             return None
 
+        # les tentatives se comptent sur le passage courant : celles qu'un
+        # passage précédent a brûlées restent en base, plus au décompte
         attempt = conn.execute(
-            "SELECT count(*) AS n FROM node_run WHERE item_id = %s AND node = %s",
-            (item_id, item["state"]),
+            "SELECT count(*) AS n FROM node_run "
+            "WHERE item_id = %s AND node = %s AND cycle = %s",
+            (item_id, item["state"], item["cycle"]),
         ).fetchone()["n"] + 1
         fence = item["fence"] + 1
         conn.execute("UPDATE work_item SET fence = %s WHERE id = %s", (fence, item_id))
         lease_s = float((node.get("config") or {}).get("lease_s", LEASE_SECONDS))
         run = conn.execute(
-            "INSERT INTO node_run (item_id, node, attempt, status, fence, "
+            "INSERT INTO node_run (item_id, node, cycle, attempt, status, fence, "
             "expected_version, lease_expires_at) "
-            "VALUES (%s, %s, %s, 'running', %s, %s, %s) RETURNING *",
-            (item_id, item["state"], attempt, fence, item["version"],
+            "VALUES (%s, %s, %s, %s, 'running', %s, %s, %s) RETURNING *",
+            (item_id, item["state"], item["cycle"], attempt, fence, item["version"],
              now() + dt.timedelta(seconds=lease_s)),
         ).fetchone()
         return run
@@ -176,7 +185,7 @@ def apply_item(conn: psycopg.Connection, item_id: int, outcome: str, kind: str) 
 
 
 def _route(conn, item, bundle, run, outcome: str, kind: str) -> None:
-    """Résout l'arête, débite l'escalade, écrit l'événement, bouge l'item.
+    """Résout l'arête, débite l'escalade, ouvre le passage, bouge l'item.
 
     Toujours appelé sous verrou de l'item, dans la transaction de l'appelant.
     """
@@ -204,6 +213,11 @@ def _route(conn, item, bundle, run, outcome: str, kind: str) -> None:
                 (item["id"],),
             )
 
+    # une réponse humaine sur un nœud d'escalade ouvre un passage : en aval,
+    # les tentatives repartent de zéro — l'humain vient de juger qu'un cycle
+    # complet valait le coup. Le budget d'escalades, lui, reste débité.
+    cycle = item["cycle"] + (1 if kind == "answer" and node.get("escalade") else 0)
+
     version = item["version"] + 1
     conn.execute(
         "INSERT INTO event (item_id, item_version, kind, from_state, to_state, "
@@ -212,8 +226,9 @@ def _route(conn, item, bundle, run, outcome: str, kind: str) -> None:
     )
     terminal = now() if nodes[target].get("terminal") else None
     conn.execute(
-        "UPDATE work_item SET state = %s, version = %s, terminal_at = %s WHERE id = %s",
-        (target, version, terminal, item["id"]),
+        "UPDATE work_item SET state = %s, version = %s, cycle = %s, terminal_at = %s "
+        "WHERE id = %s",
+        (target, version, cycle, terminal, item["id"]),
     )
 
     # un WAIT s'arme dans la même transaction que l'entrée dans l'état :

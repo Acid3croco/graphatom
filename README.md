@@ -49,6 +49,9 @@ uv run python tests/reconnect_test.py                # couper la base sous le wo
                                                      # il se reconnecte et reprend
 uv run python tests/links_test.py                    # les liens du frontend vers
                                                      # l'issue et la PR, sans base
+uv run python tests/passage_test.py                  # un retry d'escalade rend la
+                                                     # marge de tentatives des nœuds,
+                                                     # jamais le budget d'escalades
 ```
 
 Les tests ne touchent jamais au `data/` du repo : chacun travaille dans un
@@ -187,10 +190,23 @@ pur (`os.killpg`), le kernel ne connaît toujours aucun agent.
 
 Une tentative crashée rend son **autopsie** dans le résultat du run —
 `exit_code` (négatif = le signal qui l'a tué), `log_tail` (les 20 dernières
-lignes d'`agent-<tentative>.log`, bornées à 2 000 caractères) et `timeout`
+lignes d'`agent-<passage>-<tentative>.log`, bornées à 2 000 caractères) et `timeout`
 (vrai si c'est le bail du bloc qui a fauché l'agent). La table des runs de
 `/item/<id>` l'affiche : le post-mortem se lit sur la page, pas en fouillant
 le workspace à la main.
+
+**Un retry d'escalade rouvre un passage.** Deux compteurs bornent un item, et
+ils ne se confondent pas. Les tentatives par nœud (`MAX_ATTEMPTS = 3`) sont un
+amortisseur local : elles se comptent sur le *passage* courant, et une réponse
+humaine sur un nœud d'escalade en ouvre un nouveau — « nouveau cycle, pleine
+marge ». Sans quoi les tentatives brûlées par un incident d'infra passé
+restent décomptées après le `retry`, et l'item re-escalade au premier accroc
+suivant alors que l'humain venait de juger qu'un cycle complet valait le coup.
+Le budget d'escalades de l'item, lui, ne se régénère jamais : c'est lui, et lui
+seul, qui garantit la terminaison structurelle. Rien n'est réécrit : les
+tentatives d'un passage clos restent dans `node_run` avec leur numéro de
+passage, la table des runs de `/item/<id>` porte la colonne, et le workspace
+garde un journal d'agent par tentative et par passage.
 
 [`examples/code-task.json`](examples/code-task.json) est le graph qui fait
 tourner ce repo : implémentation par agent, **agent de test backend**

@@ -103,7 +103,7 @@ def _pr(item_id: int) -> str:
     markdown : trois clés lues telles quelles, jamais un parseur de prose.
     Pas de fichier, pas d'URL dedans : pas de lien, et rien à dire.
     """
-    path = DATA_DIR / f"item-{item_id}" / "release.json"
+    path = item_workspace(item_id) / "release.json"
     if not path.is_file():
         return ""
     try:
@@ -294,7 +294,8 @@ def _item_page(conn, item_id: int) -> str | None:
         f"<h1>item {item['id']} <small>· {_subject(item['subject_key'])}{_pr(item_id)} · "
         f"g{item['generation']} · {_e(item['graph'])} · rév. {item['revision'][:12]}…</small></h1>",
         f"<p><span class='badge {state}'>{_e(item['state'])}</span> "
-        f"v{item['version']} · escalades restantes {item['escalations']} · "
+        f"v{item['version']} · passage {item['cycle']} · "
+        f"escalades restantes {item['escalations']} · "
         f"lignée restante {item['lineage_budget']} · "
         + (f"terminé {item['terminal_at']:%d/%m %H:%M:%S}" if item["terminal_at"]
            else f"wall deadline {item['wall_deadline']:%d/%m %H:%M}") + "</p>",
@@ -317,8 +318,10 @@ def _item_page(conn, item_id: int) -> str | None:
     ).fetchall()
     if runs:
         body.append("<h2>runs</h2>" + _table(
-            ["run", "nœud", "tentative", "statut", "issue", "fence", "bail", "résultat"],
-            [f"<tr><td>{r['id']}</td><td>{_e(r['node'])}</td><td>{r['attempt']}</td>"
+            ["run", "nœud", "passage", "tentative", "statut", "issue", "fence",
+             "bail", "résultat"],
+            [f"<tr><td>{r['id']}</td><td>{_e(r['node'])}</td><td>{r['cycle']}</td>"
+             f"<td>{r['attempt']}</td>"
              f"<td><span class='badge {_e(r['status'])}'>{_e(r['status'])}</span></td>"
              f"<td>{_e(r['outcome'] or '')}</td><td>{r['fence']}</td>"
              f"<td>{r['lease_expires_at']:%H:%M:%S}</td>"
