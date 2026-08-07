@@ -17,6 +17,13 @@ ou le bandeau rouge quand plus rien ne bat — les états montrés sont alors
 figés, et la page le dit avant qu'on les croie. Une requête d'une ligne
 par rendu.
 
+Chaque page se rafraîchit toute seule, sans rien changer au serveur : elle
+porte son marqueur de fraîcheur en meta, et quinze lignes de JS le comparent
+toutes les 5 s à celui d'un `fetch` de la même URL. Marqueur identique :
+rien ne bouge. Marqueur différent : le contenu du conteneur est remplacé,
+le scroll reste où il est. Sans JavaScript, le rafraîchissement complet
+d'avant tient toujours — il vit dans un `noscript`.
+
 Un sujet de la forme `gh:<owner>/<repo>#<num>` devient partout un lien vers
 l'issue, et la page d'un item porte le lien de sa PR quand le nœud release
 en a laissé une dans `release.json` — la boucle se ferme dans les deux sens,
@@ -78,14 +85,51 @@ pre { white-space: pre-wrap; word-break: break-word; font-size: .8rem;
 
 REFRESH = "<meta http-equiv='refresh' content='5'>"
 HEAD = "<!doctype html><meta charset='utf-8'>"
+MARKER = "graphatom-version"
+
+# Le rafraîchissement en douceur, en JS de base : un fetch de la page
+# courante toutes les 5 s, le marqueur comparé, et le conteneur repeint
+# seulement s'il a bougé. Pas de WebSocket, pas de SSE, pas d'endpoint
+# JSON : le serveur ne sait même pas que ce script existe.
+LIVE = """
+const live = document.getElementById('live');
+const mark = doc => doc.querySelector("meta[name=%s]")?.content;
+let version = mark(document);
+setInterval(async () => {
+  // onglet caché, ou l'opérateur a la main sur le formulaire : on ne touche à rien
+  if (document.hidden || live.contains(document.activeElement)) return;
+  try {
+    const html = await (await fetch(location.href, {cache: 'no-store'})).text();
+    const fresh = new DOMParser().parseFromString(html, 'text/html');
+    if (!mark(fresh) || mark(fresh) === version) return;
+    version = mark(fresh);
+    live.innerHTML = fresh.getElementById('live').innerHTML;  // le conteneur reste, le scroll aussi
+  } catch (err) {
+    console.warn('graphatom : rafraîchissement raté', err);  // le prochain tour réessaie
+  }
+}, 5000);
+""" % MARKER
 
 
-def _shell(title: str, body: str, beat: dt.datetime | None,
-           refresh: bool = True) -> str:
-    return (f"{HEAD}{REFRESH if refresh else ''}<title>{html.escape(title)}</title>"
+def _marker(version: int, beat: dt.datetime | None) -> str:
+    """Le marqueur de fraîcheur de la page : ce qui doit la faire repeindre.
+
+    La version de ce qui est affiché — celle de l'item, ou la plus haute
+    des items listés — et l'état du battement, qui change l'en-tête sans
+    changer aucune version : sans lui, un rail qui s'arrête ne poserait
+    jamais son bandeau rouge sur une page déjà ouverte.
+    """
+    return f"v{version}-{'stalled' if heartbeat.stalled(beat) else 'live'}"
+
+
+def _shell(title: str, body: str, beat: dt.datetime | None, version: int) -> str:
+    return (f"{HEAD}<title>{html.escape(title)}</title>"
+            f"<meta name='{MARKER}' content='{_marker(version, beat)}'>"
+            f"<noscript>{REFRESH}</noscript>"  # sans JS : le rechargement d'avant
             f"<style>{STYLE}</style>"
             "<nav><a href='/'>questions</a><a href='/items'>items</a></nav>"
-            + _beat(beat) + body)
+            f"<main id='live'>{_beat(beat)}{body}</main>"
+            f"<script>{LIVE}</script>")
 
 
 def _ago(seconds: float) -> str:
@@ -179,7 +223,8 @@ def _questions_page(questions: list[dict], by: str, token: str, flash: str | Non
             f"<input type='hidden' name='question_id' value='{q['id']}'>"
             f"<input type='hidden' name='token' value='{token}'>"
             f"{buttons}</form></div>")
-    return _shell("graphatom — questions", "".join(parts), beat)
+    version = max((q["item_version"] for q in questions), default=0)
+    return _shell("graphatom — questions", "".join(parts), beat, version)
 
 
 # ---------------------------------------------------------------------- items
@@ -206,7 +251,8 @@ def _items_page(conn, beat: dt.datetime | None) -> str:
         body.append("<table><tr><th>item</th><th>graph</th><th>sujet</th><th>gén.</th>"
                     "<th>état</th><th>version</th><th>escalades</th><th>fin</th></tr>"
                     f"{lines}</table>")
-    return _shell("graphatom — items", "".join(body), beat)
+    version = max((r["version"] for r in rows), default=0)
+    return _shell("graphatom — items", "".join(body), beat, version)
 
 
 # ----------------------------------------------------------------- graph SVG
@@ -484,7 +530,7 @@ def _item_page(conn, item_id: int, beat: dt.datetime | None) -> str | None:
                 body.append(f"<p><a href='{href}'>{_e(p.name)}</a> "
                             f"<small>({p.stat().st_size} o)</small></p>")
 
-    return _shell(f"graphatom — item {item_id}", "".join(body), beat)
+    return _shell(f"graphatom — item {item_id}", "".join(body), beat, item["version"])
 
 
 def _file_response(item_id: int, name: str) -> tuple[bytes, str] | None:

@@ -28,7 +28,8 @@ PR_URL = "https://github.com/Acid3croco/graphatom/pull/31"
 def question_page() -> str:
     question = {
         "id": 5, "item_id": 14, "subject_key": "gh:Acid3croco/graphatom#27",
-        "item_state": "review", "owner": "Acid3croco", "escalations": 3,
+        "item_state": "review", "item_version": 12, "owner": "Acid3croco",
+        "escalations": 3,
         "deadline": dt.datetime(2026, 8, 8, 9, 30), "text": "On garde ?",
         "options": ["merger", "abandonner"],
     }
