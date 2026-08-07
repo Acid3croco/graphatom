@@ -477,7 +477,11 @@ au worktree : il lit, il écrit, il crée des issues.
   create --label graphatom`), chacune atomique avec ses critères dans son
   corps, chaînées par `Depends-on: #N` quand l'ordre compte — deux filles
   qui touchent les mêmes fichiers se sérialisent —, et une task list
-  `- [ ] #fille` dans la mère pour l'œil. Outcome `split`, vers le terminal
+  `- [ ] #fille` dans la mère pour l'œil. Puis il **ferme la mère** sur
+  GitHub (`gh issue close`, commentaire *Découpée en #A, #B — suivi sur les
+  filles.*) : son cycle s'arrête là, aucune pull request ne viendra la
+  fermer. La fermeture est idempotente, un rejeu du nœud ne la casse pas.
+  Outcome `split`, vers le terminal
   dédié `close_split` ; les filles suivent le pipeline normal, admises par
   le sync comme n'importe quelle issue.
 
