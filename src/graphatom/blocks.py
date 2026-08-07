@@ -10,6 +10,18 @@ bloc écrit `prompt.md` dans le workspace, lance la commande configurée
 (claude, codex, pi, n'importe quoi), et lit `outcome.json`. Pas de
 fichier d'issue valide = crashed, et le noyau route comme d'habitude.
 
+Une extension optionnelle : si la tentative laisse un `usage.json`, le
+bloc le fusionne dans le résultat du run — les types de tokens tels que
+l'agent les rapporte, sans que personne ici les interprète. C'est le
+`cmd` du graph qui produit ce fichier, jamais le noyau. Pas de
+`usage.json` : rien, et l'agent reste un citoyen de première classe.
+
+Les traces d'une tentative sont auditables après coup : le journal porte
+le nœud, le passage et la tentative dans son nom, et le prompt comme
+l'usage y sont rangés à la fin. Rien de l'histoire d'un item n'est jamais
+réécrit — seul `outcome.json` reste transitoire, puisque son contenu vit
+dans le résultat du run en base.
+
 L'agent travaille dans son propre univers : sa `GRAPHATOM_DSN` est la base
 jetable de son item — une par item, créée à la volée —, jamais celle du
 rail ni celle du voisin. Sa clé de sujet est dans l'environnement : le
@@ -40,6 +52,9 @@ DATA_DIR = Path("data")  # les tests le font pointer sur un répertoire temporai
 OUTBOX_NAME = "effects_outbox.log"  # sous DATA_DIR, résolu au moment de l'effet
 GRACE_S = 5.0  # entre le SIGTERM et le SIGKILL du groupe de l'agent
 PGID_FILE = "agent.pgid"  # la trace qui survit au worker, écrasée à chaque tentative
+OUTCOME_NAME = "outcome.json"  # transitoire : purgé avant chaque tentative
+PROMPT_NAME = "prompt.md"  # l'interface avec le cmd, archivée après la tentative
+USAGE_NAME = "usage.json"  # idem — ce que l'agent veut bien dire de sa consommation
 TAIL_LINES = 20  # queue du log rendue dans l'autopsie d'une tentative crashée
 TAIL_CHARS = 2000
 
@@ -66,16 +81,61 @@ class Context:
 
 
 def _agent(ctx: Context) -> dict:
-    """Exécute l'agent CLI configuré. Contrat : prompt.md → outcome.json."""
+    """Exécute l'agent CLI configuré, et range ses traces sous son nom.
+
+    L'usage de tokens rejoint le résultat quelle que soit l'issue : une
+    tentative crashée a consommé, elle aussi, et c'est là qu'on veut le
+    voir. L'archivage, lui, a lieu même si le bloc est interrompu.
+    """
+    workspace = ctx.workspace.resolve()
+    name = f"{ctx.run['node']}-{ctx.run['cycle']}-{ctx.run['attempt']}"
+    try:
+        return _attempt(ctx, workspace, name) | _usage(workspace)
+    finally:
+        _archive(workspace, name)
+
+
+def _usage(workspace: Path) -> dict:
+    """L'usage de tokens de la tentative, si l'agent en a laissé un.
+
+    Le format est celui que l'agent rapporte — `input_tokens`, les caches,
+    le coût, ce qu'il veut : personne ici ne l'interprète, le noyau ne
+    connaît toujours aucun agent. Pas de fichier, fichier illisible ou
+    vide : rien du tout, exactement comme avant.
+    """
+    try:
+        usage = json.loads((workspace / USAGE_NAME).read_text())
+    except (OSError, ValueError):
+        return {}
+    return {"usage": usage} if isinstance(usage, dict) and usage else {}
+
+
+def _archive(workspace: Path, name: str) -> None:
+    """Range les traces de nom fixe sous le nom de la tentative.
+
+    `prompt.md` et `usage.json` sont l'interface avec le `cmd` : des noms
+    fixes, que le nœud suivant écraserait. La tentative finie, ils
+    deviennent des pièces d'archive — `prompt-<nœud>-<passage>-<tentative>.md`,
+    `usage-…json`, à côté du journal déjà nommé ainsi. L'histoire complète
+    d'un item se lit alors dans son workspace, sans rien de réécrit.
+    """
+    for fixed in (PROMPT_NAME, USAGE_NAME):
+        path = workspace / fixed
+        if path.is_file():
+            path.replace(path.with_stem(f"{path.stem}-{name}"))
+
+
+def _attempt(ctx: Context, workspace: Path, name: str) -> dict:
+    """Une tentative d'agent. Contrat : prompt.md → outcome.json."""
     cfg = ctx.config["agent"]
     outcomes = sorted(ctx.node.get("edges") or {})
     subject = ctx.conn.execute(
         "SELECT subject_key FROM subject WHERE id = %s", (ctx.item["subject_id"],)
     ).fetchone()["subject_key"]
 
-    workspace = ctx.workspace.resolve()
-    outcome_path = workspace / "outcome.json"
-    outcome_path.unlink(missing_ok=True)
+    outcome_path = workspace / OUTCOME_NAME
+    for transient in (outcome_path, workspace / USAGE_NAME):
+        transient.unlink(missing_ok=True)  # rien de la tentative précédente
     prompt = os.path.expandvars(
         cfg["prompt"].replace("{subject_key}", subject)
     ) + (
@@ -86,7 +146,7 @@ def _agent(ctx: Context) -> dict:
         f'{{"outcome": <une valeur parmi {outcomes}>, "summary": "<une phrase>"}}\n'
         "Sans ce fichier, ta tentative est classée crashed et sera retentée."
     )
-    (workspace / "prompt.md").write_text(prompt)
+    (workspace / PROMPT_NAME).write_text(prompt)
 
     env = os.environ | {"GRAPHATOM_WORKSPACE": str(workspace),
                         "GRAPHATOM_SUBJECT_KEY": subject}
@@ -96,7 +156,7 @@ def _agent(ctx: Context) -> dict:
         # à lui seul — ce que son ordonnanceur de test y détruit ne regarde
         # ni la production ni les autres items
         env["GRAPHATOM_DSN"] = dsn
-    log = workspace / f"agent-{ctx.run['cycle']}-{ctx.run['attempt']}.log"
+    log = workspace / f"agent-{name}.log"
     pgid_file = workspace / PGID_FILE
     with log.open("w") as out:
         # session dédiée : l'agent est chef de son groupe, ses descendants aussi
@@ -260,7 +320,8 @@ def act(ctx: Context) -> dict:
     if "agent" in ctx.config:
         return _agent(ctx)
     ctx.simulate_work()
-    checkpoint = ctx.workspace / f"checkpoint-{ctx.run['cycle']}-{ctx.run['attempt']}.txt"
+    name = f"{ctx.run['node']}-{ctx.run['cycle']}-{ctx.run['attempt']}"
+    checkpoint = ctx.workspace / f"checkpoint-{name}.txt"
     checkpoint.write_text(
         f"travail de la tentative {ctx.run['attempt']} du passage {ctx.run['cycle']}\n")
     return {"outcome": "ok", "checkpoint": checkpoint.name}
