@@ -635,6 +635,19 @@ d'ordonnanceur, ~10 s — et non plus avec le crash-test, qui coûte 90 s
 parce qu'il tue l'ordonnanceur et attend l'expiration d'un bail. Peupler
 une base n'est pas tester le noyau.
 
+Même motif pour l'environnement du front. `node_modules` et `.next` sont
+ignorés par git : chaque worktree d'item repart à zéro, et une install à
+froid coûtait plusieurs minutes sur un bail de test déjà court. Ce qui se
+partage entre worktrees, c'est le **cache npm** —
+[`scripts/front-env.sh`](scripts/front-env.sh) l'épingle sur un chemin
+stable de l'hôte (`GRAPHATOM_NPM_CACHE`, `$HOME/.npm` par défaut), installe
+en `npm ci --prefer-offline` puis builde : ~4 s d'install et ~10 s de build
+cache chaud, contre plusieurs minutes à froid. C'est la voie normale du
+prompt de `test_frontend` ; l'install à froid reste le secours. Le bail du
+nœud est passé à **30 min** (`timeout_s: 1740`) : un test front réel paie
+l'environnement, un serveur et des captures multi-viewports, là où 20 min
+étaient calibrées sur du Python.
+
 **Un worktree git par item** — le pendant git du workspace `data/item-N`.
 `GRAPHATOM_REPO_DIR` est le clone de référence, plus l'atelier : le nœud
 `worktree` crée `$GRAPHATOM_REPO_DIR/.worktrees/rail-item-N` sur la branche
