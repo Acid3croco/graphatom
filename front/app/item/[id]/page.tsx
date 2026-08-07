@@ -10,8 +10,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { getItem, type Run } from "@/lib/api";
-import { duration, moment, tokens } from "@/lib/format";
+import { getItem, type Run, type Usage } from "@/lib/api";
+import { cost, count, duration, moment, tokens } from "@/lib/format";
 import { AnswerForm } from "@/components/answer-form";
 import { ApiDown } from "@/components/api-down";
 import { CriteriaList } from "@/components/criteria-list";
@@ -22,6 +22,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableFooter,
   TableHead,
   TableHeader,
   TableRow,
@@ -85,6 +86,16 @@ export default async function ItemPage({
   const open = questions.filter((q) => q.state === "open");
   const images = files.filter((f) => f.name.endsWith(".png"));
   const total = tokens(item.usage);
+  // le journal dit quel run a produit le step, le run porte son usage : la
+  // jointure se fait ici, une fois, et les lignes n'ont plus qu'à lire
+  const byRun = new Map(runs.map((run) => [run.id, run.usage]));
+  const usages = journal.map((entry) =>
+    entry.run_id === null ? undefined : byRun.get(entry.run_id),
+  );
+  // les totaux du pied de table sont la somme de ce que les lignes montrent,
+  // pas un second calcul : un step sans LLM y pèse zéro, et ça se voit
+  const sum = (key: string) =>
+    usages.reduce((acc, usage: Usage | undefined) => acc + (usage?.[key] ?? 0), 0);
 
   return (
     <div className="flex flex-col gap-6">
@@ -168,28 +179,62 @@ export default async function ItemPage({
               <TableHead>transition</TableHead>
               <TableHead>issue</TableHead>
               <TableHead>run</TableHead>
+              <TableHead>tokens in</TableHead>
+              <TableHead>tokens out</TableHead>
+              <TableHead>coût $</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {journal.map((entry) => (
-              <TableRow key={entry.version}>
-                <TableCell>v{entry.version}</TableCell>
-                <TableCell className="whitespace-nowrap">
-                  {moment(entry.at, true)}
-                </TableCell>
-                <TableCell className="whitespace-nowrap">
-                  {duration(entry.duration_s)}
-                </TableCell>
-                <TableCell>{entry.kind}</TableCell>
-                <TableCell>
-                  {entry.from_state ? `${entry.from_state} → ` : ""}
-                  {entry.to_state}
-                </TableCell>
-                <TableCell>{entry.outcome ?? ""}</TableCell>
-                <TableCell>{entry.run_id ?? ""}</TableCell>
-              </TableRow>
-            ))}
+            {journal.map((entry, index) => {
+              const usage = usages[index];
+              return (
+                <TableRow key={entry.version}>
+                  <TableCell>v{entry.version}</TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    {moment(entry.at, true)}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    {duration(entry.duration_s)}
+                  </TableCell>
+                  <TableCell>{entry.kind}</TableCell>
+                  <TableCell>
+                    {entry.from_state ? `${entry.from_state} → ` : ""}
+                    {entry.to_state}
+                  </TableCell>
+                  <TableCell>{entry.outcome ?? ""}</TableCell>
+                  <TableCell>{entry.run_id ?? ""}</TableCell>
+                  {/* le détail du cache tient dans l'infobulle : une colonne
+                      de plus dirait la même chose en prenant la place */}
+                  <TableCell
+                    className="whitespace-nowrap"
+                    title={tokens(usage) || undefined}
+                  >
+                    {count(usage?.input_tokens)}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    {count(usage?.output_tokens)}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    {cost(usage?.total_cost_usd)}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
+          <TableFooter>
+            <TableRow>
+              <TableCell colSpan={7}>total</TableCell>
+              <TableCell className="whitespace-nowrap">
+                {count(sum("input_tokens"))}
+              </TableCell>
+              <TableCell className="whitespace-nowrap">
+                {count(sum("output_tokens"))}
+              </TableCell>
+              <TableCell className="whitespace-nowrap">
+                {cost(sum("total_cost_usd"))}
+              </TableCell>
+            </TableRow>
+          </TableFooter>
         </Table>
       </section>
 
