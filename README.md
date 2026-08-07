@@ -129,6 +129,32 @@ seule : **release** (commit, push, PR, merge surveillé jusqu'au SHA),
 **verify_deploy** (conteneurs `Up`, `/items` en 200, logs du sync
 propres).
 
+**Un modèle et un effort par atome.** Le `cmd` d'un nœud est une ligne de
+shell : il porte aussi le coût. Tous les nœuds ne font pas le même travail,
+donc ils ne paient pas le même tarif :
+
+| nœuds | modèle / effort | pourquoi |
+| --- | --- | --- |
+| `implement` | défaut, `--effort high` | le seul vrai travail de conception |
+| `test_backend`, `test_frontend` | `--model sonnet --effort medium` | procéduraux, mais avec du jugement |
+| `worktree`, `release`, `deploy`, `verify_deploy` | `--model haiku --effort low` | scriptés pas à pas dans le prompt |
+| `cleanup`, `cleanup_unresolved` | pas d'agent | du shell pur, qui écrit son `outcome.json` |
+
+Le trade-off est assumé, pas gratuit : `release` et `deploy` touchent git et
+docker avec le modèle le moins cher. Ils sont scriptés pas à pas et leurs
+sorties d'échec (`conflict`, `failed`) mènent à l'escalade — mais si l'un
+se met à rater, la marche arrière est *une ligne de JSON* : remonter d'un
+cran (`haiku` → `sonnet`, `low` → `medium`) dans
+[`examples/code-task.json`](examples/code-task.json). Les compteurs de
+tentatives et le journal disent lequel a lâché ; c'est la donnée qui
+tranche, pas l'intuition.
+
+Même motif côté fixtures : le test frontend peuple sa base avec
+[`tests/seed.py`](tests/seed.py) — publier, admettre, quelques ticks
+d'ordonnanceur, ~10 s — et non plus avec le crash-test, qui coûte 90 s
+parce qu'il tue l'ordonnanceur et attend l'expiration d'un bail. Peupler
+une base n'est pas tester le noyau.
+
 **Un worktree git par item** — le pendant git du workspace `data/item-N`.
 `GRAPHATOM_REPO_DIR` est le clone de référence, plus l'atelier : le nœud
 `worktree` crée `$GRAPHATOM_REPO_DIR/.worktrees/rail-item-N` sur la branche

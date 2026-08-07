@@ -14,7 +14,7 @@
       "config": {
         "lease_s": 300,
         "agent": {
-          "cmd": "claude --dangerously-skip-permissions -p \"$(cat prompt.md)\"",
+          "cmd": "claude --dangerously-skip-permissions --model haiku --effort low -p \"$(cat prompt.md)\"",
           "timeout_s": 240,
           "prompt": "Agent de préparation du worktree. L'issue traitée : {subject_key} — extrais-en le numéro. $GRAPHATOM_REPO_DIR est le clone de référence, jamais l'atelier : chaque item travaille dans son propre worktree git, le pendant git de son workspace.\n\nLe worktree de l'item : `$GRAPHATOM_REPO_DIR/.worktrees/rail-item-<N>`, où `<N>` est le numéro de ton workspace (`data/item-<N>`).\n\n1. `git -C $GRAPHATOM_REPO_DIR fetch origin`.\n2. Si le worktree est déjà là (`git -C $GRAPHATOM_REPO_DIR worktree list`), ne le recrée pas — il porte le travail du cycle en cours. Va en 4.\n3. Sinon : `git -C $GRAPHATOM_REPO_DIR worktree add <chemin> -b rail/issue-<num> origin/main` — depuis `origin/main`, jamais depuis l'état local du clone qui peut garder les restes d'un autre cycle. Si la branche `rail/issue-<num>` existe déjà (reliquat), reprends-la telle quelle : même commande sans `-b`.\n4. Vérifie sur place : le worktree existe et `git -C <chemin> rev-parse --abbrev-ref HEAD` répond `rail/issue-<num>`.\n5. Écris worktree.md dans ton workspace : chemin, branche, SHA de départ, créé ou repris.\n\nSi git se plaint d'un verrou (`.lock`) — un autre item prépare son worktree dans le même clone au même instant —, attends 5 s et retente le pas, deux fois au plus.\n\noutcome `done` quand le worktree est prêt ; `failed` sinon — dis lequel des pas a lâché dans worktree.md."
         }
@@ -26,7 +26,7 @@
       "config": {
         "lease_s": 900,
         "agent": {
-          "cmd": "claude --dangerously-skip-permissions -p \"$(cat prompt.md)\"",
+          "cmd": "claude --dangerously-skip-permissions --effort high -p \"$(cat prompt.md)\"",
           "timeout_s": 840,
           "prompt": "Sujet : {subject_key} — extrais owner/repo et le numéro d'issue, puis lis l'issue : `gh issue view <num> --repo <owner/repo> --json title,body,comments`.\n\nLe dépôt de travail est le worktree de l'item : `$GRAPHATOM_REPO_DIR/.worktrees/rail-item-<N>`, où `<N>` est le numéro de ton workspace (`data/item-<N>`). Il est déjà là, sur la branche `rail/issue-<num>` partie d'`origin/main`. Tout se passe dans ce worktree — jamais dans $GRAPHATOM_REPO_DIR, qui est le clone de référence partagé par tous les items. Implémente ce que demande l'issue, dans le style du code existant : simple, plat, lisible, français dans les docstrings. Si l'implémentation existe déjà sur la branche, vérifie qu'elle couvre chaque point de l'issue et complète ce qui manque. Ne commite pas, ne pushe pas, ne touche pas à git. Écris dans ton workspace un fichier implementation.md : ce que tu as fait ou vérifié, fichier par fichier.\n\noutcome `done` quand le code est prêt à être testé."
         }
@@ -38,7 +38,7 @@
       "config": {
         "lease_s": 600,
         "agent": {
-          "cmd": "claude --dangerously-skip-permissions -p \"$(cat prompt.md)\"",
+          "cmd": "claude --dangerously-skip-permissions --model sonnet --effort medium -p \"$(cat prompt.md)\"",
           "timeout_s": 540,
           "prompt": "Agent de test backend. Le dépôt est le worktree de l'item : `$GRAPHATOM_REPO_DIR/.worktrees/rail-item-<N>`, où `<N>` est le numéro de ton workspace (`data/item-<N>`) — c'est là que l'implémentation vit, pas dans le clone de référence. L'issue testée : {subject_key}. Ta variable GRAPHATOM_DSN pointe déjà sur une base de test jetable — utilise-la sans crainte, elle n'est pas la production.\n\n1. Vérifie que tout s'importe : `uv run python -c \"import graphatom.cli, graphatom.web, graphatom.kernel, graphatom.scheduler, graphatom.github_sync\"` (depuis le worktree).\n2. Lance le crash-test : `uv run python tests/crash_test.py` (~60 s, 4 assertions).\n3. Vérifie côté serveur ce que l'issue exige (endpoints, requêtes SQL, logique) en lisant le code et en l'exerçant en Python si utile.\n\nÉcris test_backend.md dans ton workspace : ce que tu as vérifié, ce qui a cassé. outcome `pass` seulement si tout tient, sinon `fail`."
         }
@@ -50,9 +50,9 @@
       "config": {
         "lease_s": 900,
         "agent": {
-          "cmd": "claude --dangerously-skip-permissions -p \"$(cat prompt.md)\"",
+          "cmd": "claude --dangerously-skip-permissions --model sonnet --effort medium -p \"$(cat prompt.md)\"",
           "timeout_s": 840,
-          "prompt": "Agent de test frontend. Le dépôt est le worktree de l'item : `$GRAPHATOM_REPO_DIR/.worktrees/rail-item-<N>`, où `<N>` est le numéro de ton workspace (`data/item-<N>`). L'issue testée : {subject_key}. Ta variable GRAPHATOM_DSN pointe déjà sur une base de test jetable. Tu utilises un navigateur headless — pas seulement curl : il faut regarder comment le front se comporte.\n\n1. Peuple la base de test si vide (`uv run python tests/crash_test.py` le fait), puis démarre l'interface : `uv run graphatom serve --port 8899 &` (depuis le worktree). Le port 8899 est partagé entre items : s'il est pris, prends le suivant libre.\n2. Avec `chromium --headless=new`, charge chaque page concernée par l'issue (`--dump-dom` pour le DOM rendu, `--screenshot=<fichier>` pour la preuve visuelle) : la page des questions, /items, /item/<id>.\n3. Vérifie dans le DOM rendu que ce que l'issue demande est vraiment là (tables remplies, SVG du graph présent, état courant marqué, liens qui pointent juste), et que les screenshots ne sont pas vides.\n4. Arrête le serveur que tu as lancé.\n\nGarde les screenshots dans ton workspace et écris test_frontend.md : pages vues, ce qui s'affiche, ce qui cloche. outcome `pass` ou `fail`."
+          "prompt": "Agent de test frontend. Le dépôt est le worktree de l'item : `$GRAPHATOM_REPO_DIR/.worktrees/rail-item-<N>`, où `<N>` est le numéro de ton workspace (`data/item-<N>`). L'issue testée : {subject_key}. Ta variable GRAPHATOM_DSN pointe déjà sur une base de test jetable. Tu utilises un navigateur headless — pas seulement curl : il faut regarder comment le front se comporte.\n\n1. Peuple la base de test (`uv run python tests/seed.py`, ~15 s : deux items, un terminé et un en question ouverte — pas le crash-test, qui coûte 90 s pour la même chose), puis démarre l'interface : `uv run graphatom serve --port 8899 &` (depuis le worktree). Le port 8899 est partagé entre items : s'il est pris, prends le suivant libre.\n2. Avec `chromium --headless=new`, charge chaque page concernée par l'issue (`--dump-dom` pour le DOM rendu, `--screenshot=<fichier>` pour la preuve visuelle) : la page des questions, /items, /item/<id>.\n3. Vérifie dans le DOM rendu que ce que l'issue demande est vraiment là (tables remplies, SVG du graph présent, état courant marqué, liens qui pointent juste), et que les screenshots ne sont pas vides.\n4. Arrête le serveur que tu as lancé.\n\nGarde les screenshots dans ton workspace et écris test_frontend.md : pages vues, ce qui s'affiche, ce qui cloche. outcome `pass` ou `fail`."
         }
       },
       "edges": { "pass": "review", "fail": "escalate" }
@@ -72,7 +72,7 @@
       "config": {
         "lease_s": 600,
         "agent": {
-          "cmd": "claude --dangerously-skip-permissions -p \"$(cat prompt.md)\"",
+          "cmd": "claude --dangerously-skip-permissions --model haiku --effort low -p \"$(cat prompt.md)\"",
           "timeout_s": 540,
           "prompt": "Agent de release. Le dépôt est le worktree de l'item : `$GRAPHATOM_REPO_DIR/.worktrees/rail-item-<N>`, où `<N>` est le numéro de ton workspace (`data/item-<N>`) — il est sur la branche `rail/issue-<num>`. L'issue traitée : {subject_key} — extrais-en owner/repo et le numéro. La review humaine a répondu « merger » : à toi de fermer la boucle git. Toutes les commandes git partent du worktree, pas du clone de référence.\n\n1. Depuis le worktree, commit tout ce qui traîne : `git add -A`, message = le titre de l'issue en première ligne, une ligne vide, puis `Closes #<num>`. S'il n'y a rien à committer, passe à l'étape suivante.\n2. `git push -u origin rail/issue-<num>`.\n3. La PR : `gh pr view rail/issue-<num> --repo <owner/repo> --json number,url,state` ; si elle n'existe pas — ou si son `state` n'est pas `OPEN`, une PR d'un cycle précédent portant le même nom de branche — alors `gh pr create --repo <owner/repo> --head rail/issue-<num> --fill`. Puis `gh pr merge <num-pr> --repo <owner/repo> --merge`.\n4. Surveille le merge : relis `gh pr view <num-pr> --repo <owner/repo> --json state,merged,mergeCommit` toutes les 15 s jusqu'à `merged: true`, deux minutes au plus.\n5. Écris release.md dans ton workspace : branche, numéro et URL de la PR, SHA du commit de merge, ce qui s'est passé.\n\nNe retire ni le worktree ni la branche : un nœud de cleanup s'en charge à la sortie du graph.\n\noutcome `done` quand la PR est mergée et le SHA noté ; `conflict` si le push, la création ou le merge est refusé (conflit avec un autre item, checks rouges, droits) — dis lequel dans release.md."
         }
@@ -84,7 +84,7 @@
       "config": {
         "lease_s": 660,
         "agent": {
-          "cmd": "claude --dangerously-skip-permissions -p \"$(cat prompt.md)\"",
+          "cmd": "claude --dangerously-skip-permissions --model haiku --effort low -p \"$(cat prompt.md)\"",
           "timeout_s": 600,
           "prompt": "Agent de déploiement. Tu déploies depuis le clone de référence $GRAPHATOM_REPO_DIR — c'est `origin/main` mergé qui part en prod, pas la branche de l'item. L'issue déployée : {subject_key}. Les conteneurs rejouent le code du clone : le remettre à jour puis reconstruire suffit à mettre le rail à jour.\n\n1. Aligne le clone de référence sur le merge : `git -C $GRAPHATOM_REPO_DIR fetch origin`, `git -C $GRAPHATOM_REPO_DIR switch -f main`, `git -C $GRAPHATOM_REPO_DIR reset --hard origin/main`. Aucun travail ne vit dans ce clone — il n'est plus l'atelier —, le reset est sans perte. Ne touche pas à `.worktrees/` : ce sont les ateliers des autres items.\n2. Depuis $GRAPHATOM_REPO_DIR : `GITHUB_TOKEN=$(gh auth token) docker compose up -d --build github-sync web` (compte ~3 min de build).\n3. Ne touche à rien d'autre : ni au worker hôte — c'est lui qui t'exécute —, ni à `db`, ni à `scheduler`.\n4. `docker compose ps` : `github-sync` et `web` doivent être `Up`.\n5. Écris deploy.md dans ton workspace : le SHA de main après reset, la commande lancée, la fin du log de build, l'état des conteneurs.\n\noutcome `done` si le build et le démarrage passent ; `failed` sinon — colle l'erreur dans deploy.md."
         }
@@ -96,7 +96,7 @@
       "config": {
         "lease_s": 420,
         "agent": {
-          "cmd": "claude --dangerously-skip-permissions -p \"$(cat prompt.md)\"",
+          "cmd": "claude --dangerously-skip-permissions --model haiku --effort low -p \"$(cat prompt.md)\"",
           "timeout_s": 360,
           "prompt": "Agent de vérification du déploiement. Le clone de référence est $GRAPHATOM_REPO_DIR — c'est de là que tournent les conteneurs. L'issue déployée : {subject_key}. Tu ne redéploies rien — tu constates.\n\n1. `docker compose ps` depuis $GRAPHATOM_REPO_DIR : `github-sync` et `web` sont `Up`, et pas en boucle de redémarrage.\n2. `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8850/items` répond 200.\n3. `docker compose logs --tail 50 github-sync` : le dernier poll ne montre ni traceback ni erreur.\n4. Écris verify_deploy.md dans ton workspace : l'état des conteneurs, le code HTTP, les dernières lignes du log.\n\noutcome `pass` seulement si les trois tiennent, sinon `fail`."
         }
