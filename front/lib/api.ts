@@ -130,6 +130,9 @@ export type ItemDetail = {
   files: WorkspaceFile[];
 };
 
+/** Le détail d'un item tel que les pages le lisent, `validate.md` compris. */
+export type ItemView = ItemDetail & { validate: string | null };
+
 export type OpenQuestions = { token: string; questions: Question[] };
 
 async function get<T>(path: string): Promise<T> {
@@ -158,6 +161,24 @@ export async function getFileText(href: string): Promise<string | null> {
 export const getItems = () => get<Item[]>("/api/items");
 
 export const getItem = (id: number) => get<ItemDetail>(`/api/item/${id}`);
+
+/**
+ * Le détail d'un item, plus le texte de `validate.md`.
+ *
+ * L'API inline `criteria.md` mais pas `validate.md` : il arrive par son
+ * `href` de workspace, lu ici — le serveur parle au serveur. La section
+ * des critères de succès en a besoin à chaque tour de sondage : la
+ * jointure se fait donc une fois, ici, et la page comme la route de relais
+ * lisent le même objet.
+ */
+export async function getItemView(id: number): Promise<ItemView> {
+  const detail = await getItem(id);
+  const validated = detail.files.find((f) => f.name === "validate.md");
+  return {
+    ...detail,
+    validate: validated ? await getFileText(validated.href) : null,
+  };
+}
 
 export const getQuestions = () => get<OpenQuestions>("/api/questions");
 

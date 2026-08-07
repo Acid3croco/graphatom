@@ -75,17 +75,29 @@ export function issueNumber(url: string): string {
   return `#${url.split("/").pop()}`;
 }
 
-/** Un horodatage ISO en jour/mois heure — vide quand il n'y en a pas. */
+/**
+ * Un horodatage ISO en jour/mois heure — vide quand il n'y en a pas.
+ *
+ * En UTC, comme les pages stdlib, et non dans le fuseau de qui lit : ces
+ * lignes s'écrivent maintenant côté serveur *et* côté client, et un même
+ * instant doit s'y lire pareil — sinon le serveur et le navigateur ne
+ * rendent pas le même texte, et l'hydratation le reproche à juste titre.
+ */
 export function moment(iso: string | null | undefined, withSeconds = false): string {
   if (!iso) {
     return "";
   }
   const at = new Date(iso);
   const time = at.toLocaleTimeString("fr-FR", {
+    timeZone: "UTC",
     hour: "2-digit",
     minute: "2-digit",
     ...(withSeconds ? { second: "2-digit" } : {}),
   });
-  const day = at.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" });
+  const day = at.toLocaleDateString("fr-FR", {
+    timeZone: "UTC",
+    day: "2-digit",
+    month: "2-digit",
+  });
   return `${day} ${time}`;
 }

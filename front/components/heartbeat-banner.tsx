@@ -9,33 +9,18 @@
  * l'absence de signal est le signal. Les deux processus sont séparés,
  * chacun peut mourir seul — l'alarme sonne donc dès qu'un seul se tait.
  *
- * Le rafraîchissement du front tient entièrement ici : un sondage SWR
- * toutes les 5 s sur la route `/api/heartbeat` du front, et un
- * `router.refresh()` derrière, qui refait rendre les composants serveur de
- * la page courante sans la recharger. Rien n'est poussé par le serveur —
- * le client demande, c'est tout. Le bandeau arrive rendu côté serveur
- * (`initial`), donc il est déjà juste au premier octet, avant le premier
- * tour de sondage.
+ * Le bandeau sonde sa propre route, `/api/heartbeat`, plus vite que les
+ * sections de données — deux secondes — et ne repeint que lui-même. Il ne
+ * commande plus rien à personne : chaque section de page a son sondage et
+ * son rendu. Le bandeau arrive rendu côté serveur (`initial`), donc il est
+ * déjà juste au premier octet, avant le premier tour de sondage.
  */
-import useSWR from "swr";
-import { useRouter } from "next/navigation";
 import { Activity, TriangleAlert } from "lucide-react";
 
 import type { Beat, Heartbeat } from "@/lib/api";
 import { ago, moment } from "@/lib/format";
+import { BEAT_FEED, BEAT_MS, useSlice } from "@/lib/live";
 import { cn } from "@/lib/utils";
-
-const POLL_MS = 5000;
-
-// une API muette rend un 502 à corps d'erreur, qui n'a aucun battement :
-// c'est une erreur pour SWR, pas un objet à lire — sinon le bandeau tombe
-const fetcher = async (url: string) => {
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`heartbeat : ${res.status}`);
-  }
-  return res.json();
-};
 
 /** Un battement en toutes lettres : son âge, ou l'heure où il s'est tu. */
 function one(name: string, beat: Beat): string {
@@ -62,14 +47,12 @@ function text(beat: Heartbeat | null): string {
 }
 
 export function HeartbeatBanner({ initial }: { initial: Heartbeat | null }) {
-  const router = useRouter();
-  const { data } = useSWR<Heartbeat>("/api/heartbeat", fetcher, {
-    refreshInterval: POLL_MS,
-    fallbackData: initial ?? undefined,
-    // le battement rythme aussi le contenu : chaque tour repeint la page
-    onSuccess: () => router.refresh(),
-  });
-  const beat = data ?? null;
+  const beat = useSlice<Heartbeat, Heartbeat | null>(
+    BEAT_FEED,
+    (data) => data,
+    initial,
+    BEAT_MS,
+  );
   const alert = alarm(beat);
 
   return (

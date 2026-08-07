@@ -7,22 +7,30 @@
  * l'unique porte d'écriture de l'API avec son jeton. Le navigateur ne
  * parle jamais à l'API directement — il ne connaît que le front.
  *
- * Une fois la réponse enregistrée, `router.refresh()` refait rendre la
- * page : la question passe d'ouverte à répondue sans rechargement.
+ * Une fois la réponse enregistrée, la route que la page sonde (`feed`) est
+ * relue tout de suite, sans attendre le tour suivant : la question passe
+ * d'ouverte à répondue sous les yeux, et rien d'autre de la page ne bouge.
  */
-import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { useSWRConfig } from "swr";
 
 import type { Question } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 
-export function AnswerForm({ question }: { question: Question }) {
-  const router = useRouter();
+export function AnswerForm({
+  question,
+  feed,
+}: {
+  question: Question;
+  feed: string;
+}) {
+  const { mutate } = useSWRConfig();
   const [message, setMessage] = useState<string | null>(null);
-  const [pending, startTransition] = useTransition();
+  const [pending, setPending] = useState(false);
 
   async function answer(option: string) {
     setMessage(null);
+    setPending(true);
     try {
       const res = await fetch("/api/answer", {
         method: "POST",
@@ -34,8 +42,10 @@ export function AnswerForm({ question }: { question: Question }) {
     } catch (err) {
       setMessage(`réponse impossible : ${err}`);
       return;
+    } finally {
+      setPending(false);
     }
-    startTransition(() => router.refresh());
+    mutate(feed);
   }
 
   return (
