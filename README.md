@@ -80,6 +80,9 @@ uv run python tests/shell_test.py                    # les nœuds shell de code-
 uv run python tests/checklist_test.py                # le nœud validate : le routage
                                                      # du graph, et la checklist citée
                                                      # dans la question de review
+uv run python tests/criteria_test.py                 # le nœud scope qui parle : les
+                                                     # critères postés sur l'issue,
+                                                     # et la sortie `unclear`
 uv run python tests/api_test.py                      # l'API JSON du canal web : les
                                                      # mêmes vues en données, sans
                                                      # base ni serveur
@@ -491,12 +494,48 @@ au worktree : il lit, il écrit, il crée des issues.
   Outcome `split`, vers le terminal
   dédié `close_split` ; les filles suivent le pipeline normal, admises par
   le sync comme n'importe quelle issue.
+- **Vraiment ambiguë** (plusieurs lectures incompatibles, objectif qu'aucune
+  preuve ne peut trancher) → il écrit quand même `criteria.md` — sa
+  meilleure lecture — et sort `unclear`, vers le nœud d'attente
+  **`clarify`** : une question fermée sur l'issue, `go` (on part sur cette
+  lecture, l'implémentation démarre) ou `reformuler` (l'humain réécrit le
+  corps de l'issue, et `scope` rejoue depuis zéro au passage suivant).
+  `clarify` porte `escalade` — l'arête de retour vers `scope` est bornée par
+  le budget d'escalades de l'item —, et l'expiration part en `escalate`
+  comme celle de la review.
+
+`unclear` est **l'exception, pas la paresse** : s'il existe une lecture
+raisonnable unique, `scope` la prend et ne pose aucune question. Ses
+critères étant publiés sur l'issue (ci-dessous), un contresens y coûte un
+commentaire de l'humain, pas un cycle.
 
 `criteria.md` est **contractuel** pour la suite du cycle : `implement` le
 lit comme cahier des charges, les deux agents de test comme checklist en
 plus de l'issue, et le nœud `validate` le coche formellement. Une
 fille porte déjà ses critères dans son corps — figés au découpage : `scope`
 les reprend tels quels au lieu de les réinventer.
+
+**Le rail dit sa lecture avant d'écrire une ligne.** Dès que `criteria.md`
+existe dans le workspace d'un item actif, le canal GitHub le publie en
+commentaire de l'issue — une prise de parole comme les autres : intention
+commise en base avant le POST, réconciliation par marqueur. La clé logique
+porte le graph, la génération et l'**empreinte du contenu** : deux ticks sur
+des critères inchangés ne laissent qu'un commentaire, et des critères
+réécrits — après un `reformuler`, après une escalade — se redisent au lieu
+de rester muets. L'humain voit ce que le rail a compris pendant que ça coûte
+encore un commentaire, et non un cycle entier découvert à la review.
+
+Le **corps de l'issue n'est jamais édité** par le rail — c'est le territoire
+de l'humain ; la seule exception reste le bloc `## Découpée en` de la
+découpe. La spécification du rail vit en commentaire, et `implement` lit
+titre, corps et commentaires : rien de plus à câbler.
+
+Quand le corps de l'issue est **vide ou squelettique** — un titre seul —,
+les critères ne suffisent plus à dire ce qui a été compris : `criteria.md`
+devient une **spécification proposée**, ouverte de trois sections courtes
+(*Compris*, *Contexte technique*, *Approche*) avant la liste numérotée, qui
+reste là dans tous les cas. Même fichier, même mécanique, juste plus étoffé
+quand l'issue l'exige.
 
 **Une porte de constat avant la review.** Les critères étaient figés, mais
 rien ne les cochait : chaque agent de test relisait `criteria.md` à sa
@@ -525,11 +564,14 @@ Pas de critères — `criteria.md` absent ou vide, cas d'un cycle antérieur à
 checklist qui n'existe pas ne bloque rien rétroactivement ; la review reste
 le juge.
 
-**La question de review embarque la checklist.** Le canal GitHub cite
-`validate.md` dans le commentaire de la question — en bloc de citation,
-borné aux quarante premières lignes, avec le lien vers la preview du
-fichier entier. L'humain voit les critères cochés et leurs preuves, pas
-seulement une option à choisir. Le sync lit le fichier dans le workspace de
+**Toute question du rail embarque les deux fichiers.** Le canal GitHub cite
+`criteria.md` — ce qui est demandé — puis `validate.md` — ce qui est tenu —
+dans le commentaire de la question, en bloc de citation, bornés
+respectivement aux quatre-vingts et aux quarante premières lignes, avec le
+lien vers la preview du fichier entier. L'humain voit les critères et leurs
+preuves, pas seulement une option à choisir : c'est vrai de la review, et
+c'est ce qui rend la question de `clarify` lisible — elle porte la lecture
+que le rail propose. Le sync lit les fichiers dans le workspace de
 l'item, comme le frontend : `./data` est donc monté en lecture seule dans
 le conteneur `github-sync`, comme il l'était déjà dans `web`. Pas de
 fichier — question posée avant `validate`, cycle plus ancien, `data/` hors
