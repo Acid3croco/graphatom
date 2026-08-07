@@ -40,10 +40,17 @@ services:
   # l'ordonnanceur conteneurisé convient aux graphs à stubs ; les graphs à
   # agents (claude, chromium headless) demandent un worker sur l'hôte :
   #   GRAPHATOM_DSN=postgresql://graphatom:graphatom@127.0.0.1:54322/graphatom \
-  #   GRAPHATOM_AGENT_DSN=<base jetable> GRAPHATOM_REPO_DIR=<clone de référence> graphatom run
+  #   GRAPHATOM_AGENT_DSN=<instance jetable> GRAPHATOM_REPO_DIR=<clone de référence> graphatom run
+  #
+  # GRAPHATOM_AGENT_DSN désigne une instance, pas une base : chaque item y
+  # reçoit la sienne, graphatom_test_item_<id>, créée à la volée et droppée
+  # par son cleanup. Le rôle doit donc avoir CREATEDB sur cette instance —
+  # c'est le cas de `graphatom`, POSTGRES_USER du conteneur ci-dessus.
   #
   # GRAPHATOM_REPO_DIR est le clone de référence, pas l'atelier : code-task y
   # crée un worktree par item (.worktrees/rail-item-N) et le retire à la sortie.
+  # Rien de ce qu'un agent lance ne doit voir ces deux valeurs-là : les
+  # scripts de test épinglent les leurs (voir README, « hermétisme »).
   scheduler:
     profiles: ["stub"]
     build: .

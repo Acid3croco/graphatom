@@ -61,6 +61,9 @@ uv run python tests/links_test.py                    # les liens du frontend ver
                                                      # l'issue et la PR, sans base
 uv run python tests/depends_test.py                  # `Depends-on: #N` : l'admission
                                                      # attend, sans base ni réseau
+uv run python tests/hermetic_test.py                 # ce qu'un agent lance ne voit
+                                                     # ni la base ni le dépôt de la
+                                                     # production
 uv run python tests/passage_test.py                  # un retry d'escalade rend la
                                                      # marge de tentatives des nœuds,
                                                      # jamais le budget d'escalades
@@ -209,8 +212,39 @@ alors `prompt.md` dans le workspace, lance la commande configurée, et lit
 Le contrat est minuscule et agnostique : n'importe quel agent CLI (claude,
 codex, pi…) fait l'affaire ; le kernel n'en connaît aucun. Pas
 d'`outcome.json` valide → `crashed`, retenté puis escaladé — comme
-n'importe quel bloc. L'agent ne voit jamais la base du rail :
-`GRAPHATOM_AGENT_DSN` lui substitue une base jetable.
+n'importe quel bloc.
+
+**Un processus lancé par un agent ne voit jamais ni la base ni le dépôt de
+la production.** C'est la règle. Elle a coûté une implémentation : un agent
+de test avait lancé un ordonnanceur sur la base jetable *partagée*, en
+gardant le `GRAPHATOM_REPO_DIR` de la production dans son environnement ;
+le cleanup d'un item de test a retiré le worktree d'un vrai item portant le
+même numéro. Trois barrières indépendantes la tiennent maintenant :
+
+1. **Une base jetable par item.** `GRAPHATOM_AGENT_DSN` désigne une
+   *instance*, pas une base : le bloc y crée `graphatom_test_item_<id>` à la
+   volée (idempotent) et pose la `GRAPHATOM_DSN` de l'agent dessus. Deux
+   items qui testent en même temps ne se marchent plus dessus, et un
+   `init-db --drop` ne vide que son propre bac à sable. Le rôle doit avoir
+   `CREATEDB` sur cette instance : c'est le cas de `graphatom`, le
+   `POSTGRES_USER` du conteneur postgres.
+2. **Le `REPO_DIR` ne fuit pas.** Les scripts qui lancent un ordonnanceur —
+   `crash_test.py`, `reconnect_test.py`, la fixture `seed.py` — épinglent
+   `GRAPHATOM_REPO_DIR` sur *leur* dépôt, et retirent l'instance jetable de
+   l'environnement, avant de lancer quoi que ce soit. Un rail de test qui
+   crée des worktrees les crée alors sous son propre `.worktrees/`.
+3. **Le cleanup vérifie sa cible.** Avant `worktree remove --force`, le
+   shell exige que le worktree soit enregistré dans *son* `REPO_DIR`, sous
+   `.worktrees/`, et qu'il porte la branche `rail/issue-<num>` du sujet de
+   *son* item (`GRAPHATOM_SUBJECT_KEY`). Sinon il ne touche à rien, l'écrit
+   dans `cleanup.md`, et rend `done` quand même — un cleanup ne bloque
+   jamais une sortie. Le même nœud drop la base jetable de l'item
+   (`graphatom drop-agent-db`), qui refuse toute base ne portant pas le
+   préfixe `graphatom_test_item_`.
+
+[`tests/hermetic_test.py`](tests/hermetic_test.py) exerce les trois, cleanup
+du graph joué tel quel sur un dépôt jetable. Rien de tout cela n'est dans le
+noyau : c'est l'affaire du canal et des `cmd` du graph.
 
 **La révocation a deux moitiés** : l'autorité en base, et le processus.
 L'agent tourne dans sa propre session — au timeout, le bloc révoque tout

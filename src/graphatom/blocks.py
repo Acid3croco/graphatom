@@ -10,6 +10,11 @@ bloc écrit `prompt.md` dans le workspace, lance la commande configurée
 (claude, codex, pi, n'importe quoi), et lit `outcome.json`. Pas de
 fichier d'issue valide = crashed, et le noyau route comme d'habitude.
 
+L'agent travaille dans son propre univers : sa `GRAPHATOM_DSN` est la base
+jetable de son item — une par item, créée à la volée —, jamais celle du
+rail ni celle du voisin. Sa clé de sujet est dans l'environnement : le
+cleanup s'en sert pour reconnaître son propre worktree.
+
 L'agent tourne dans son propre groupe de processus : au timeout, c'est
 tout le groupe qui est révoqué — un descendant ne survit pas au bail.
 Le pgid est aussi persisté dans le workspace : si c'est le worker qui
@@ -28,6 +33,8 @@ import time
 from pathlib import Path
 
 import psycopg
+
+from . import db
 
 DATA_DIR = Path("data")  # les tests le font pointer sur un répertoire temporaire
 OUTBOX_NAME = "effects_outbox.log"  # sous DATA_DIR, résolu au moment de l'effet
@@ -81,10 +88,14 @@ def _agent(ctx: Context) -> dict:
     )
     (workspace / "prompt.md").write_text(prompt)
 
-    env = os.environ | {"GRAPHATOM_WORKSPACE": str(workspace)}
-    if "GRAPHATOM_AGENT_DSN" in env:
-        # l'agent ne voit jamais la base du rail : sa DSN est une base jetable
-        env["GRAPHATOM_DSN"] = env["GRAPHATOM_AGENT_DSN"]
+    env = os.environ | {"GRAPHATOM_WORKSPACE": str(workspace),
+                        "GRAPHATOM_SUBJECT_KEY": subject}
+    dsn = db.agent_dsn(ctx.item["id"])
+    if dsn:
+        # l'agent ne voit jamais la base du rail : la sienne est jetable, et
+        # à lui seul — ce que son ordonnanceur de test y détruit ne regarde
+        # ni la production ni les autres items
+        env["GRAPHATOM_DSN"] = dsn
     log = workspace / f"agent-{ctx.run['cycle']}-{ctx.run['attempt']}.log"
     pgid_file = workspace / PGID_FILE
     with log.open("w") as out:

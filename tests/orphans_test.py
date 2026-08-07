@@ -37,6 +37,10 @@ from graphatom import blocks  # noqa: E402
 FACTICE = "ps -o pgid= -p $$ > pgid.txt; sleep 300 & sleep 300"
 REPOND = """printf '{"outcome": "ok", "summary": "fait"}' > outcome.json"""
 ECHOUE = "echo 'Execution error' >&2; exit 42"  # sort mal, sans outcome.json
+# hermétisme : sans instance jetable dans l'environnement, le bloc ne dérive
+# aucune base — les agents factices d'ici n'en ont pas besoin, et l'item 7
+# du test ne va pas créer la base d'un item 7 qui existe pour de vrai
+os.environ.pop("GRAPHATOM_AGENT_DSN", None)
 TIMEOUT_S = 2
 ITEM_ID = 7  # l'item du contexte de test : son workspace porte la trace
 RUN_ID = 1  # le run du contexte de test : la trace lui appartient

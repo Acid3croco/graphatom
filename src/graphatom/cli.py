@@ -15,6 +15,9 @@ def main() -> None:
     sp = sub.add_parser("init-db", help="créer les tables")
     sp.add_argument("--drop", action="store_true")
 
+    sub.add_parser("drop-agent-db",
+                   help="dropper la base jetable de l'item — le cleanup du graph l'appelle")
+
     sp = sub.add_parser("publish", help="valider et publier un bundle JSON")
     sp.add_argument("bundle", type=Path)
 
@@ -54,6 +57,13 @@ def main() -> None:
     if args.cmd == "init-db":
         db.init_db(drop=args.drop)
         print("base initialisée")
+        return
+    if args.cmd == "drop-agent-db":
+        # avant toute connexion : on ne drop pas une base qu'on tient ouverte
+        try:
+            print(f"base jetable droppée : {db.drop_agent_db()}")
+        except ValueError as err:
+            sys.exit(str(err))
         return
     if args.cmd == "run":
         scheduler.run_forever()
