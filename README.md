@@ -47,6 +47,10 @@ uv run python tests/reconnect_test.py                # couper la base sous le wo
                                                      # il se reconnecte et reprend
 ```
 
+Les tests ne touchent jamais au `data/` du repo : chacun travaille dans un
+répertoire temporaire à lui, effacé à la sortie. Le `data/` d'un checkout,
+c'est le workspace vivant d'un rail — les items en cours y écrivent.
+
 ## Le canal humain (milestone 2)
 
 ```sh

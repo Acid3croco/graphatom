@@ -17,9 +17,11 @@ Usage : uv run python tests/reconnect_test.py
 """
 
 import os
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -28,9 +30,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import psycopg  # noqa: E402
 
-from graphatom import db, kernel, scheduler  # noqa: E402
+from graphatom import blocks, db, kernel, scheduler  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
+# comme le crash-test : le test travaille dans un répertoire à lui, jamais
+# dans ROOT/data, qui peut être le data/ vivant d'un rail (workspaces d'items)
+WORK = Path(tempfile.mkdtemp(prefix="graphatom-reconnect-test-"))
+blocks.DATA_DIR = WORK / "data"  # les blocs joués en direct écrivent là aussi
 COUPURES = 3       # trois coupures d'affilée : le backoff doit rester borné
 ENTRE_S = 2.0      # temps laissé au worker pour retravailler entre deux
 TIMEOUT_S = 150    # un run fauché en vol coûte un bail (30 s) avant d'être retenté
@@ -48,7 +54,7 @@ def scheduler_proc(journal: Path) -> subprocess.Popen:
     # comme le crash-test : le binaire du venv, dans son propre groupe
     return subprocess.Popen(
         [str(ROOT / ".venv" / "bin" / "graphatom"), "run"],
-        cwd=ROOT, start_new_session=True,
+        cwd=WORK, start_new_session=True,
         stdout=journal.open("w"), stderr=subprocess.STDOUT,
     )
 
@@ -200,8 +206,7 @@ def main() -> None:
     item_id = int(sh("admit", revision, "pipeline-x:oom"))
     print(f"révision {revision[:12]}…, item {item_id}")
 
-    journal = ROOT / "data" / "reconnect_test.log"
-    journal.parent.mkdir(parents=True, exist_ok=True)
+    journal = WORK / "reconnect_test.log"
     proc = scheduler_proc(journal)
     try:
         with db.connect() as conn:
@@ -218,4 +223,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        shutil.rmtree(WORK, ignore_errors=True)

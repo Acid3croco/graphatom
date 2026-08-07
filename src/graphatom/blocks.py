@@ -23,8 +23,8 @@ from pathlib import Path
 
 import psycopg
 
-DATA_DIR = Path("data")
-OUTBOX = DATA_DIR / "effects_outbox.log"
+DATA_DIR = Path("data")  # les tests le font pointer sur un répertoire temporaire
+OUTBOX_NAME = "effects_outbox.log"  # sous DATA_DIR, résolu au moment de l'effet
 GRACE_S = 5.0  # entre le SIGTERM et le SIGKILL du groupe de l'agent
 
 
@@ -171,11 +171,12 @@ def effect(ctx: Context) -> dict:
         return {"outcome": "applied", "op_id": row["op_id"]}
 
     # « interroger la cible par la clé logique » — la cible stub est l'outbox
-    OUTBOX.parent.mkdir(parents=True, exist_ok=True)
-    OUTBOX.touch()
-    if logical_key not in OUTBOX.read_text():
+    outbox = DATA_DIR / OUTBOX_NAME
+    outbox.parent.mkdir(parents=True, exist_ok=True)
+    outbox.touch()
+    if logical_key not in outbox.read_text():
         ctx.simulate_work()
-        with OUTBOX.open("a") as f:
+        with outbox.open("a") as f:
             f.write(f"{logical_key}\t{row['intent']}\n")
 
     with conn.transaction():
