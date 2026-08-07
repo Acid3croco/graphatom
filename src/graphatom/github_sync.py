@@ -20,7 +20,8 @@ tout le reste :
                   enregistre la réponse ; l'ordonnanceur route
   5. état       — un label `rail:<état>` projette l'état de l'item actif,
                   repeint à chaque tick sur les issues ouvertes, retiré au
-                  terminal sans condition — l'issue peut être déjà fermée
+                  terminal sans condition — l'issue peut être déjà fermée ;
+                  `rail:stalled` s'y ajoute quand le worker ne bat plus
   6. rapports   — un item terminal reçoit son commentaire de clôture
 
 Aucun parsing de langage naturel. Aucune lecture de GitHub comme état
@@ -38,13 +39,15 @@ import urllib.request
 
 from psycopg import Connection
 
-from . import channel, db, graph, kernel
+from . import channel, db, graph, heartbeat, kernel
 
 API = "https://api.github.com"
 LABEL = "graphatom"
 RAIL = "rail:"        # préfixe des labels d'état — l'espace de noms du rail
 RAIL_COLOR = "1f6feb"  # couleur unie : un label d'état se reconnaît d'un coup d'œil
 BLOCKED = f"{RAIL}blocked"  # pas un état d'item : une admission différée se voit
+STALLED = f"{RAIL}stalled"  # pas un état d'item non plus : le worker ne bat plus
+STALLED_COLOR = "d73a4a"    # le rouge de l'alarme, seule exception à la couleur unie
 DEPENDS = "Depends-on:"     # la grammaire fermée des dépendances, dans le corps
 
 
@@ -101,9 +104,10 @@ class GitHub:
 
     def create_label(self, name: str) -> None:
         # les labels du rail naissent à la volée ; 422 = il existe déjà, tant mieux
+        color = STALLED_COLOR if name == STALLED else RAIL_COLOR
         try:
             self._call("POST", f"/repos/{self.repo}/labels",
-                       {"name": name, "color": RAIL_COLOR})
+                       {"name": name, "color": color})
         except urllib.error.HTTPError as exc:
             if exc.code != 422:
                 raise
@@ -367,33 +371,41 @@ def _collect_answers(conn: Connection, gh: GitHub, allowed: set[str]) -> None:
                 break  # la première réponse valide gagne
 
 
-def _paint_states(conn: Connection, gh: GitHub, blocked: set[int]) -> None:
-    """Le label `rail:<état>` : une projection possédée par le rail.
+def _paint_states(conn: Connection, gh: GitHub, blocked: set[int],
+                  stalled: bool) -> None:
+    """Les labels du rail : une projection possédée par le rail.
 
     Comme la colonne d'un board — jamais lue comme état d'item, seulement
-    réécrite depuis la base : l'ancien label rail part, le nouveau arrive.
-    Un item terminal n'en porte aucun (le rapport suffit) et un label
-    bricolé à la main est simplement repeint au tick suivant.
+    réécrite depuis la base : les anciens labels rail partent, ceux qu'on
+    veut arrivent. Un item terminal n'en porte aucun (le rapport suffit) et
+    un label bricolé à la main est simplement repeint au tick suivant.
 
     `rail:blocked` sort du même pinceau sans venir de la base : une issue
     dont l'admission est différée n'a pas d'item, donc pas d'état — le label
     part tout seul au tick où elle est enfin admise.
+
+    `rail:stalled` non plus n'est pas un état : c'est le battement du worker
+    qui est trop vieux. Il s'ajoute au label d'état des items actifs, et
+    part au retour du battement. Ce sync est un processus séparé du worker :
+    il survit à sa mort, et c'est tout l'intérêt — le problème se voit sur
+    GitHub précisément quand le worker ne peut plus rien dire.
     """
-    active = {
-        _issue_number(r["subject_key"]): f"{RAIL}{r['state']}"
+    wanted = {
+        _issue_number(r["subject_key"]): {f"{RAIL}{r['state']}"}
+        | ({STALLED} if stalled else set())
         for r in _gh_items(conn, gh, "AND w.terminal_at IS NULL")
     }
-    active.update({number: BLOCKED for number in blocked})
+    wanted.update({number: {BLOCKED} for number in blocked})
     for issue in gh.labeled_issues():
         number = issue["number"]
-        wanted = active.get(number)
+        want = wanted.get(number, set())
         painted = {lab["name"] for lab in issue["labels"]
                    if lab["name"].startswith(RAIL)}
-        if wanted and wanted not in painted:
-            gh.create_label(wanted)
-            gh.add_label(number, wanted)
-            print(f"#{number} ← {wanted}", flush=True)
-        for stale in painted - {wanted}:
+        for name in sorted(want - painted):
+            gh.create_label(name)
+            gh.add_label(number, name)
+            print(f"#{number} ← {name}", flush=True)
+        for stale in sorted(painted - want):
             gh.remove_label(number, stale)
             print(f"#{number} ⌫ {stale}", flush=True)
 
@@ -508,11 +520,14 @@ def sync_forever(repo: str, bundle_path: str, poll_s: float = 15.0) -> None:
               f"répondants : {', '.join(sorted(allowed))}", flush=True)
         while True:
             try:
+                # le battement ne sert qu'à cette projection : le sync ne
+                # décide d'aucun état avec — la base reste l'autorité
+                stalled = heartbeat.stalled(heartbeat.last(conn))
                 blocked = _admit_labeled(conn, gh, revision, said)
                 _acknowledge(conn, gh)
                 _publish_questions(conn, gh)
                 _collect_answers(conn, gh, allowed)
-                _paint_states(conn, gh, blocked)
+                _paint_states(conn, gh, blocked, stalled)
                 _paint_trajectories(conn, gh, drawn)
                 _report_terminals(conn, gh)
                 _clear_terminal_labels(conn, gh)

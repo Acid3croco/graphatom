@@ -1,8 +1,14 @@
 """L'ordonnanceur : un seul processus, un tick à trois passes.
 
+    0. beat    — le battement du worker, tamponné avant le travail
     1. reap    — bails expirés → révocation, crashed, routage
     2. wait    — réponses arrivées et échéances de WAIT, wall_deadline
     3. dispatch— pour chaque item actif sans run : claim → bloc → apply
+
+Le battement est écrit dans le tick, comme le reste : pas de thread dédié,
+pas de timer. Il ne compte pas comme du travail — un rail au repos bat
+quand même. Ce que le worker ne peut plus dire quand il meurt, son silence
+le dit à sa place : voir `heartbeat`.
 
 Chaque bloc s'exécute dans son propre thread avec sa propre connexion :
 un agent qui travaille dix minutes ne bloque ni le faucheur ni les
@@ -18,7 +24,7 @@ import time
 
 import psycopg
 
-from . import kernel
+from . import heartbeat, kernel
 from .blocks import BLOCKS, Context
 from .graph import load_bundle
 
@@ -26,6 +32,7 @@ RECONNECT_MAX_S = 30.0  # plafond du backoff : une base absente n'est jamais aba
 
 
 def tick(conn: psycopg.Connection) -> int:
+    heartbeat.beat(conn)
     did = kernel.reap(conn)
     did += _settle_waits(conn)
     did += _dispatch(conn)

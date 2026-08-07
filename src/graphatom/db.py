@@ -77,6 +77,6 @@ def init_db(drop: bool = False) -> None:
         if drop:
             conn.execute(
                 "DROP TABLE IF EXISTS question, effect, event, node_run, "
-                "work_item, subject, graph_revision CASCADE"
+                "work_item, subject, graph_revision, heartbeat CASCADE"
             )
         conn.execute(_schema().read_text())

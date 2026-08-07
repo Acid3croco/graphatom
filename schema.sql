@@ -1,4 +1,4 @@
--- GraphAtom — milestone 1. Sept tables, rien de volumineux en base.
+-- GraphAtom — milestone 1. Huit tables, rien de volumineux en base.
 
 CREATE TABLE IF NOT EXISTS graph_revision (
     id           TEXT PRIMARY KEY,            -- sha256 du bundle canonique
@@ -81,6 +81,15 @@ CREATE TABLE IF NOT EXISTS question (
     answer      TEXT,
     answered_by TEXT,
     answered_at TIMESTAMPTZ
+);
+
+-- Le battement du worker : une seule ligne, tamponnée à chaque tick.
+-- L'ordonnanceur écrit, le frontend et le canal GitHub lisent — personne
+-- ne décide d'un état avec. Plusieurs workers tamponnent la même ligne :
+-- c'est « au moins un vivant » qu'on mesure, pas qui est vivant.
+CREATE TABLE IF NOT EXISTS heartbeat (
+    id BIGINT      PRIMARY KEY,               -- toujours 1 : une table d'une ligne
+    at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- Le passage. `graphatom init-db` rejoue ce fichier à chaque déploiement, et

@@ -32,7 +32,8 @@ def question_page() -> str:
         "deadline": dt.datetime(2026, 8, 8, 9, 30), "text": "On garde ?",
         "options": ["merger", "abandonner"],
     }
-    return web._questions_page([question], by="web", token="t", flash=None)
+    return web._questions_page([question], by="web", token="t", flash=None,
+                               beat=dt.datetime.now(dt.timezone.utc))
 
 
 def main() -> None:
