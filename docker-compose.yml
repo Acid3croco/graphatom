@@ -1,4 +1,5 @@
-# GraphAtom sur son propre repo : db + ordonnanceur + canal github + canal web.
+# GraphAtom sur son propre repo : db + ordonnanceur + canal github + canal web
+# + le front Next.js, seul service à la bordure.
 #
 #   GITHUB_TOKEN=$(gh auth token) docker compose up -d --build
 #
@@ -78,6 +79,11 @@ services:
       init:
         condition: service_completed_successfully
 
+  # Le canal web stdlib : l'API JSON que lit `front`, l'unique porte
+  # d'écriture (`POST /answer`), la route des fichiers de workspace, et le
+  # canal de secours en HTML. Il n'est plus à la bordure — pas de `proxy`,
+  # pas de labels Traefik — mais reste joignable en local sur 8850 : c'est
+  # ce qui reste debout le jour où le front ne builde pas.
   web:
     build: .
     command: graphatom serve --host 0.0.0.0 --port 8848
@@ -87,15 +93,35 @@ services:
       - ./data:/app/data:ro   # les workspaces du worker hôte — previews en lecture seule
     ports:
       - "127.0.0.1:8850:8848"
-    networks: [default, proxy]   # `proxy` : voir plus bas
+    networks: [default]   # plus `proxy` : l'API est interne, seul `front` est public
     depends_on:
       init:
         condition: service_completed_successfully
 
+  # Le front Next.js : le service public. Il ne parle qu'à l'API de `web`,
+  # par le réseau interne du compose — d'où `GRAPHATOM_API_URL` en nom de
+  # service. Les labels ci-dessous déclarent le routeur de bordure ; ils ne
+  # servent qu'à un Traefik qui lit les labels docker (voir README).
+  front:
+    build: ./front
+    environment:
+      GRAPHATOM_API_URL: http://web:8848
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8851:3000"
+    networks: [default, proxy]   # `proxy` : voir plus bas
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.graphatom-front.rule: Host(`graphatom.veyxzer.com`)
+      traefik.http.services.graphatom-front.loadbalancer.server.port: "3000"
+      traefik.docker.network: ${GRAPHATOM_PROXY_NET:-graphatom-proxy}
+    depends_on:
+      - web
+
 networks:
   default:
 
-  # Le réseau du proxy qui expose l'UI. Déclaré ici pour survivre à
+  # Le réseau du proxy qui expose le front. Déclaré ici pour survivre à
   # `up -d` : un `docker network connect` posé à la main se perd dès que le
   # conteneur est recréé — panne silencieuse. Par défaut compose crée son
   # propre réseau, donc aucun prérequis ; l'instance qui vit derrière un
