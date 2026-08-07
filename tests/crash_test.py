@@ -17,6 +17,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -25,6 +26,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from graphatom import db  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
+# le test travaille dans un répertoire à lui : jamais dans ROOT/data, qui
+# peut être le data/ vivant d'un rail (workspaces d'items en cours)
+WORK = Path(tempfile.mkdtemp(prefix="graphatom-crash-test-"))
 KILL_AFTER_S = 2.0  # l'ACT dure 4 s et démarre vite : on tue en plein vol, garanti
 TIMEOUT_S = 90
 
@@ -42,7 +46,7 @@ def scheduler() -> subprocess.Popen:
     # atteignent le vrai ordonnanceur, pas un wrapper qui laisse un orphelin
     return subprocess.Popen(
         [str(ROOT / ".venv" / "bin" / "graphatom"), "run"],
-        cwd=ROOT, start_new_session=True,
+        cwd=WORK, start_new_session=True,
     )
 
 
@@ -55,7 +59,6 @@ def kill_group(proc: subprocess.Popen, sig: int) -> None:
 
 
 def main() -> None:
-    shutil.rmtree(ROOT / "data", ignore_errors=True)
     sh("init-db", "--drop")
     rev = sh("publish", "examples/supervision.json")
     item_id = int(sh("admit", rev, "pipeline-x:oom"))
@@ -101,7 +104,7 @@ def main() -> None:
             print(f"2. journal contigu v1..v{versions[-1]} ✓")
 
             # 3. effet exactement une fois
-            outbox = (ROOT / "data" / "effects_outbox.log").read_text()
+            outbox = (WORK / "data" / "effects_outbox.log").read_text()
             key = "supervision:pipeline-x:oom:commit"
             assert outbox.count(key) == 1, f"{outbox.count(key)} exécutions"
             print("3. effet exécuté exactement une fois ✓")
@@ -115,6 +118,7 @@ def main() -> None:
             print(f"4. tentative fauchée classée ({statuses}) ✓")
     finally:
         kill_group(proc, signal.SIGTERM)
+        shutil.rmtree(WORK, ignore_errors=True)
 
     print("\ncrash-test : OK — tuer l'ordonnanceur est un cas nominal")
     subprocess.run(["uv", "run", "graphatom", "journal", str(item_id)], cwd=ROOT)
