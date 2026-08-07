@@ -16,7 +16,10 @@ tout le reste :
                   pour porter la trajectoire en direct (une édition ne
                   notifie personne : le tableau de bord ne coûte aucun spam)
   3. questions  — chaque WAIT ouvert est publié en commentaire d'issue ;
-                  la publication est un effet réconciliable par marqueur
+                  la publication est un effet réconciliable par marqueur ;
+                  le `validate.md` du workspace, quand il est là, part avec
+                  la question — l'humain voit les critères cochés et leurs
+                  preuves, pas seulement « on garde ? »
   4. réponses   — un commentaire `/answer <id> <option>` d'un auteur
                   autorisé, postérieur à l'armement de la question,
                   enregistre la réponse ; l'ordonnanceur route
@@ -42,6 +45,7 @@ import urllib.request
 from psycopg import Connection
 
 from . import channel, db, graph, heartbeat, kernel
+from .blocks import item_workspace
 
 API = "https://api.github.com"
 LABEL = "graphatom"
@@ -51,6 +55,8 @@ BLOCKED = f"{RAIL}blocked"  # pas un état d'item : une admission différée se 
 STALLED = f"{RAIL}stalled"  # pas un état d'item non plus : le worker ne bat plus
 STALLED_COLOR = "d73a4a"    # le rouge de l'alarme, seule exception à la couleur unie
 DEPENDS = "Depends-on:"     # la grammaire fermée des dépendances, dans le corps
+CHECKLIST = "validate.md"   # la checklist du nœud validate, dans le workspace de l'item
+CHECKLIST_LINES = 40        # ce qu'on en cite : de quoi tenir sans noyer la question
 
 
 class GitHub:
@@ -349,6 +355,34 @@ def _gh_questions(conn: Connection, gh: GitHub) -> list[dict]:
     ))
 
 
+def _checklist(item_id: int, web: str) -> str:
+    """Les critères cochés par `validate`, cités dans la question qui suit.
+
+    Le nœud `validate` laisse `validate.md` dans le workspace de l'item :
+    une ligne par critère, la case, la preuve constatée. Une question posée
+    après lui l'embarque telle quelle — répondre « on garde ? » sans la
+    checklist, c'était juger sur la seule bonne foi des agents de test.
+
+    Le fichier est cité en bloc de citation, borné aux premières lignes :
+    le rail ne réécrit pas ce qu'un agent a écrit, il le montre. Pas de
+    fichier — cycle d'avant `validate`, question posée avant lui, workspace
+    hors de portée du conteneur : rien, et la question reste ce qu'elle était.
+    """
+    try:
+        lines = (item_workspace(item_id) / CHECKLIST).read_text().splitlines()
+    except OSError:
+        return ""
+    if not lines:  # fichier vide : rien à citer, et surtout pas un bloc vide
+        return ""
+    quoted = [f"> {line}".rstrip() for line in lines[:CHECKLIST_LINES]]
+    reste = len(lines) - CHECKLIST_LINES
+    if reste > 0:
+        quoted.append(f"> *(… {reste} lignes de plus)*")
+    return ("**Critères de succès, cochés par `validate`** — "
+            f"[{CHECKLIST}]({web}/item/{item_id}/file/{CHECKLIST})\n\n"
+            + "\n".join(quoted) + "\n\n")
+
+
 def _publish_questions(conn: Connection, gh: GitHub) -> None:
     for q in _gh_questions(conn, gh):
         number = _issue_number(q["subject_key"])
@@ -356,6 +390,7 @@ def _publish_questions(conn: Connection, gh: GitHub) -> None:
         web = _web()
         body = (f"**Question du rail** — pour @{q['owner']}, "
                 f"avant le {q['deadline']:%d/%m %H:%M} UTC\n\n{q['text']}\n\n"
+                f"{_checklist(q['item_id'], web)}"
                 f"Options : {options}\n"
                 f"Répondre par un commentaire : `/answer {q['id']} <option>`\n"
                 f"Trajectoire et artefacts (previews) : {web}/item/{q['item_id']}")
