@@ -22,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote
 
 from . import channel, db
-from .blocks import DATA_DIR
+from .blocks import item_workspace
 from .graph import load_bundle
 
 STYLE = """
@@ -275,7 +275,7 @@ def _item_page(conn, item_id: int) -> str | None:
              f"<td>{_e(q['answer'] or '')}</td><td>{_e(q['answered_by'] or '')}</td>"
              f"<td>{q['deadline']:%d/%m %H:%M}</td></tr>" for q in questions]))
 
-    workspace = DATA_DIR / f"item-{item_id}"
+    workspace = item_workspace(item_id)
     files = sorted(p for p in workspace.iterdir() if p.is_file()) if workspace.is_dir() else []
     if files:
         body.append("<h2>workspace</h2>")
@@ -292,7 +292,7 @@ def _item_page(conn, item_id: int) -> str | None:
 
 
 def _file_response(item_id: int, name: str) -> tuple[bytes, str] | None:
-    workspace = (DATA_DIR / f"item-{item_id}").resolve()
+    workspace = item_workspace(item_id).resolve()
     path = (workspace / name).resolve()
     if not (path.is_file() and path.parent == workspace):  # pas de traversée
         return None
