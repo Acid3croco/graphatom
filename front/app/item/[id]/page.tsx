@@ -4,13 +4,14 @@
  * Tout ce que l'API rend de l'item y tient, dans l'ordre où on le lit :
  * l'en-tête et ses totaux, les questions ouvertes — la seule chose à faire
  * ici —, le graph avec le nœud courant marqué, le journal, les runs avec
- * leur durée et leurs tokens, les critères de succès du cycle, les effets,
+ * leur durée et leurs tokens, les critères de succès du cycle tels que le
+ * nœud `validate` les a cochés — sa preuve avec —, les effets,
  * et le workspace, dont les screenshots des agents s'affichent en preview.
  */
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { getItem, type Run, type Usage } from "@/lib/api";
+import { getFileText, getItem, type Run, type Usage } from "@/lib/api";
 import { cost, count, duration, moment, tokens } from "@/lib/format";
 import { AnswerForm } from "@/components/answer-form";
 import { ApiDown } from "@/components/api-down";
@@ -85,6 +86,10 @@ export default async function ItemPage({
     detail;
   const open = questions.filter((q) => q.state === "open");
   const images = files.filter((f) => f.name.endsWith(".png"));
+  // l'API inline `criteria.md` mais pas `validate.md` : il arrive par son
+  // `href` de workspace, lu ici au rendu — le serveur parle au serveur
+  const validated = files.find((f) => f.name === "validate.md");
+  const validate = validated ? await getFileText(validated.href) : null;
   const total = tokens(item.usage);
   // le journal dit quel run a produit le step, le run porte son usage : la
   // jointure se fait ici, une fois, et les lignes n'ont plus qu'à lire
@@ -285,7 +290,7 @@ export default async function ItemPage({
       {criteria && (
         <section className="flex flex-col gap-2">
           <h2 className="text-lg font-semibold">critères de succès</h2>
-          <CriteriaList criteria={criteria} />
+          <CriteriaList criteria={criteria} validate={validate} />
         </section>
       )}
 
