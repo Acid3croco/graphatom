@@ -5,7 +5,9 @@ l'unique autorité d'exécution. Ce module fait six choses, et refuse
 tout le reste :
 
   1. admission  — une issue ouverte portant le label `graphatom` devient
-                  un sujet (une seule admission automatique par issue)
+                  un sujet (une seule admission automatique par issue) ;
+                  une ligne `Depends-on: #N` dans le corps diffère
+                  l'admission tant que l'issue visée est ouverte
   2. accusé     — l'occurrence ouverte reçoit son commentaire de prise en
                   charge : item, graph, lien trajectoire — une seule fois ;
                   ce commentaire est ensuite réécrit à chaque transition
@@ -42,6 +44,8 @@ API = "https://api.github.com"
 LABEL = "graphatom"
 RAIL = "rail:"        # préfixe des labels d'état — l'espace de noms du rail
 RAIL_COLOR = "1f6feb"  # couleur unie : un label d'état se reconnaît d'un coup d'œil
+BLOCKED = f"{RAIL}blocked"  # pas un état d'item : une admission différée se voit
+DEPENDS = "Depends-on:"     # la grammaire fermée des dépendances, dans le corps
 
 
 class GitHub:
@@ -66,6 +70,15 @@ class GitHub:
         rows = self._call(
             "GET", f"/repos/{self.repo}/issues?{label}state=open&per_page=100")
         return [r for r in rows if "pull_request" not in r]  # les PR sont des issues, pas pour nous
+
+    def issue(self, number: int) -> dict | None:
+        # vise l'issue par son numéro : ouverte, fermée — ou None, elle n'existe pas
+        try:
+            return self._call("GET", f"/repos/{self.repo}/issues/{number}")
+        except urllib.error.HTTPError as exc:
+            if exc.code != 404:
+                raise
+            return None
 
     def comments(self, number: int) -> list[dict]:
         return self._call(
@@ -155,8 +168,90 @@ def _speak(conn: Connection, gh: GitHub, number: int, item_id: int,
     _applied(conn, target, key)
 
 
-def _admit_labeled(conn: Connection, gh: GitHub, revision: str) -> None:
+def _say_once(gh: GitHub, number: int, key: str, body: str,
+              said: set[tuple[int, str]]) -> None:
+    """Une prise de parole d'avant l'admission : sans item, donc sans effet.
+
+    Un effet est rattaché à un item ; ici il n'y en a pas encore. Le marqueur
+    posé dans l'issue tient lieu de mémoire — c'est déjà la réconciliation de
+    `_speak`, sans la ligne en base. `said` évite d'aller relire les
+    commentaires à chaque tick ; au redémarrage, le marqueur reprend le relais.
+    """
+    if (number, key) in said:
+        return
+    marker = f"<!-- graphatom:{key} -->"
+    if not any(marker in c["body"] for c in gh.comments(number)):
+        gh.post_comment(number, f"{marker}\n{body}")
+        print(f"#{number} ← {key}", flush=True)
+    said.add((number, key))
+
+
+def _depends_on(body: str) -> list[str]:
+    """Le membre de droite de chaque ligne `Depends-on: …` du corps.
+
+    Grammaire fermée, comme `/answer` : la ligne est prise au mot, et rien
+    d'autre n'est lu. Une task list `- [ ] #29` est de la lisibilité GitHub,
+    jamais une dépendance — la vérité du rail est ici.
+    """
+    return [line.strip()[len(DEPENDS):].strip()
+            for line in (body or "").splitlines()
+            if line.strip().startswith(DEPENDS)]
+
+
+def _issue_state(gh: GitHub, number: int, states: dict[int, str | None]) -> str | None:
+    """`open`, `closed`, ou None si l'issue n'existe pas — un cache par tick.
+
+    Deux issues qui dépendent de la même troisième ne la lisent qu'une fois.
+    """
+    if number not in states:
+        issue = gh.issue(number)
+        states[number] = issue["state"] if issue else None
+    return states[number]
+
+
+def _pending_deps(gh: GitHub, issue: dict, name: str, states: dict[int, str | None],
+                  said: set[tuple[int, str]]) -> list[int]:
+    """Les dépendances encore ouvertes de l'issue — vide si elle peut être admise.
+
+    Le corps est lu au moment de l'admission seulement, et rien n'en reste en
+    base : la condition se réévalue à chaque tick, sur les issues non admises.
+    Une déclaration invalide — numéro illisible, renvoi à soi-même, issue
+    inexistante — est ignorée, mais dite une fois : rien ne passe en silence.
+    """
+    number, waiting, invalid = issue["number"], [], []
+    for raw in _depends_on(issue["body"]):
+        if not (raw.startswith("#") and raw[1:].isdigit()):
+            invalid.append(f"`{DEPENDS} {raw}` — attendu `{DEPENDS} #<numéro>`")
+            continue
+        dep = int(raw[1:])
+        if dep == number:
+            invalid.append(f"`{DEPENDS} #{dep}` — une issue ne dépend pas d'elle-même")
+            continue
+        state = _issue_state(gh, dep, states)
+        if state is None:
+            invalid.append(f"`{DEPENDS} #{dep}` — cette issue n'existe pas")
+        elif state == "open":
+            waiting.append(dep)
+    if invalid:
+        _say_once(gh, number, f"{name}-depends-invalid",
+                  "**Dépendances ignorées** — le rail ne lit que "
+                  f"`{DEPENDS} #<numéro>`, vers une autre issue existante :\n\n"
+                  + "\n".join(f"- {line}" for line in invalid), said)
+    return waiting
+
+
+def _admit_labeled(conn: Connection, gh: GitHub, revision: str,
+                   said: set[tuple[int, str]]) -> set[int]:
+    """L'admission automatique, et son seul frein : les dépendances déclarées.
+
+    Renvoie les numéros d'issues dont l'admission est différée — le repeint
+    des labels les montre `rail:blocked`. Tant qu'une dépendance est ouverte,
+    aucun item n'est créé ; quand la dernière se ferme, l'admission part au
+    tick suivant par le chemin normal.
+    """
     name = graph.load_bundle(conn, revision)["name"]
+    blocked: set[int] = set()
+    states: dict[int, str | None] = {}
     for issue in gh.labeled_issues():
         subject_key = f"gh:{gh.repo}#{issue['number']}"
         known = conn.execute(
@@ -165,11 +260,22 @@ def _admit_labeled(conn: Connection, gh: GitHub, revision: str) -> None:
         ).fetchone()
         if known:  # une seule admission automatique — ré-admettre est un geste explicite
             continue
+        waiting = _pending_deps(gh, issue, name, states, said)
+        if waiting:
+            blocked.add(issue["number"])
+            refs = ", ".join(f"#{dep}" for dep in waiting)
+            _say_once(gh, issue["number"], f"{name}-blocked",
+                      f"**Admission différée** — en attente de {refs}.\n\n"
+                      f"Le corps déclare `{DEPENDS} #<numéro>` : le rail admet "
+                      "cette issue au tick qui suit la fermeture de la dernière "
+                      "dépendance.", said)
+            continue
         try:
             item_id = kernel.admit(conn, revision, subject_key)
             print(f"#{issue['number']} admis → item {item_id}", flush=True)
         except RuntimeError as exc:
             print(f"#{issue['number']} refusé : {exc}", flush=True)
+    return blocked
 
 
 def _gh_items(conn: Connection, gh: GitHub, where: str = "") -> list[dict]:
@@ -261,18 +367,23 @@ def _collect_answers(conn: Connection, gh: GitHub, allowed: set[str]) -> None:
                 break  # la première réponse valide gagne
 
 
-def _paint_states(conn: Connection, gh: GitHub) -> None:
+def _paint_states(conn: Connection, gh: GitHub, blocked: set[int]) -> None:
     """Le label `rail:<état>` : une projection possédée par le rail.
 
     Comme la colonne d'un board — jamais lue comme état d'item, seulement
     réécrite depuis la base : l'ancien label rail part, le nouveau arrive.
     Un item terminal n'en porte aucun (le rapport suffit) et un label
     bricolé à la main est simplement repeint au tick suivant.
+
+    `rail:blocked` sort du même pinceau sans venir de la base : une issue
+    dont l'admission est différée n'a pas d'item, donc pas d'état — le label
+    part tout seul au tick où elle est enfin admise.
     """
     active = {
         _issue_number(r["subject_key"]): f"{RAIL}{r['state']}"
         for r in _gh_items(conn, gh, "AND w.terminal_at IS NULL")
     }
+    active.update({number: BLOCKED for number in blocked})
     for issue in gh.labeled_issues():
         number = issue["number"]
         wanted = active.get(number)
@@ -389,6 +500,7 @@ def sync_forever(repo: str, bundle_path: str, poll_s: float = 15.0) -> None:
         "GRAPHATOM_ANSWERERS", repo.split("/")[0]).split(",")))
     gh = GitHub(repo, token)
     drawn: dict[int, int] = {}   # item → version de trajectoire déjà peinte
+    said: set[tuple[int, str]] = set()  # actes de parole d'avant l'admission, déjà dits
 
     with db.connect() as conn:
         revision = graph.publish(conn, json.loads(open(bundle_path).read()))
@@ -396,11 +508,11 @@ def sync_forever(repo: str, bundle_path: str, poll_s: float = 15.0) -> None:
               f"répondants : {', '.join(sorted(allowed))}", flush=True)
         while True:
             try:
-                _admit_labeled(conn, gh, revision)
+                blocked = _admit_labeled(conn, gh, revision, said)
                 _acknowledge(conn, gh)
                 _publish_questions(conn, gh)
                 _collect_answers(conn, gh, allowed)
-                _paint_states(conn, gh)
+                _paint_states(conn, gh, blocked)
                 _paint_trajectories(conn, gh, drawn)
                 _report_terminals(conn, gh)
                 _clear_terminal_labels(conn, gh)

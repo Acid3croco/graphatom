@@ -50,6 +50,11 @@ def main() -> None:
     print("2. sujet quelconque : texte brut, échappé ✓")
 
     # 3. la PR vient de release.json, écrit par le nœud release
+    #    Le répertoire déplacé est celui du résolveur, `blocks.DATA_DIR` — comme
+    #    dans les autres tests. Poser un `web.DATA_DIR` que le module ne définit
+    #    pas fabriquait la constante au lieu de la vérifier : le test passait et
+    #    la page d'item rendait 500 (NameError).
+    assert not hasattr(web, "DATA_DIR"), "web lit le workspace par item_workspace()"
     with tempfile.TemporaryDirectory() as tmp:
         blocks.DATA_DIR = Path(tmp)  # le seul répertoire de données, celui des blocs
         workspace = blocks.item_workspace(14)
