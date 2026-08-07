@@ -248,9 +248,10 @@
   <pre><code>graph_revision(id, content_hash, bundle)
 subject(id, graph, subject_key, lineage_budget, UNIQUE(graph, subject_key))
 work_item(id, subject_id, generation, revision, state, version, fence,
-          UNIQUE(subject_id, generation))
-node_run(id, item_id, node, attempt, status, fence, expected_version,
-         lease_expires_at, outcome, result_ref, UNIQUE(item_id, node, attempt))
+          cycle, UNIQUE(subject_id, generation))
+node_run(id, item_id, node, cycle, attempt, status, fence, expected_version,
+         lease_expires_at, outcome, result_ref,
+         UNIQUE(item_id, node, cycle, attempt))
 event(item_id, item_version, edge, run_id, PRIMARY KEY(item_id, item_version))
 effect(op_id, item_id, logical_key, target_uri, expected_target_version,
        intent_hash, observation, UNIQUE(target_uri, logical_key))
