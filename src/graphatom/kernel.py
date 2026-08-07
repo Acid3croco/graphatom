@@ -18,7 +18,11 @@ Deux compteurs bornent un item, et ils ne se confondent jamais. Les
 tentatives par nœud sont un amortisseur local : elles se comptent sur le
 passage courant, et une réponse humaine d'escalade en ouvre un nouveau —
 « nouveau cycle, pleine marge ». Le budget d'escalades de l'item, lui, ne
-se régénère jamais : c'est lui, et lui seul, qui termine.
+se régénère jamais : c'est lui, et lui seul, qui termine. Il compte les
+tours de boucle, pas les traversées : la première visite d'un nœud
+d'escalade dans le passage courant est gratuite, la re-entrée décompte —
+un item au budget épuisé finit donc son chemin nominal, il ne peut juste
+plus boucler.
 """
 
 import datetime as dt
@@ -191,6 +195,23 @@ def apply_item(conn: psycopg.Connection, item_id: int, outcome: str, kind: str) 
         _route(conn, item, bundle, run, outcome, kind=kind)
 
 
+def _boucle(conn, item, nodes: dict, target: str, cycle: int) -> bool:
+    """L'entrée dans ce nœud d'escalade est-elle un tour de boucle ?
+
+    Le budget compte les tours, pas les passages nominaux : la première
+    visite d'un nœud d'escalade dans le passage courant est gratuite, la
+    re-entrée décompte. Un WAIT d'escalade fait exception — il n'est jamais
+    réservé, donc n'a aucune ligne `node_run`, et surtout chaque entrée y
+    est une escalade humaine, donc un tour par définition.
+    """
+    if nodes[target].get("block") == "WAIT":
+        return True
+    return conn.execute(
+        "SELECT 1 FROM node_run WHERE item_id = %s AND node = %s AND cycle = %s",
+        (item["id"], target, cycle),
+    ).fetchone() is not None
+
+
 def _route(conn, item, bundle, run, outcome: str, kind: str) -> None:
     """Résout l'arête, débite l'escalade, ouvre le passage, bouge l'item.
 
@@ -211,7 +232,15 @@ def _route(conn, item, bundle, run, outcome: str, kind: str) -> None:
     else:  # budget_exhausted, wall_deadline
         target = on_kernel["exhausted_to"]
 
-    if nodes[target].get("escalade") and target != run["node"]:
+    # une réponse humaine sur un nœud d'escalade ouvre un passage : en aval,
+    # les tentatives repartent de zéro — l'humain vient de juger qu'un cycle
+    # complet valait le coup. Le budget d'escalades, lui, reste débité.
+    cycle = item["cycle"] + (1 if kind == "answer" and node.get("escalade") else 0)
+
+    # le budget ne paie que les tours de boucle : traverser un nœud
+    # d'escalade pour la première fois du passage est gratuit
+    if (nodes[target].get("escalade") and target != run["node"]
+            and _boucle(conn, item, nodes, target, cycle)):
         if item["escalations"] <= 0:
             outcome, target = "budget_exhausted", on_kernel["exhausted_to"]
         else:
@@ -219,11 +248,6 @@ def _route(conn, item, bundle, run, outcome: str, kind: str) -> None:
                 "UPDATE work_item SET escalations = escalations - 1 WHERE id = %s",
                 (item["id"],),
             )
-
-    # une réponse humaine sur un nœud d'escalade ouvre un passage : en aval,
-    # les tentatives repartent de zéro — l'humain vient de juger qu'un cycle
-    # complet valait le coup. Le budget d'escalades, lui, reste débité.
-    cycle = item["cycle"] + (1 if kind == "answer" and node.get("escalade") else 0)
 
     version = item["version"] + 1
     conn.execute(

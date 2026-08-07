@@ -9,6 +9,12 @@ sont en jeu. Un graph minuscule dont le nœud de travail crashe toujours :
   4. les tentatives du passage 1 sont toujours là — l'histoire n'est pas réécrite
   5. le budget d'escalades, lui, ne se régénère jamais : il a bien débité deux fois
 
+Puis un second graph, où un nœud d'escalade est sur le chemin nominal :
+
+  6. budget zéro, première visite du nœud d'escalade : l'item entre quand même
+  7. re-entrée dans le même nœud, même passage : `budget_exhausted`
+  8. avec du budget, c'est bien la re-entrée qui débite, pas la traversée
+
 Le test ne détruit rien : il crée son sujet, ses items, et laisse la base
 en place — il peut tourner à côté d'un rail vivant.
 
@@ -44,6 +50,35 @@ BUNDLE = {
 }
 
 
+def bundle_nominal(escalations: int) -> dict:
+    """Un graph où un nœud d'escalade non-`WAIT` est sur le chemin nominal.
+
+    `verif` porte `escalade` parce que son arête `fail` referme le cycle
+    `verif → travail → verif` — exactement la forme du `validate` de
+    `code-task`. Le traverser une fois n'est pas boucler.
+    """
+    return {
+        "name": "passage-test-nominal",
+        "entry": "travail",
+        "budgets": {"escalations": escalations, "wall_deadline_hours": 1},
+        "on_kernel": {"escalate_to": "escalate", "exhausted_to": "abandon"},
+        "nodes": {
+            "travail": {"block": "ACT", "config": {}, "edges": {"ok": "verif"}},
+            "verif": {"block": "JUDGE", "escalade": True, "config": {},
+                      "edges": {"pass": "fini", "fail": "travail"}},
+            "escalate": {
+                "block": "WAIT",
+                "escalade": True,
+                "config": {"question": "On retente ?", "options": ["retry"],
+                           "owner": "test", "deadline_minutes": 60},
+                "edges": {"retry": "travail", "expired": "abandon"},
+            },
+            "fini": {"terminal": True},
+            "abandon": {"terminal": True},
+        },
+    }
+
+
 def brule_le_passage(conn, item_id: int, cycle: int) -> None:
     """Fait crasher le nœud de travail jusqu'à l'escalade, et compte."""
     for attendu in range(1, MAX_ATTEMPTS + 1):
@@ -58,6 +93,52 @@ def etat(conn, item_id: int) -> dict:
     return conn.execute(
         "SELECT * FROM work_item WHERE id = %s", (item_id,)
     ).fetchone()
+
+
+def avance(conn, item_id: int, outcome: str) -> dict:
+    """Réserve le nœud courant, y applique l'issue, rend l'état de l'item."""
+    run = kernel.claim(conn, item_id)
+    assert run is not None, "plus rien à réserver"
+    kernel.apply(conn, run["id"], {"outcome": outcome})
+    return etat(conn, item_id)
+
+
+def derniere_issue(conn, item_id: int) -> str:
+    return conn.execute(
+        "SELECT outcome FROM event WHERE item_id = %s "
+        "ORDER BY item_version DESC LIMIT 1", (item_id,)
+    ).fetchone()["outcome"]
+
+
+def chemin_nominal(conn) -> None:
+    """Le budget paie les tours de boucle, pas la traversée du chemin."""
+    # 6-7. budget zéro : la traversée passe, la boucle non
+    rev = graph.publish(conn, bundle_nominal(escalations=0))
+    item_id = kernel.admit(conn, rev, f"nominal-0:{uuid.uuid4().hex[:8]}")
+    item = avance(conn, item_id, "ok")
+    assert item["state"] == "verif", item["state"]
+    assert item["escalations"] == 0, item["escalations"]
+    print(f"6. item {item_id}, budget 0 : il entre quand même dans le nœud "
+          "d'escalade nominal ✓")
+
+    avance(conn, item_id, "fail")  # verif → travail, même passage
+    item = avance(conn, item_id, "ok")  # travail → verif : cette fois, c'est un tour
+    assert item["state"] == "abandon", item["state"]
+    assert derniere_issue(conn, item_id) == "budget_exhausted"
+    print("7. re-entrée dans le même nœud, même passage → "
+          "budget_exhausted → abandon ✓")
+
+    # 8. avec du budget, c'est bien la re-entrée qui débite
+    rev = graph.publish(conn, bundle_nominal(escalations=1))
+    item_id = kernel.admit(conn, rev, f"nominal-1:{uuid.uuid4().hex[:8]}")
+    item = avance(conn, item_id, "ok")
+    assert item["escalations"] == 1, "la première visite est gratuite"
+    avance(conn, item_id, "fail")
+    item = avance(conn, item_id, "ok")
+    assert item["state"] == "verif", item["state"]
+    assert item["escalations"] == 0, "la re-entrée débite"
+    print(f"8. item {item_id} : traversée gratuite, re-entrée débitée, "
+          "1 → 0 escalade ✓")
 
 
 def main() -> None:
@@ -105,7 +186,10 @@ def main() -> None:
         print(f"5. escalades restantes {item['escalations']} — "
               "jamais régénérées ✓")
 
-    print("\npassage : OK — un retry rend la marge des nœuds, pas le budget")
+        chemin_nominal(conn)
+
+    print("\npassage : OK — un retry rend la marge des nœuds, pas le budget ;"
+          "\n          et le budget paie les boucles, pas le chemin nominal")
 
 
 if __name__ == "__main__":
