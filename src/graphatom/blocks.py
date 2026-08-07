@@ -96,7 +96,7 @@ def _agent(ctx: Context) -> dict:
         # à lui seul — ce que son ordonnanceur de test y détruit ne regarde
         # ni la production ni les autres items
         env["GRAPHATOM_DSN"] = dsn
-    log = workspace / f"agent-{ctx.run['attempt']}.log"
+    log = workspace / f"agent-{ctx.run['cycle']}-{ctx.run['attempt']}.log"
     pgid_file = workspace / PGID_FILE
     with log.open("w") as out:
         # session dédiée : l'agent est chef de son groupe, ses descendants aussi
@@ -242,7 +242,8 @@ def revoke_orphan(item_id: int, run_id: int) -> int | None:
 
 def fetch(ctx: Context) -> dict:
     ctx.simulate_work()
-    evidence = ctx.workspace / f"evidence-{ctx.run['node']}-{ctx.run['attempt']}.json"
+    name = f"evidence-{ctx.run['node']}-{ctx.run['cycle']}-{ctx.run['attempt']}.json"
+    evidence = ctx.workspace / name
     evidence.write_text(json.dumps({"materialized": ctx.config.get("materialize", [])}))
     return {"outcome": "ok", "evidence": evidence.name}
 
@@ -259,8 +260,9 @@ def act(ctx: Context) -> dict:
     if "agent" in ctx.config:
         return _agent(ctx)
     ctx.simulate_work()
-    checkpoint = ctx.workspace / f"checkpoint-{ctx.run['attempt']}.txt"
-    checkpoint.write_text(f"travail de la tentative {ctx.run['attempt']}\n")
+    checkpoint = ctx.workspace / f"checkpoint-{ctx.run['cycle']}-{ctx.run['attempt']}.txt"
+    checkpoint.write_text(
+        f"travail de la tentative {ctx.run['attempt']} du passage {ctx.run['cycle']}\n")
     return {"outcome": "ok", "checkpoint": checkpoint.name}
 
 

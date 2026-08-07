@@ -56,7 +56,7 @@ def main() -> None:
     #    la page d'item rendait 500 (NameError).
     assert not hasattr(web, "DATA_DIR"), "web lit le workspace par item_workspace()"
     with tempfile.TemporaryDirectory() as tmp:
-        blocks.DATA_DIR = Path(tmp)
+        blocks.DATA_DIR = Path(tmp)  # le seul répertoire de données, celui des blocs
         workspace = blocks.item_workspace(14)
         workspace.mkdir()
         assert web._pr(14) == ""  # pas de release : rien à dire
