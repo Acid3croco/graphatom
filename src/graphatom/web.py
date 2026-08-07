@@ -12,6 +12,11 @@ transition porte sa durée, chaque run ses tokens, et l'en-tête le total
 des deux. Rien de nouveau en base — les durées sortent des horodatages du
 journal, les tokens du résultat des runs.
 
+L'en-tête commun porte le battement du worker : « rail vivant il y a 3 s »,
+ou le bandeau rouge quand plus rien ne bat — les états montrés sont alors
+figés, et la page le dit avant qu'on les croie. Une requête d'une ligne
+par rendu.
+
 Un sujet de la forme `gh:<owner>/<repo>#<num>` devient partout un lien vers
 l'issue, et la page d'un item porte le lien de sa PR quand le nœud release
 en a laissé une dans `release.json` — la boucle se ferme dans les deux sens,
@@ -33,7 +38,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote
 
-from . import channel, db
+from . import channel, db, heartbeat
 from .blocks import item_workspace
 from .graph import load_bundle
 
@@ -53,6 +58,9 @@ button:hover { background: #e8e8e8; }
 .empty { color: #888; margin-top: 3rem; text-align: center; }
 .flash { background: #fff3cd; border: 1px solid #ffe08a; border-radius: 6px;
          padding: .5rem 1rem; }
+.beat { color: #2e7d32; font-size: .85rem; margin: .2rem 0 0; }
+.stalled { background: #fde2e2; border: 1px solid #f0a0a0; border-radius: 6px;
+           padding: .5rem 1rem; color: #a11020; font-weight: 600; }
 table { border-collapse: collapse; width: 100%; font-size: .9rem; }
 th, td { text-align: left; padding: .3rem .6rem; border-bottom: 1px solid #eee; }
 th { color: #666; font-weight: 600; }
@@ -72,11 +80,34 @@ REFRESH = "<meta http-equiv='refresh' content='5'>"
 HEAD = "<!doctype html><meta charset='utf-8'>"
 
 
-def _shell(title: str, body: str, refresh: bool = True) -> str:
+def _shell(title: str, body: str, beat: dt.datetime | None,
+           refresh: bool = True) -> str:
     return (f"{HEAD}{REFRESH if refresh else ''}<title>{html.escape(title)}</title>"
             f"<style>{STYLE}</style>"
             "<nav><a href='/'>questions</a><a href='/items'>items</a></nav>"
-            + body)
+            + _beat(beat) + body)
+
+
+def _ago(seconds: float) -> str:
+    """Un âge lisible : en secondes sous la minute, en minutes au-delà."""
+    return f"{seconds:.0f} s" if seconds < 60 else f"{seconds / 60:.0f} min"
+
+
+def _beat(at: dt.datetime | None) -> str:
+    """Le battement du worker, en en-tête de chaque page.
+
+    Un rail vivant tamponne à chaque tick ; sans battement depuis deux
+    minutes, plus rien ne tourne — le faucheur ne classe plus, l'escalade
+    ne part plus, et tout ce que la page montre est figé. Ça se dit en
+    grand : l'absence de signal est le signal.
+    """
+    if not heartbeat.stalled(at):
+        return f"<p class='beat'>rail vivant il y a {_ago(heartbeat.age_s(at))}</p>"
+    if at:
+        return (f"<p class='stalled'>rail à l'arrêt depuis {at:%H:%M} — "
+                "les états affichés sont figés.</p>")
+    return ("<p class='stalled'>rail à l'arrêt — aucun battement en base : le "
+            "worker n'a jamais tamponné, les états affichés sont figés.</p>")
 
 
 def _e(v) -> str:
@@ -127,7 +158,8 @@ def _pr(item_id: int) -> str:
 # ------------------------------------------------------------------ questions
 
 
-def _questions_page(questions: list[dict], by: str, token: str, flash: str | None) -> str:
+def _questions_page(questions: list[dict], by: str, token: str, flash: str | None,
+                    beat: dt.datetime | None) -> str:
     parts = [f"<h1>graphatom <small>· répondre en tant que {_e(by)}</small></h1>"]
     if flash:
         parts.append(f"<p class='flash'>{_e(flash)}</p>")
@@ -147,13 +179,13 @@ def _questions_page(questions: list[dict], by: str, token: str, flash: str | Non
             f"<input type='hidden' name='question_id' value='{q['id']}'>"
             f"<input type='hidden' name='token' value='{token}'>"
             f"{buttons}</form></div>")
-    return _shell("graphatom — questions", "".join(parts))
+    return _shell("graphatom — questions", "".join(parts), beat)
 
 
 # ---------------------------------------------------------------------- items
 
 
-def _items_page(conn) -> str:
+def _items_page(conn, beat: dt.datetime | None) -> str:
     rows = conn.execute(
         "SELECT w.*, s.subject_key, s.graph FROM work_item w "
         "JOIN subject s ON s.id = w.subject_id ORDER BY w.id DESC"
@@ -174,7 +206,7 @@ def _items_page(conn) -> str:
         body.append("<table><tr><th>item</th><th>graph</th><th>sujet</th><th>gén.</th>"
                     "<th>état</th><th>version</th><th>escalades</th><th>fin</th></tr>"
                     f"{lines}</table>")
-    return _shell("graphatom — items", "".join(body))
+    return _shell("graphatom — items", "".join(body), beat)
 
 
 # ----------------------------------------------------------------- graph SVG
@@ -355,7 +387,7 @@ def _result(result: dict | None) -> str:
     return fields + (f"<pre>{_e(tail)}</pre>" if tail else "")
 
 
-def _item_page(conn, item_id: int) -> str | None:
+def _item_page(conn, item_id: int, beat: dt.datetime | None) -> str | None:
     item = conn.execute(
         "SELECT w.*, s.subject_key, s.graph, s.lineage_budget FROM work_item w "
         "JOIN subject s ON s.id = w.subject_id WHERE w.id = %s", (item_id,)
@@ -452,7 +484,7 @@ def _item_page(conn, item_id: int) -> str | None:
                 body.append(f"<p><a href='{href}'>{_e(p.name)}</a> "
                             f"<small>({p.stat().st_size} o)</small></p>")
 
-    return _shell(f"graphatom — item {item_id}", "".join(body))
+    return _shell(f"graphatom — item {item_id}", "".join(body), beat)
 
 
 def _file_response(item_id: int, name: str) -> tuple[bytes, str] | None:
@@ -525,13 +557,15 @@ def serve(port: int = 8848, by: str = "web", notify_cmd: str | None = None,
                 return self.wfile.write(data)
             try:
                 with db.connect() as conn:
+                    beat = heartbeat.last(conn)  # une ligne : l'en-tête de toute page
                     if path == "/":
                         flash = parse_qs(query).get("m", [None])[0]
-                        page = _questions_page(channel.open_questions(conn), by, token, flash)
+                        page = _questions_page(channel.open_questions(conn), by, token,
+                                               flash, beat)
                     elif path == "/items":
-                        page = _items_page(conn)
+                        page = _items_page(conn, beat)
                     elif path.startswith("/item/") and path[6:].isdigit():
-                        page = _item_page(conn, int(path[6:]))
+                        page = _item_page(conn, int(path[6:]), beat)
                     else:
                         page = None
             except Exception as exc:  # une vitrine qui tombe le dit, elle ne coupe pas

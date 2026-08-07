@@ -67,6 +67,9 @@ uv run python tests/hermetic_test.py                 # ce qu'un agent lance ne v
 uv run python tests/passage_test.py                  # un retry d'escalade rend la
                                                      # marge de tentatives des nœuds,
                                                      # jamais le budget d'escalades
+uv run python tests/heartbeat_test.py                # le battement du worker : le
+                                                     # front et le canal GitHub disent
+                                                     # quand plus rien ne tourne
 ```
 
 Les tests ne touchent jamais au `data/` du repo : chacun travaille dans un
@@ -85,6 +88,11 @@ par option, et rien d'autre. Le canal n'écrit jamais l'état d'un item — il
 enregistre la réponse, l'ordonnanceur route au tick suivant. Une page
 disponible n'est pas un oncall notifié : `--notify-cmd` lance une commande
 à chaque question ouverte (au-moins-une-fois — au redémarrage, on renotifie).
+
+L'en-tête de chaque page porte le battement du worker — « rail vivant il y
+a 3 s », ou un bandeau rouge « rail à l'arrêt depuis HH:MM — les états
+affichés sont figés ». Une page qui montre des états doit dire quand plus
+personne ne les fait avancer : voir [le battement](#le-battement-du-worker--railstalled).
 
 La boucle avec GitHub va dans les deux sens : les commentaires du rail
 pointent vers le frontend, et le frontend renvoie vers GitHub. Partout où
@@ -163,6 +171,36 @@ peut poser en plus `- [ ] #29` dans le corps pour la lisibilité, mais la
 vérité du rail reste la ligne `Depends-on:`. Deux issues ouvertes qui
 dépendent l'une de l'autre se bloquent pour toujours — c'est visible (deux
 `rail:blocked`), et c'est à l'humain de casser le cycle en éditant un corps.
+
+### Le battement du worker : `rail:stalled`
+
+Un worker mort ne dit rien, et c'est le problème : les items gardent leurs
+états actifs — `test_frontend`, `review`… — alors que plus rien ne tourne.
+Pas de faucheur, donc pas de classement des agents expirés, donc pas
+d'escalade : aucune question, aucun signal, nulle part. C'est arrivé quatre
+fois en un jour, jusqu'à quarante minutes de stase invisible. L'absence de
+signal doit devenir un signal.
+
+L'ordonnanceur tamponne donc un battement à chaque tick — une ligne en base
+(`heartbeat`, `id = 1`, UPSERT), écrite dans le tick comme le reste : pas de
+thread dédié, pas de timer. Plusieurs workers tamponnent la même ligne :
+c'est « au moins un vivant » qu'on mesure, jamais qui est vivant.
+
+Deux surfaces le lisent, et deux suffisent :
+
+- **le frontend**, dans l'en-tête commun de chaque page — « rail vivant il y
+  a 3 s », et au-delà de deux minutes le bandeau rouge « rail à l'arrêt
+  depuis HH:MM — les états affichés sont figés » ; une requête d'une ligne
+  par rendu ;
+- **le canal GitHub**, qui pose `rail:stalled` sur les issues des items
+  actifs et le retire au retour du battement, comme les autres
+  labels-projections. C'est le point clé : le sync est un processus séparé
+  du worker et survit à sa mort — le problème se voit sur GitHub
+  précisément quand le worker ne peut plus parler.
+
+Pas d'alerte externe de plus : l'opérateur regarde déjà l'une des deux. Et
+le sync ne lit le battement que pour cette projection — il ne prend aucune
+décision d'état avec : GitHub reste une projection, la base reste l'autorité.
 
 ### Config de déploiement : épinglée dans le repo
 
