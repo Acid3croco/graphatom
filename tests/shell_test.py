@@ -13,7 +13,8 @@ qui autorise un nœud sans agent : il écrit toujours son `outcome.json`.
      jamais un nœud coincé
   6. `scripts/release.sh` nomme le pas qui a lâché et sort sur son code
   7. la frontière tient dans le bundle : un nœud mécanique ne lance aucun
-     modèle, un nœud à modèle rend son `usage.json`
+     modèle, un nœud à modèle rend son `usage.json`, et les trois nœuds de
+     retrait sont le même shell
 
 Usage : uv run python tests/shell_test.py
 """
@@ -137,14 +138,21 @@ def main() -> None:
     #    n'appellent aucun modèle, et ceux qui en appellent un rendent le
     #    coût de la tentative — un merge d'amont ne doit rien reprendre
     #    d'un côté ni de l'autre
-    for nom in ("worktree", "deploy", "verify_deploy", "cleanup", "cleanup_unresolved"):
+    for nom in ("worktree", "deploy", "verify_deploy",
+                "cleanup", "cleanup_unresolved", "cleanup_split"):
         cmd = BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
         assert "claude " not in cmd, f"{nom} lance encore un modèle"
-    for nom in ("implement", "test_backend", "test_frontend", "release"):
+    for nom in ("scope", "implement", "test_backend", "test_frontend", "release"):
         cmd = BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
         assert "claude " in cmd, f"{nom} n'est plus un agent"
         assert "usage.json" in cmd, f"{nom} ne rend pas son usage.json"
-    print("7. cinq nœuds sans modèle, quatre agents qui rendent leur usage ✓")
+    # les trois retraits sont le même shell : seul leur prompt les distingue,
+    # et une correction sur l'un doit se voir sur les trois
+    retraits = {BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
+                for nom in ("cleanup", "cleanup_unresolved", "cleanup_split")}
+    assert len(retraits) == 1, "les nœuds de retrait ont divergé"
+    print("7. six nœuds sans modèle dont trois retraits identiques, "
+          "cinq agents qui rendent leur usage ✓")
 
     shutil.rmtree(tmp, ignore_errors=True)
     print("\nnœuds shell : OK — déterministes, et jamais sans outcome")
