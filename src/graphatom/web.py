@@ -7,6 +7,11 @@ Un http.server stdlib, zéro dépendance. Trois pages :
     /item/<id>   la trajectoire : graph SVG avec l'état courant marqué,
                  journal v1..vN, runs, effets, questions
 
+Un sujet de la forme `gh:<owner>/<repo>#<num>` devient partout un lien vers
+l'issue, et la page d'un item porte le lien de sa PR quand le nœud release
+en a laissé une dans `release.json` — la boucle se ferme dans les deux sens,
+sans jamais appeler GitHub depuis ici.
+
 Tout le reste est en lecture seule : cette interface montre le rail,
 elle ne le pilote pas. Pas d'auth, pas d'exposition Internet, pas de
 mutation d'items.
@@ -14,6 +19,7 @@ mutation d'items.
 
 import html
 import json
+import re
 import secrets
 import subprocess
 import threading
@@ -51,6 +57,9 @@ th { color: #666; font-weight: 600; }
 .badge.faulted, .badge.stale, .badge.superseded, .badge.rejected { background: #fde2e2; }
 .badge.uncertain { background: #fff3cd; }
 svg { max-width: 100%; height: auto; }
+pre { white-space: pre-wrap; word-break: break-word; font-size: .8rem;
+      background: #f6f6f6; border-radius: 6px; padding: .4rem .6rem;
+      margin: .4rem 0 0; max-height: 16rem; overflow: auto; }
 """
 
 REFRESH = "<meta http-equiv='refresh' content='5'>"
@@ -68,6 +77,47 @@ def _e(v) -> str:
     return html.escape(str(v))
 
 
+# ------------------------------------------------------------------- sujet gh
+
+GH_SUBJECT = re.compile(r"gh:([\w.-]+/[\w.-]+)#(\d+)")
+
+
+def _subject(subject_key: str) -> str:
+    """Le sujet en HTML : un lien vers l'issue quand il en est une, sinon du texte.
+
+    Le frontend ne connaît GitHub que comme un format de sujet parmi
+    d'autres : tout ce qui ne matche pas `gh:<owner>/<repo>#<num>` reste
+    du texte brut, et le noyau reste agnostique.
+    """
+    m = GH_SUBJECT.fullmatch(subject_key)
+    if not m:
+        return _e(subject_key)
+    return (f"<a href='https://github.com/{_e(m[1])}/issues/{_e(m[2])}'>"
+            f"{_e(subject_key)}</a>")
+
+
+def _pr(item_id: int) -> str:
+    """Le lien vers la PR du cycle, quand le nœud release en a laissé une.
+
+    La source est `release.json`, écrit par le nœud release à côté de son
+    markdown : trois clés lues telles quelles, jamais un parseur de prose.
+    Pas de fichier, pas d'URL dedans : pas de lien, et rien à dire.
+    """
+    path = DATA_DIR / f"item-{item_id}" / "release.json"
+    if not path.is_file():
+        return ""
+    try:
+        release = json.loads(path.read_text())
+    except json.JSONDecodeError:  # la page le dit, elle ne devine pas — et reste lisible
+        return " · <small>release.json illisible</small>"
+    if not release.get("pr_url"):
+        return ""
+    number = release.get("pr_number")
+    sha = str(release.get("merge_sha") or "")
+    return (f" · <a href='{_e(release['pr_url'])}'>PR{f' #{_e(number)}' if number else ''}</a>"
+            + (f" (mergée {_e(sha[:7])})" if sha else ""))
+
+
 # ------------------------------------------------------------------ questions
 
 
@@ -83,7 +133,7 @@ def _questions_page(questions: list[dict], by: str, token: str, flash: str | Non
             for opt in q["options"])
         parts.append(
             f"<div class='q'><div class='meta'>"
-            f"[{q['id']}] {_e(q['subject_key'])} · <a href='/item/{q['item_id']}'>item {q['item_id']}</a> "
+            f"[{q['id']}] {_subject(q['subject_key'])} · <a href='/item/{q['item_id']}'>item {q['item_id']}</a> "
             f"en <b>{_e(q['item_state'])}</b> · pour {_e(q['owner'])} "
             f"· avant {q['deadline']:%d/%m %H:%M} · escalades restantes {q['escalations']}"
             f"</div><div class='text'>{_e(q['text'])}</div>"
@@ -108,7 +158,7 @@ def _items_page(conn) -> str:
     else:
         lines = "".join(
             f"<tr><td><a href='/item/{r['id']}'>{r['id']}</a></td>"
-            f"<td>{_e(r['graph'])}</td><td>{_e(r['subject_key'])}</td>"
+            f"<td>{_e(r['graph'])}</td><td>{_subject(r['subject_key'])}</td>"
             f"<td>g{r['generation']}</td>"
             f"<td><span class='badge {'terminal' if r['terminal_at'] else 'active'}'>"
             f"{_e(r['state'])}</span></td>"
@@ -212,6 +262,25 @@ def _table(headers: list[str], rows: list[str]) -> str:
     return f"<table><tr>{head}</tr>{''.join(rows)}</table>"
 
 
+# jsonb ne garde pas l'ordre des clés : le post-mortem d'abord, la trace après
+RESULT_ORDER = ["outcome", "exit_code", "timeout", "error"]
+
+
+def _result(result: dict | None) -> str:
+    """Le résultat d'un run : les champs en ligne, la queue de log en bloc.
+
+    L'autopsie d'une tentative crashée (`exit_code`, `timeout`, `log_tail`)
+    se lit ici — sans elle, il fallait fouiller le workspace à la main.
+    """
+    if not result:
+        return ""
+    keys = [k for k in RESULT_ORDER if k in result]
+    keys += sorted(k for k in result if k not in RESULT_ORDER and k != "log_tail")
+    fields = " · ".join(f"{_e(k)} <b>{_e(result[k])}</b>" for k in keys)
+    tail = result.get("log_tail")
+    return fields + (f"<pre>{_e(tail)}</pre>" if tail else "")
+
+
 def _item_page(conn, item_id: int) -> str | None:
     item = conn.execute(
         "SELECT w.*, s.subject_key, s.graph, s.lineage_budget FROM work_item w "
@@ -222,7 +291,7 @@ def _item_page(conn, item_id: int) -> str | None:
     bundle = load_bundle(conn, item["revision"])
     state = "terminal" if item["terminal_at"] else "active"
     body = [
-        f"<h1>item {item['id']} <small>· {_e(item['subject_key'])} · "
+        f"<h1>item {item['id']} <small>· {_subject(item['subject_key'])}{_pr(item_id)} · "
         f"g{item['generation']} · {_e(item['graph'])} · rév. {item['revision'][:12]}…</small></h1>",
         f"<p><span class='badge {state}'>{_e(item['state'])}</span> "
         f"v{item['version']} · escalades restantes {item['escalations']} · "
@@ -248,11 +317,12 @@ def _item_page(conn, item_id: int) -> str | None:
     ).fetchall()
     if runs:
         body.append("<h2>runs</h2>" + _table(
-            ["run", "nœud", "tentative", "statut", "issue", "fence", "bail"],
+            ["run", "nœud", "tentative", "statut", "issue", "fence", "bail", "résultat"],
             [f"<tr><td>{r['id']}</td><td>{_e(r['node'])}</td><td>{r['attempt']}</td>"
              f"<td><span class='badge {_e(r['status'])}'>{_e(r['status'])}</span></td>"
              f"<td>{_e(r['outcome'] or '')}</td><td>{r['fence']}</td>"
-             f"<td>{r['lease_expires_at']:%H:%M:%S}</td></tr>" for r in runs]))
+             f"<td>{r['lease_expires_at']:%H:%M:%S}</td>"
+             f"<td>{_result(r['result'])}</td></tr>" for r in runs]))
 
     effects = conn.execute(
         "SELECT * FROM effect WHERE item_id = %s ORDER BY op_id", (item_id,)

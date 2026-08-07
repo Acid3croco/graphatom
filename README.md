@@ -45,6 +45,8 @@ uv run python tests/orphans_test.py                  # un bail expiré tue tout 
                                                      # groupe de l'agent, sans base
 uv run python tests/reconnect_test.py                # couper la base sous le worker :
                                                      # il se reconnecte et reprend
+uv run python tests/links_test.py                    # les liens du frontend vers
+                                                     # l'issue et la PR, sans base
 ```
 
 ## Le canal humain (milestone 2)
@@ -59,6 +61,15 @@ par option, et rien d'autre. Le canal n'écrit jamais l'état d'un item — il
 enregistre la réponse, l'ordonnanceur route au tick suivant. Une page
 disponible n'est pas un oncall notifié : `--notify-cmd` lance une commande
 à chaque question ouverte (au-moins-une-fois — au redémarrage, on renotifie).
+
+La boucle avec GitHub va dans les deux sens : les commentaires du rail
+pointent vers le frontend, et le frontend renvoie vers GitHub. Partout où
+un sujet a la forme `gh:<owner>/<repo>#<num>` — page des questions, `/items`,
+en-tête de `/item/<id>` — il devient un lien vers l'issue ; et quand le cycle
+a produit une PR, `/item/<id>` l'affiche à côté, lue dans le `release.json`
+que le nœud release écrit dans le workspace. Tout se construit depuis la base
+et le workspace : aucun appel à l'API GitHub depuis le web. Un sujet d'une
+autre forme reste du texte brut — le kernel, lui, ne connaît pas GitHub.
 
 Refusé, exprès : auth, comptes, exposition Internet, WebSocket, édition de
 graphs, mutation d'items, dashboard. Voir les WAIT, répondre une fois parmi
@@ -81,8 +92,9 @@ canal web (secours, port 8850). Ensuite tout se passe sur GitHub :
 3. le rail pose sa question fermée en commentaire
 4. répondre par un commentaire `/answer <id> <option>` (auteurs autorisés :
    `GRAPHATOM_ANSWERERS`, défaut : le propriétaire du repo)
-5. le rail route — le label suit chaque transition — puis poste le rapport
-   terminal, le journal en table, et retire le label d'état
+5. le rail route — le label suit chaque transition, et l'accusé est réécrit
+   pour porter la trajectoire en direct — puis poste le rapport terminal,
+   le journal en table, et retire le label d'état
 
 Règles : GitHub est l'interface humaine et la cible des effets, Postgres
 reste l'unique autorité d'exécution. Chaque prise de parole du rail est un
@@ -91,13 +103,46 @@ dans les commentaires : un crash entre le POST et le marquage ne produit
 jamais de doublon. Le label `rail:<état>` n'est pas un état : c'est une
 projection possédée par le rail, comme la colonne d'un board — jamais lue,
 repeinte à chaque tick depuis la base ; un label bricolé à la main revient
-à sa place tout seul. Aucun parsing de langage naturel, aucune lecture de
+à sa place tout seul. Le repeint ne voit que les issues ouvertes, mais le
+retrait au terminal vise l'issue par son numéro : une issue fermée par le
+merge de sa propre PR ne garde pas son label. La trajectoire est une
+projection de même nature — le commentaire d'accusé est réécrit à chaque
+transition, reconstruit depuis la base, jamais complété à l'aveugle ; une
+édition ne notifie personne, donc l'issue est un tableau de bord en direct
+sans un seul mail. Aucun parsing de langage naturel, aucune lecture de
 GitHub comme état d'item. La démo : issues [#7](https://github.com/Acid3croco/graphatom/issues/7)
 et [#8](https://github.com/Acid3croco/graphatom/issues/8).
 
-Config de déploiement : `GRAPHATOM_TAKE_ALL=1` fait prendre en charge
-toute issue ouverte, sans attendre le label — pour un repo dont le rail
-est le seul mainteneur.
+### Config de déploiement : épinglée dans le repo
+
+Un redéploiement (`docker compose up -d`) ne doit jamais dépendre des
+variables du shell qui l'invoque — le token excepté. Sinon le rail se
+redéploie lui-même sans elles et perd sa config sans un mot : c'est
+arrivé, `GRAPHATOM_TAKE_ALL` vidé, admission éteinte neuf heures.
+
+La config de cette instance vit donc dans le [`.env`](.env) commité à la
+racine, que compose lit tout seul :
+
+| variable | rôle |
+| --- | --- |
+| `GRAPHATOM_TAKE_ALL=1` | prendre en charge toute issue ouverte, sans attendre le label — pour un repo dont le rail est le seul mainteneur |
+| `GRAPHATOM_ANSWERERS` | les auteurs autorisés à répondre `/answer` |
+| `GRAPHATOM_WEB_URL` | l'URL publique de l'UI, celle des liens « Trajectoire » postés sur GitHub |
+| `GRAPHATOM_PROXY_NET` / `..._EXTERNAL` | le réseau docker du proxy que le service `web` rejoint |
+
+Pas de secret dedans : `GITHUB_TOKEN` reste fourni par le shell et garde
+son garde-fou (`${GITHUB_TOKEN:?…}`). Les défauts du `docker-compose.yml`
+restent ceux d'un déploiement générique — le compose est générique, le
+`.env` est cette instance.
+
+**Le raccordement au proxy suit la même règle.** L'UI est exposée sur
+`graphatom.veyxzer.com` par le Traefik de l'hôte, avec basicauth au bord
+— l'app reste sans auth, refus assumé. Le routeur Traefik vit dans le
+proxy, hors de ce repo ; seul le raccordement réseau est déclaré ici, dans
+le compose, sur le service `web`. Un `docker network connect` à la main
+n'aurait pas survécu au premier `up -d` — même panne silencieuse que
+`TAKE_ALL`. Sans les deux variables du `.env`, compose crée son propre
+réseau `graphatom-proxy` : un déploiement sans proxy ne casse pas.
 
 ## De vrais agents dans les blocs (milestone 3b)
 
@@ -118,6 +163,13 @@ codex, pi…) fait l'affaire ; le kernel n'en connaît aucun. Pas
 d'`outcome.json` valide → `crashed`, retenté puis escaladé — comme
 n'importe quel bloc. L'agent ne voit jamais la base du rail :
 `GRAPHATOM_AGENT_DSN` lui substitue une base jetable.
+
+Une tentative crashée rend son **autopsie** dans le résultat du run —
+`exit_code` (négatif = le signal qui l'a tué), `log_tail` (les 20 dernières
+lignes d'`agent-<tentative>.log`, bornées à 2 000 caractères) et `timeout`
+(vrai si c'est le bail du bloc qui a fauché l'agent). La table des runs de
+`/item/<id>` l'affiche : le post-mortem se lit sur la page, pas en fouillant
+le workspace à la main.
 
 [`examples/code-task.json`](examples/code-task.json) est le graph qui fait
 tourner ce repo : implémentation par agent, **agent de test backend**

@@ -3,17 +3,19 @@
 Scénario, sans base ni ordonnanceur — seul le bloc agent est en jeu :
 
   1. un agent factice qui laisse un sous-processus derrière lui est fauché
-     au timeout, et l'erreur remonte (le noyau classera la tentative crashed)
+     au timeout, et la tentative est classée crashed avec son autopsie
   2. plus aucun processus vivant de son groupe après la tentative
   3. le journal `agent-<tentative>.log` est écrit comme d'habitude
   4. un agent qui répond normalement passe toujours
+  5. un agent qui sort en erreur sans `outcome.json` rend son autopsie :
+     code de sortie, queue de log, et pas de flag timeout
 
 Usage : uv run python tests/orphans_test.py
 """
 
 import os
 import shutil
-import subprocess
+import signal
 import sys
 import tempfile
 import time
@@ -26,6 +28,7 @@ from graphatom import blocks  # noqa: E402
 # le shell note le pgid de son groupe, puis laisse un sous-processus derrière lui
 FACTICE = "ps -o pgid= -p $$ > pgid.txt; sleep 300 & sleep 300"
 REPOND = """printf '{"outcome": "ok", "summary": "fait"}' > outcome.json"""
+ECHOUE = "echo 'Execution error' >&2; exit 42"  # sort mal, sans outcome.json
 TIMEOUT_S = 2
 
 
@@ -69,15 +72,17 @@ def group_alive(pgid: int) -> list[int]:
 def main() -> None:
     workdir = Path(tempfile.mkdtemp(prefix="graphatom-orphans-"))
 
-    # 1. l'agent factice est fauché au timeout
+    # 1. l'agent factice est fauché au timeout, et rend son autopsie
     ctx = context(workdir, FACTICE, attempt=1)
     started = time.time()
-    try:
-        blocks.act(ctx)
-    except subprocess.TimeoutExpired:
-        print(f"1. agent fauché au timeout après {time.time() - started:.1f}s ✓")
-    else:
-        sys.exit("ÉCHEC : l'agent factice n'a pas été fauché")
+    result = blocks.act(ctx)
+    assert result["outcome"] == "crashed", result
+    assert result["timeout"] is True, result
+    # négatif = signal : SIGTERM s'il part à la grâce, SIGKILL sinon
+    assert result["exit_code"] in (-signal.SIGTERM, -signal.SIGKILL), result
+    assert "TimeoutExpired" in result["error"], result
+    print(f"1. agent fauché au timeout après {time.time() - started:.1f}s, "
+          f"autopsie {result['exit_code']} ✓")
 
     # 2. le groupe entier est révoqué, descendants compris
     pgid = int((ctx.workspace / "pgid.txt").read_text())
@@ -100,6 +105,15 @@ def main() -> None:
     result = blocks.act(context(workdir, REPOND, attempt=2))
     assert result == {"outcome": "ok", "summary": "fait"}, result
     print(f"4. agent nominal appliqué : {result} ✓")
+
+    # 5. l'agent qui sort en erreur rend son autopsie, sans flag timeout
+    result = blocks.act(context(workdir, ECHOUE, attempt=3))
+    assert result["outcome"] == "crashed", result
+    assert result["exit_code"] == 42, result
+    assert result["timeout"] is False, result
+    assert "Execution error" in result["log_tail"], result
+    print(f"5. autopsie du crash : sortie {result['exit_code']}, "
+          f"queue « {result['log_tail'].strip()} » ✓")
 
     shutil.rmtree(workdir, ignore_errors=True)
     print("\norphelins : OK — un descendant ne survit pas au bail de l'agent")
