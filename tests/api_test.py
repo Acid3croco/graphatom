@@ -1,0 +1,202 @@
+"""Le test de l'API JSON du canal web : la projection, sans base ni serveur.
+
+Les quatre lectures sont des fonctions pures d'une base et d'un workspace —
+elles se jouent ici sur une base factice et un répertoire jetable :
+
+  1. `/api/items` : les clés du contrat, `status` qui n'est pas `state`,
+     l'URL de l'issue quand le sujet en est une, celle de la PR quand
+     `release.json` en porte une
+  2. `/api/item/<id>` : les sept clés de la page, et un item inconnu qui
+     ne rend rien du tout — c'est ce None que la route tourne en 404
+  3. le graph redessinable sans la base, les runs avec durée et tokens,
+     les fichiers du workspace avec l'URL qui les sert
+  4. `/api/questions` : le jeton de `POST /answer`, jusqu'ici enfoui dans
+     le HTML, et les options de chaque question ouverte
+  5. `/api/heartbeat`, et tout le reste sérialisable : les horodatages
+     sortent en ISO 8601, jamais un `TypeError` au moment de répondre
+
+Usage : uv run python tests/api_test.py
+"""
+
+import datetime as dt
+import json
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from graphatom import blocks, web  # noqa: E402
+
+T0 = dt.datetime(2026, 8, 7, 10, 0, tzinfo=dt.timezone.utc)
+ISSUE = "gh:Acid3croco/graphatom#66"
+ISSUE_URL = "https://github.com/Acid3croco/graphatom/issues/66"
+PR_URL = "https://github.com/Acid3croco/graphatom/pull/70"
+
+BUNDLE = {
+    "name": "démo", "entry": "ingest", "budgets": {},
+    "on_kernel": {"escalate_to": "escalate", "exhausted_to": "closed"},
+    "nodes": {
+        "ingest": {"block": "FETCH", "edges": {"ok": "decide"}},
+        "decide": {"block": "JUDGE", "edges": {"fix": "closed", "raise": "escalate"}},
+        "escalate": {"block": "WAIT", "escalade": True,
+                     "edges": {"retry": "ingest", "expired": "closed"}},
+        "closed": {"terminal": True},
+    },
+}
+
+
+class FakeCursor:
+    def __init__(self, rows: list):
+        self.rows = rows
+
+    def fetchall(self):
+        return self.rows
+
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
+    def __iter__(self):  # `open_questions` fait un `list(...)` du curseur
+        return iter(self.rows)
+
+
+class FakeConn:
+    """La base : chaque requête rend les lignes de la table qu'elle nomme.
+
+    L'ordre compte — `ITEM_SELECT` nomme `event` dans sa sous-requête de
+    `updated_at`, donc `work_item` doit être testé avant.
+    """
+
+    def __init__(self, **tables):
+        self.tables = tables
+
+    def execute(self, sql: str, params: tuple = ()):
+        for name, rows in self.tables.items():
+            if f"FROM {name}" in sql:
+                return FakeCursor(rows)
+        return FakeCursor([])
+
+
+def item_row(item_id: int, subject_key: str, terminal: bool) -> dict:
+    return {"id": item_id, "subject_key": subject_key, "title": "un titre",
+            "graph": "code-task", "generation": 1, "revision": "abc123",
+            "state": "closed" if terminal else "decide", "version": 4, "cycle": 1,
+            "fence": 0, "escalations": 2, "lineage_budget": 2,
+            "wall_deadline": T0 + dt.timedelta(hours=6),
+            "terminal_at": T0 + dt.timedelta(seconds=30) if terminal else None,
+            "updated_at": T0 + dt.timedelta(seconds=30)}
+
+
+def conn_of(item_id: int, subject_key: str = ISSUE, terminal: bool = True) -> FakeConn:
+    events = [
+        {"item_id": item_id, "item_version": 1, "at": T0, "kind": "admitted",
+         "from_state": None, "to_state": "ingest", "outcome": None, "run_id": None},
+        {"item_id": item_id, "item_version": 2, "at": T0 + dt.timedelta(seconds=10),
+         "kind": "result", "from_state": "ingest", "to_state": "decide",
+         "outcome": "ok", "run_id": 7},
+    ]
+    runs = [{"id": 7, "item_id": item_id, "node": "ingest", "cycle": 1, "attempt": 1,
+             "status": "applied", "fence": 1, "expected_version": 1,
+             "lease_expires_at": T0 + dt.timedelta(minutes=20), "outcome": "ok",
+             "result": {"outcome": "ok", "usage": {"input_tokens": 120,
+                                                   "output_tokens": 30}}}]
+    questions = [{"id": 5, "item_id": item_id, "node": "escalate",
+                  "text": "On garde ?", "options": ["merger", "abandonner"],
+                  "owner": "Acid3croco", "deadline": T0 + dt.timedelta(hours=2),
+                  "state": "open", "answer": None, "answered_by": None,
+                  "answered_at": None}]
+    return FakeConn(work_item=[item_row(item_id, subject_key, terminal)],
+                    graph_revision=[{"bundle": BUNDLE}], event=events,
+                    node_run=runs, effect=[], question=questions)
+
+
+def open_conn(item_id: int) -> FakeConn:
+    """La base vue par `open_questions` : la question, jointe à son item."""
+    question = {"id": 5, "item_id": item_id, "node": "escalate",
+                "text": "On garde ?", "options": ["merger", "abandonner"],
+                "owner": "Acid3croco", "deadline": T0 + dt.timedelta(hours=2),
+                "state": "open", "answer": None, "answered_by": None,
+                "subject_key": ISSUE, "item_title": "un titre",
+                "item_state": "escalate", "item_version": 4, "escalations": 2}
+    return FakeConn(question=[question])
+
+
+def main() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        blocks.DATA_DIR = Path(tmp)  # le seul répertoire de données, celui des blocs
+        workspace = blocks.item_workspace(14)
+        workspace.mkdir()
+        (workspace / "criteria.md").write_text("1. ça marche — preuve : ce test\n")
+        (workspace / "release.json").write_text(json.dumps({"pr_url": PR_URL}))
+
+        # 1. la liste : les clés du contrat, et les deux liens
+        items = web._api_items(conn_of(14))
+        assert len(items) == 1, items
+        item = items[0]
+        for key in ("id", "subject_key", "title", "state", "status", "issue_url",
+                    "pr_url", "updated_at"):
+            assert key in item, key
+        assert item["state"] == "closed" and item["status"] == "terminal", item
+        assert item["issue_url"] == ISSUE_URL and item["pr_url"] == PR_URL, item
+        print("1. /api/items : id, titre, état, status, issue, PR ✓")
+
+        # un sujet d'un autre canal n'a ni issue ni PR inventées
+        plain = web._api_items(conn_of(99, "pipeline-x:oom", terminal=False))[0]
+        assert plain["issue_url"] is None and plain["pr_url"] is None, plain
+        assert plain["status"] == "active" and plain["state"] == "decide", plain
+        print("2. autre canal, item actif : aucun lien inventé, status actif ✓")
+
+        # 2. l'item entier : les sept clés de la page, et l'item inconnu
+        payload = web._api_item(conn_of(14), 14)
+        for key in ("item", "graph", "journal", "runs", "questions", "criteria",
+                    "files"):
+            assert key in payload, key
+        assert web._api_item(FakeConn(work_item=[]), 999999) is None
+        print("3. /api/item/14 : les sept clés, et l'inconnu rend None ✓")
+
+        # 3. de quoi redessiner sans la base, et de quoi chiffrer le cycle
+        graph = payload["graph"]
+        assert graph["current"] == "closed", graph
+        assert {n["name"] for n in graph["nodes"]} == set(BUNDLE["nodes"]), graph
+        assert {"from": "decide", "outcome": "raise", "to": "escalate"} in graph["edges"]
+        assert graph["entry"] == "ingest" and graph["on_kernel"], graph
+        run = payload["runs"][0]
+        assert run["node"] == "ingest" and run["attempt"] == 1, run
+        assert run["duration_s"] == 10.0, run  # l'écart des deux transitions
+        assert run["usage"] == {"input_tokens": 120, "output_tokens": 30}, run
+        assert payload["item"]["usage"]["input_tokens"] == 120, payload["item"]
+        assert payload["item"]["duration_s"] == 30.0, payload["item"]
+        assert payload["journal"][1]["duration_s"] == 10.0, payload["journal"]
+        print("4. graph redessinable, runs chiffrés, journal daté ✓")
+
+        # les fichiers du workspace, avec l'URL qui les sert
+        names = {f["name"]: f["href"] for f in payload["files"]}
+        assert names["criteria.md"] == "/item/14/file/criteria.md", names
+        assert set(names) == {"criteria.md", "release.json"}, names
+        assert payload["criteria"].startswith("1. ça marche"), payload["criteria"]
+        print("5. files : nom + href, et criteria.md servi tel quel ✓")
+
+        # 4. les questions ouvertes, avec le jeton de POST /answer
+        answers = web._api_questions(open_conn(14), token="jeton-secret")
+        assert answers["token"] == "jeton-secret", answers
+        q = answers["questions"][0]
+        assert q["question_id"] == 5 and q["item_id"] == 14, q
+        assert q["options"] == ["merger", "abandonner"] and q["text"] == "On garde ?", q
+        # la question ouverte porte son item avec elle — le client n'a rien à joindre
+        assert q["issue_url"] == ISSUE_URL and q["item_state"] == "escalate", q
+        print("6. /api/questions : le jeton sort du HTML, les options avec ✓")
+
+        # 5. le battement, et tout le reste sérialisable tel quel
+        beat = web._api_heartbeat(None)
+        assert beat == {"at": None, "ago_s": None, "stale": True}, beat
+        assert web._api_heartbeat(T0)["stale"] is True, "un vieux battement est à l'arrêt"
+        body = json.dumps(payload, default=web._jsonable, ensure_ascii=False)
+        assert T0.isoformat() in body, "les horodatages sortent en ISO 8601"
+        assert json.loads(body)["item"]["id"] == 14
+        print("7. /api/heartbeat, et le payload sérialisable en ISO 8601 ✓")
+
+    print("\napi : OK — les pages se lisent en JSON, sans dépendance ni écriture")
+
+
+if __name__ == "__main__":
+    main()

@@ -7,6 +7,19 @@ Un http.server stdlib, zéro dépendance. Trois pages :
     /item/<id>   la trajectoire : graph SVG avec l'état courant marqué,
                  journal v1..vN, runs, effets, questions
 
+Les mêmes vues se lisent en JSON, pour un client qui rend la page lui-même :
+
+    /api/items       la liste, avec l'état, les liens issue et PR
+    /api/item/<id>   l'item entier : graph, journal, runs, questions,
+                     critères, fichiers du workspace
+    /api/questions   les questions ouvertes, et le jeton de `POST /answer`
+    /api/heartbeat   le battement du worker, brut
+
+Une projection, pas un second modèle : mêmes requêtes, mêmes durées, mêmes
+totaux de tokens que les pages — seul le rendu change. Rien ne s'y écrit :
+`POST /answer` reste l'unique porte, et sert les deux clients — du JSON à
+qui envoie `Accept: application/json`, la redirection d'avant au formulaire.
+
 La page d'un item répond aussi à « combien coûte un cycle ? » : chaque
 transition porte sa durée, chaque run ses tokens, et l'en-tête le total
 des deux. Rien de nouveau en base — les durées sortent des horodatages du
@@ -224,6 +237,21 @@ def _pr(item_id: int) -> str:
             + (f" (mergée {_e(sha[:7])})" if sha else ""))
 
 
+def _pr_url(item_id: int) -> str | None:
+    """L'URL de la PR seule, pour un client qui pose son propre lien.
+
+    Même source que `_pr`, sans l'habillage : pas de `release.json`, pas
+    d'URL dedans, ou du JSON cassé — None, et rien d'inventé.
+    """
+    path = item_workspace(item_id) / "release.json"
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text()).get("pr_url")
+    except json.JSONDecodeError:  # la page HTML le signale déjà, en toutes lettres
+        return None
+
+
 # ------------------------------------------------------------------ questions
 
 
@@ -255,12 +283,17 @@ def _questions_page(questions: list[dict], by: str, token: str, flash: str | Non
 
 # ---------------------------------------------------------------------- items
 
+# un item et son sujet, plus la date de sa dernière transition : le journal
+# la porte déjà, aucune colonne à tenir à jour pour le savoir
+ITEM_SELECT = (
+    "SELECT w.*, s.subject_key, s.graph, s.title, s.lineage_budget, "
+    "(SELECT max(at) FROM event e WHERE e.item_id = w.id) AS updated_at "
+    "FROM work_item w JOIN subject s ON s.id = w.subject_id "
+)
+
 
 def _items_page(conn, beat: dt.datetime | None) -> str:
-    rows = conn.execute(
-        "SELECT w.*, s.subject_key, s.graph, s.title FROM work_item w "
-        "JOIN subject s ON s.id = w.subject_id ORDER BY w.id DESC"
-    ).fetchall()
+    rows = conn.execute(ITEM_SELECT + "ORDER BY w.id DESC").fetchall()
     body = ["<h1>items</h1>"]
     if not rows:
         body.append("<p class='empty'>Aucun item admis.</p>")
@@ -462,12 +495,31 @@ def _result(result: dict | None) -> str:
     return fields + (f"<pre>{_e(tail)}</pre>" if tail else "")
 
 
+def _files(item_id: int) -> list[dict]:
+    """Les fichiers du workspace : leur nom, leur taille, l'URL qui les sert.
+
+    La même liste pour la page et pour l'API — un client JSON n'a pas à
+    reconstruire l'URL de `/item/<id>/file/<nom>` à la main.
+    """
+    workspace = item_workspace(item_id)
+    paths = sorted(p for p in workspace.iterdir() if p.is_file()) if workspace.is_dir() else []
+    return [{"name": p.name, "size": p.stat().st_size,
+             "href": f"/item/{item_id}/file/{quote(p.name)}"} for p in paths]
+
+
+def _criteria(item_id: int) -> str | None:
+    """`criteria.md` du workspace, tel quel — None quand le cycle n'en a pas.
+
+    La liste fermée des critères de succès, figée par le nœud scope : c'est
+    le contrat du cycle, et un client qui montre l'item doit pouvoir la
+    montrer sans aller pêcher le fichier.
+    """
+    path = item_workspace(item_id) / "criteria.md"
+    return path.read_text() if path.is_file() else None
+
+
 def _item_page(conn, item_id: int, beat: dt.datetime | None) -> str | None:
-    item = conn.execute(
-        "SELECT w.*, s.subject_key, s.graph, s.title, s.lineage_budget "
-        "FROM work_item w JOIN subject s ON s.id = w.subject_id WHERE w.id = %s",
-        (item_id,)
-    ).fetchone()
+    item = conn.execute(ITEM_SELECT + "WHERE w.id = %s", (item_id,)).fetchone()
     if item is None:
         return None
     bundle = load_bundle(conn, item["revision"])
@@ -549,18 +601,17 @@ def _item_page(conn, item_id: int, beat: dt.datetime | None) -> str | None:
              f"<td>{_e(q['answer'] or '')}</td><td>{_e(q['answered_by'] or '')}</td>"
              f"<td>{q['deadline']:%d/%m %H:%M}</td></tr>" for q in questions]))
 
-    workspace = item_workspace(item_id)
-    files = sorted(p for p in workspace.iterdir() if p.is_file()) if workspace.is_dir() else []
+    files = _files(item_id)
     if files:
         body.append("<h2>workspace</h2>")
-        for p in files:
-            href = f"/item/{item_id}/file/{quote(p.name)}"
-            if p.suffix == ".png":  # les screenshots des agents = la preview
-                body.append(f"<p>{_e(p.name)}</p><a href='{href}'>"
+        for f in files:
+            href, name = f["href"], _e(f["name"])
+            if f["name"].endswith(".png"):  # les screenshots des agents = la preview
+                body.append(f"<p>{name}</p><a href='{href}'>"
                             f"<img src='{href}' style='max-width:100%;border:1px solid #ddd'></a>")
             else:
-                body.append(f"<p><a href='{href}'>{_e(p.name)}</a> "
-                            f"<small>({p.stat().st_size} o)</small></p>")
+                body.append(f"<p><a href='{href}'>{name}</a> "
+                            f"<small>({f['size']} o)</small></p>")
 
     return _shell(f"graphatom — item {item_id}", "".join(body), beat, item["version"])
 
@@ -574,6 +625,159 @@ def _file_response(item_id: int, name: str) -> tuple[bytes, str] | None:
              else "application/json" if path.suffix == ".json"
              else "text/plain")
     return path.read_bytes(), f"{ctype}; charset=utf-8"
+
+
+# ------------------------------------------------------------------ API JSON
+
+
+def _jsonable(value):
+    """Ce que `json` ne sait pas rendre : un horodatage, en ISO 8601.
+
+    Le reste passe en texte plutôt qu'en 500 : une valeur inattendue au fond
+    d'un JSONB d'agent ne doit pas emporter la réponse entière.
+    """
+    return value.isoformat() if isinstance(value, dt.datetime) else str(value)
+
+
+def _api_item_row(row: dict) -> dict:
+    """Un item en JSON : ce que la table `/items` montre, plus ses deux liens.
+
+    `status` dit la vie de l'item — actif ou terminal —, `state` reste le
+    nœud courant du graph : la page les affiche ensemble dans son badge,
+    l'API ne les confond pas non plus.
+    """
+    return {
+        "id": row["id"],
+        "subject_key": row["subject_key"],
+        "title": row["title"],
+        "graph": row["graph"],
+        "generation": row["generation"],
+        "state": row["state"],
+        "status": "terminal" if row["terminal_at"] else "active",
+        "version": row["version"],
+        "cycle": row["cycle"],
+        "escalations": row["escalations"],
+        "issue_url": _issue_href(row["subject_key"]),
+        "pr_url": _pr_url(row["id"]),
+        "terminal_at": row["terminal_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def _api_items(conn) -> list[dict]:
+    """Tous les items, du plus récent au plus ancien — la table `/items`."""
+    return [_api_item_row(r) for r in conn.execute(
+        ITEM_SELECT + "ORDER BY w.id DESC").fetchall()]
+
+
+def _api_graph(bundle: dict, current: str) -> dict:
+    """De quoi redessiner le graph sans relire la base.
+
+    Les nœuds avec ce que le SVG en dit — bloc, terminal, escalade —, les
+    arêtes à plat (une par issue), les racines du placement (`entry` et les
+    cibles du noyau) et le nœud courant, celui que la page peint en orange.
+    """
+    nodes = bundle["nodes"]
+    return {
+        "name": bundle["name"],
+        "entry": bundle["entry"],
+        "on_kernel": bundle["on_kernel"],
+        "current": current,
+        "nodes": [{"name": n, "block": spec.get("block"),
+                   "terminal": bool(spec.get("terminal")),
+                   "escalade": bool(spec.get("escalade"))}
+                  for n, spec in nodes.items()],
+        "edges": [{"from": n, "outcome": outcome, "to": target}
+                  for n, spec in nodes.items()
+                  for outcome, target in (spec.get("edges") or {}).items()],
+    }
+
+
+def _api_question(q: dict) -> dict:
+    """Une question en JSON, avec le contexte de son item quand la requête l'a joint."""
+    payload = {
+        "question_id": q["id"], "item_id": q["item_id"], "node": q["node"],
+        "text": q["text"], "options": list(q["options"]), "owner": q["owner"],
+        "deadline": q["deadline"], "state": q["state"],
+        "answer": q["answer"], "answered_by": q["answered_by"],
+    }
+    if "subject_key" in q:  # les questions ouvertes portent l'item avec elles
+        payload |= {"subject_key": q["subject_key"], "item_title": q["item_title"],
+                    "item_state": q["item_state"],
+                    "issue_url": _issue_href(q["subject_key"])}
+    return payload
+
+
+def _api_item(conn, item_id: int) -> dict | None:
+    """La page d'un item en données. None quand l'item n'existe pas.
+
+    Mêmes requêtes que `_item_page`, même arithmétique : les durées sortent
+    des horodatages du journal, les tokens du résultat des runs. Un client
+    externe rend la même page sans relire la base ni parser du HTML.
+    """
+    item = conn.execute(ITEM_SELECT + "WHERE w.id = %s", (item_id,)).fetchone()
+    if item is None:
+        return None
+    bundle = load_bundle(conn, item["revision"])
+    events = conn.execute(
+        "SELECT * FROM event WHERE item_id = %s ORDER BY item_version", (item_id,)
+    ).fetchall()
+    runs = conn.execute(
+        "SELECT * FROM node_run WHERE item_id = %s ORDER BY id", (item_id,)
+    ).fetchall()
+    effects = conn.execute(
+        "SELECT * FROM effect WHERE item_id = %s ORDER BY op_id", (item_id,)
+    ).fetchall()
+    questions = conn.execute(
+        "SELECT * FROM question WHERE item_id = %s ORDER BY id", (item_id,)
+    ).fetchall()
+
+    spans = _spans(events)
+    end = item["terminal_at"] or dt.datetime.now(dt.timezone.utc)
+    run_span = {e["run_id"]: spans[e["item_version"]]
+                for e in events if e["run_id"] and e["item_version"] in spans}
+
+    return {
+        "item": _api_item_row(item) | {
+            "revision": item["revision"],
+            "lineage_budget": item["lineage_budget"],
+            "wall_deadline": item["wall_deadline"],
+            "duration_s": (end - events[0]["at"]).total_seconds() if events else 0.0,
+            "usage": _totals(runs),
+        },
+        "graph": _api_graph(bundle, item["state"]),
+        "journal": [{"version": e["item_version"], "at": e["at"], "kind": e["kind"],
+                     "from_state": e["from_state"], "to_state": e["to_state"],
+                     "outcome": e["outcome"], "run_id": e["run_id"],
+                     "duration_s": spans.get(e["item_version"])} for e in events],
+        "runs": [{"id": r["id"], "node": r["node"], "cycle": r["cycle"],
+                  "attempt": r["attempt"], "status": r["status"],
+                  "outcome": r["outcome"], "fence": r["fence"],
+                  "lease_expires_at": r["lease_expires_at"],
+                  "duration_s": run_span.get(r["id"]),
+                  "usage": _usage(r), "result": r["result"]} for r in runs],
+        "effects": [{"op_id": f["op_id"], "logical_key": f["logical_key"],
+                     "target_uri": f["target_uri"], "observation": f["observation"]}
+                    for f in effects],
+        "questions": [_api_question(q) for q in questions],
+        "criteria": _criteria(item_id),
+        "files": _files(item_id),
+    }
+
+
+def _api_questions(conn, token: str) -> dict:
+    """Les questions ouvertes, et le jeton qu'attend `POST /answer`.
+
+    Le jeton est celui du formulaire rendu, jusqu'ici enfoui dans le HTML :
+    un client qui le lit ici répond sans jamais charger la page.
+    """
+    return {"token": token,
+            "questions": [_api_question(q) for q in channel.open_questions(conn)]}
+
+
+def _api_heartbeat(beat: dt.datetime | None) -> dict:
+    """Le battement brut, pour un client qui pose l'en-tête lui-même."""
+    return {"at": beat, "ago_s": heartbeat.age_s(beat), "stale": heartbeat.stalled(beat)}
 
 
 # --------------------------------------------------------------------- notify
@@ -621,6 +825,40 @@ def serve(port: int = 8848, by: str = "web", notify_cmd: str | None = None,
             self.end_headers()
             self.wfile.write(body.encode())
 
+        def _json(self, status: int, payload) -> None:
+            body = json.dumps(payload, default=_jsonable, ensure_ascii=False).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _wants_json(self) -> bool:
+            return "application/json" in self.headers.get("Accept", "")
+
+        def _api(self, path: str) -> None:
+            """Les routes JSON — un client qui demande du JSON en reçoit toujours.
+
+            Y compris quand ça rate : une erreur ici est un objet à `error`,
+            jamais une page, jamais une trace.
+            """
+            try:
+                with db.connect() as conn:
+                    if path == "/api/items":
+                        return self._json(200, _api_items(conn))
+                    if path == "/api/questions":
+                        return self._json(200, _api_questions(conn, token))
+                    if path == "/api/heartbeat":
+                        return self._json(200, _api_heartbeat(heartbeat.last(conn)))
+                    if path.startswith("/api/item/") and path[10:].isdigit():
+                        payload = _api_item(conn, int(path[10:]))
+                        if payload is None:
+                            return self._json(404, {"error": f"item {path[10:]} inconnu"})
+                        return self._json(200, payload)
+            except Exception as exc:  # une API qui tombe le dit, en JSON
+                return self._json(500, {"error": str(exc)})
+            self._json(404, {"error": f"route inconnue : {path}"})
+
         def do_GET(self):
             path, _, query = self.path.partition("?")
             parts = path.split("/")
@@ -633,6 +871,8 @@ def serve(port: int = 8848, by: str = "web", notify_cmd: str | None = None,
                 self.send_header("Content-Type", ctype)
                 self.end_headers()
                 return self.wfile.write(data)
+            if path.startswith("/api/"):
+                return self._api(path)
             try:
                 with db.connect() as conn:
                     beat = heartbeat.last(conn)  # une ligne : l'en-tête de toute page
@@ -652,18 +892,39 @@ def serve(port: int = 8848, by: str = "web", notify_cmd: str | None = None,
                 return self._respond(404, "introuvable")
             self._respond(200, page)
 
+        def _fields(self, body: str) -> dict:
+            """Les champs postés : formulaire urlencodé, ou JSON du même nom.
+
+            Le formulaire rendu poste ce qu'un navigateur poste, un client
+            JSON poste du JSON — trois clés dans les deux cas, et un seul
+            chemin derrière.
+            """
+            if "application/json" in self.headers.get("Content-Type", ""):
+                return json.loads(body)
+            return {k: v[0] for k, v in parse_qs(body).items()}
+
+        def _refuse(self, status: int, message: str) -> None:
+            """Un refus, dans la langue du client : JSON ou page."""
+            if self._wants_json():
+                return self._json(status, {"ok": False, "message": message})
+            self._respond(status, _e(message))
+
         def do_POST(self):
             if self.path != "/answer":
-                return self._respond(404, "introuvable")
+                return self._refuse(404, "introuvable")
             length = int(self.headers.get("Content-Length", 0))
-            form = parse_qs(self.rfile.read(length).decode())
-            if form.get("token", [""])[0] != token:
-                return self._respond(403, "jeton invalide — rechargez la page")
-            qid = int(form["question_id"][0])
-            option = form["option"][0]
+            try:
+                fields = self._fields(self.rfile.read(length).decode())
+                qid, option = int(fields["question_id"]), str(fields["option"])
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                return self._refuse(400, f"requête illisible : {exc}")
+            if fields.get("token") != token:
+                return self._refuse(403, "jeton invalide — rechargez la page")
             with db.connect() as conn:
                 err = channel.record_answer(conn, qid, option, by)
             msg = err or f"réponse « {option} » enregistrée — le rail reprend"
+            if self._wants_json():  # le client JSON lit l'issue, pas une redirection
+                return self._json(200, {"ok": err is None, "message": msg})
             self._respond(303, location=f"/?m={quote(msg)}")
 
     if notify_cmd:
