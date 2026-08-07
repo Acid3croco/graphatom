@@ -7,6 +7,11 @@ Un http.server stdlib, zéro dépendance. Trois pages :
     /item/<id>   la trajectoire : graph SVG avec l'état courant marqué,
                  journal v1..vN, runs, effets, questions
 
+La page d'un item répond aussi à « combien coûte un cycle ? » : chaque
+transition porte sa durée, chaque run ses tokens, et l'en-tête le total
+des deux. Rien de nouveau en base — les durées sortent des horodatages du
+journal, les tokens du résultat des runs.
+
 Un sujet de la forme `gh:<owner>/<repo>#<num>` devient partout un lien vers
 l'issue, et la page d'un item porte le lien de sa PR quand le nœud release
 en a laissé une dans `release.json` — la boucle se ferme dans les deux sens,
@@ -17,6 +22,7 @@ elle ne le pilote pas. Pas d'auth, pas d'exposition Internet, pas de
 mutation d'items.
 """
 
+import datetime as dt
 import html
 import json
 import re
@@ -254,6 +260,73 @@ def _graph_svg(bundle: dict, current: str) -> str:
     return "".join(parts)
 
 
+# ------------------------------------------------------- durées et tokens
+
+
+def _spans(events: list[dict]) -> dict[int, float]:
+    """Le temps passé dans chaque état, par version d'item.
+
+    Aucune colonne de durée en base : le journal porte déjà un horodatage
+    par transition, et l'écart avec la précédente est la durée du séjour
+    qu'elle clôt — tentatives comprises, un retry étant lui-même une
+    transition.
+    """
+    return {e["item_version"]: (e["at"] - prev["at"]).total_seconds()
+            for prev, e in zip(events, events[1:])}
+
+
+def _dur(seconds: float | None) -> str:
+    """Une durée en français court : 4,2 s, 3 min 12 s, 1 h 04."""
+    if seconds is None:
+        return ""
+    if seconds < 60:
+        return f"{seconds:.1f} s".replace(".", ",")
+    if seconds < 3600:
+        return f"{int(seconds // 60)} min {int(seconds % 60):02d} s"
+    return f"{int(seconds // 3600)} h {int(seconds % 3600 // 60):02d}"
+
+
+# étiquettes cosmétiques : un type de token que personne n'a prévu s'affiche
+# sous son propre nom, et se compte comme les autres
+TOKEN_LABELS = {"input_tokens": "in", "output_tokens": "out",
+                "cache_read_input_tokens": "cache lu",
+                "cache_creation_input_tokens": "cache écrit",
+                "total_cost_usd": "$"}
+
+
+def _usage(run: dict) -> dict:
+    """L'usage de tokens d'un run — vide si l'agent n'en a pas laissé."""
+    usage = (run["result"] or {}).get("usage")
+    return usage if isinstance(usage, dict) else {}
+
+
+def _totals(runs: list[dict]) -> dict[str, float]:
+    """Le total par type de token de l'item.
+
+    Rien n'est codé en dur : on additionne les clés numériques des usages
+    trouvés, quels que soient leurs noms. Un agent qui rapporte ses types
+    autrement est compté pareil.
+    """
+    totals: dict[str, float] = {}
+    for run in runs:
+        for key, value in _usage(run).items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                totals[key] = totals.get(key, 0) + value
+    return totals
+
+
+def _tokens(usage: dict) -> str:
+    """Un usage en une ligne : les types tels qu'ils viennent, rien d'inventé."""
+    parts = []
+    for key, value in usage.items():
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            continue
+        count = (f"{value:.4f}" if isinstance(value, float)
+                 else f"{value:,}".replace(",", " "))
+        parts.append(f"{count} {TOKEN_LABELS.get(key, key)}")
+    return _e(" · ".join(parts))
+
+
 # ----------------------------------------------------------------------- item
 
 
@@ -264,6 +337,7 @@ def _table(headers: list[str], rows: list[str]) -> str:
 
 # jsonb ne garde pas l'ordre des clés : le post-mortem d'abord, la trace après
 RESULT_ORDER = ["outcome", "exit_code", "timeout", "error"]
+RESULT_APART = {"log_tail", "usage"}  # l'un en bloc dessous, l'autre en colonne
 
 
 def _result(result: dict | None) -> str:
@@ -275,7 +349,7 @@ def _result(result: dict | None) -> str:
     if not result:
         return ""
     keys = [k for k in RESULT_ORDER if k in result]
-    keys += sorted(k for k in result if k not in RESULT_ORDER and k != "log_tail")
+    keys += sorted(k for k in result if k not in RESULT_ORDER and k not in RESULT_APART)
     fields = " · ".join(f"{_e(k)} <b>{_e(result[k])}</b>" for k in keys)
     tail = result.get("log_tail")
     return fields + (f"<pre>{_e(tail)}</pre>" if tail else "")
@@ -289,6 +363,23 @@ def _item_page(conn, item_id: int) -> str | None:
     if item is None:
         return None
     bundle = load_bundle(conn, item["revision"])
+    events = conn.execute(
+        "SELECT * FROM event WHERE item_id = %s ORDER BY item_version", (item_id,)
+    ).fetchall()
+    runs = conn.execute(
+        "SELECT * FROM node_run WHERE item_id = %s ORDER BY id", (item_id,)
+    ).fetchall()
+
+    # le temps et les tokens du cycle, d'un coup d'œil et en tête de page
+    spans = _spans(events)
+    end = item["terminal_at"] or dt.datetime.now(dt.timezone.utc)
+    total = (end - events[0]["at"]).total_seconds() if events else 0.0
+    totals = _totals(runs)
+    # un run n'a de durée que s'il a produit une transition : superseded et
+    # stale n'en ont jamais eu, running pas encore
+    run_span = {e["run_id"]: spans[e["item_version"]]
+                for e in events if e["run_id"] and e["item_version"] in spans}
+
     state = "terminal" if item["terminal_at"] else "active"
     body = [
         f"<h1>item {item['id']} <small>· {_subject(item['subject_key'])}{_pr(item_id)} · "
@@ -299,32 +390,32 @@ def _item_page(conn, item_id: int) -> str | None:
         f"lignée restante {item['lineage_budget']} · "
         + (f"terminé {item['terminal_at']:%d/%m %H:%M:%S}" if item["terminal_at"]
            else f"wall deadline {item['wall_deadline']:%d/%m %H:%M}") + "</p>",
+        f"<p class='meta'>temps total {_dur(total)}"
+        + ("" if item["terminal_at"] else " (en cours)")
+        + (f" · {_tokens(totals)}" if totals else " · aucun usage rapporté") + "</p>",
         _graph_svg(bundle, item["state"]),
     ]
 
-    events = conn.execute(
-        "SELECT * FROM event WHERE item_id = %s ORDER BY item_version", (item_id,)
-    ).fetchall()
     body.append("<h2>journal</h2>" + _table(
-        ["v", "à", "événement", "transition", "issue", "run"],
+        ["v", "à", "durée", "événement", "transition", "issue", "run"],
         [f"<tr><td>v{e['item_version']}</td><td>{e['at']:%d/%m %H:%M:%S}</td>"
+         f"<td>{_dur(spans.get(e['item_version']))}</td>"
          f"<td>{_e(e['kind'])}</td>"
          f"<td>{(_e(e['from_state']) + ' → ') if e['from_state'] else ''}{_e(e['to_state'])}</td>"
          f"<td>{_e(e['outcome'] or '')}</td><td>{e['run_id'] or ''}</td></tr>"
          for e in events]))
 
-    runs = conn.execute(
-        "SELECT * FROM node_run WHERE item_id = %s ORDER BY id", (item_id,)
-    ).fetchall()
     if runs:
         body.append("<h2>runs</h2>" + _table(
             ["run", "nœud", "passage", "tentative", "statut", "issue", "fence",
-             "bail", "résultat"],
+             "bail", "durée", "tokens", "résultat"],
             [f"<tr><td>{r['id']}</td><td>{_e(r['node'])}</td><td>{r['cycle']}</td>"
              f"<td>{r['attempt']}</td>"
              f"<td><span class='badge {_e(r['status'])}'>{_e(r['status'])}</span></td>"
              f"<td>{_e(r['outcome'] or '')}</td><td>{r['fence']}</td>"
              f"<td>{r['lease_expires_at']:%H:%M:%S}</td>"
+             f"<td>{_dur(run_span.get(r['id']))}</td>"
+             f"<td>{_tokens(_usage(r))}</td>"
              f"<td>{_result(r['result'])}</td></tr>" for r in runs]))
 
     effects = conn.execute(

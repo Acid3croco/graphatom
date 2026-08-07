@@ -6,8 +6,10 @@ par le faucheur sont en jeu :
   1. un agent factice qui laisse un sous-processus derrière lui est fauché
      au timeout, et la tentative est classée crashed avec son autopsie
   2. plus aucun processus vivant de son groupe après la tentative
-  3. le journal `agent-<passage>-<tentative>.log` est écrit comme d'habitude
-  4. un agent qui répond normalement passe toujours
+  3. les traces sont nommées par nœud, passage et tentative — journal
+     `agent-<nœud>-<passage>-<tentative>.log` et prompt archivé à côté
+  4. un agent qui répond normalement passe toujours, et son `usage.json`
+     rejoint le résultat du run — un agent qui n'en laisse pas aussi
   5. un agent qui sort en erreur sans `outcome.json` rend son autopsie :
      code de sortie, queue de log, et pas de flag timeout
   6. worker tué en plein vol : l'agent survit, et sa trace `agent.pgid` aussi
@@ -35,7 +37,9 @@ from graphatom import blocks  # noqa: E402
 
 # le shell note le pgid de son groupe, puis laisse un sous-processus derrière lui
 FACTICE = "ps -o pgid= -p $$ > pgid.txt; sleep 300 & sleep 300"
-REPOND = """printf '{"outcome": "ok", "summary": "fait"}' > outcome.json"""
+SANS_USAGE = """printf '{"outcome": "ok", "summary": "fait"}' > outcome.json"""
+USAGE = {"input_tokens": 12, "output_tokens": 3456}  # ce que l'agent veut bien dire
+REPOND = f"{SANS_USAGE}\nprintf '{json.dumps(USAGE)}' > usage.json"
 ECHOUE = "echo 'Execution error' >&2; exit 42"  # sort mal, sans outcome.json
 # hermétisme : sans instance jetable dans l'environnement, le bloc ne dérive
 # aucune base — les agents factices d'ici n'en ont pas besoin, et l'item 7
@@ -44,7 +48,8 @@ os.environ.pop("GRAPHATOM_AGENT_DSN", None)
 TIMEOUT_S = 2
 ITEM_ID = 7  # l'item du contexte de test : son workspace porte la trace
 RUN_ID = 1  # le run du contexte de test : la trace lui appartient
-CYCLE = 1  # le passage du contexte de test : il nomme le journal de l'agent
+CYCLE = 1  # le passage du contexte de test : il nomme les traces de l'agent
+NODE = "travail"  # le nœud du contexte de test : il les nomme aussi
 
 
 class FakeConn:
@@ -65,7 +70,7 @@ def context(workdir: Path, cmd: str, attempt: int,
                                  "timeout_s": timeout_s}}}
     return blocks.Context(
         FakeConn(),
-        {"id": RUN_ID, "node": "travail", "cycle": CYCLE, "attempt": attempt},
+        {"id": RUN_ID, "node": NODE, "cycle": CYCLE, "attempt": attempt},
         {"id": ITEM_ID, "subject_id": 1},
         node,
         {"name": "orphelins"},
@@ -133,17 +138,27 @@ def main() -> None:
         sys.exit(f"ÉCHEC : survivants du groupe {pgid} : {survivants}")
     print(f"2. groupe {pgid} entièrement révoqué ✓")
 
-    # 3. le journal de la tentative reste écrit
-    log = ctx.workspace / f"agent-{CYCLE}-1.log"
+    # 3. les traces de la tentative portent son nom, et rien n'est écrasé
+    log = ctx.workspace / f"agent-{NODE}-{CYCLE}-1.log"
+    prompt = ctx.workspace / f"prompt-{NODE}-{CYCLE}-1.md"
     assert log.exists(), log
-    print(f"3. journal {log.name} écrit ✓")
+    assert prompt.exists(), prompt
+    assert not (ctx.workspace / blocks.PROMPT_NAME).exists(), "prompt.md doit être rangé"
+    print(f"3. traces {log.name} et {prompt.name} écrites ✓")
 
-    # 4. non-régression : un agent qui répond passe toujours
+    # 4. non-régression : un agent qui répond passe toujours, et son usage suit
     result = blocks.act(context(workdir, REPOND, attempt=2))
-    assert result == {"outcome": "ok", "summary": "fait"}, result
+    assert result == {"outcome": "ok", "summary": "fait", "usage": USAGE}, result
+    assert json.loads(
+        (ctx.workspace / f"usage-{NODE}-{CYCLE}-2.json").read_text()) == USAGE
     trace_path = ctx.workspace / blocks.PGID_FILE
     assert not trace_path.exists(), "une exécution collectée n'a plus de trace"
-    print(f"4. agent nominal appliqué : {result} ✓")
+    print(f"4. agent nominal appliqué, usage fusionné : {result} ✓")
+
+    # 4 bis. un agent sans usage.json reste un citoyen de première classe
+    result = blocks.act(context(workdir, SANS_USAGE, attempt=5))
+    assert result == {"outcome": "ok", "summary": "fait"}, result
+    print("4 bis. agent sans usage.json : résultat inchangé ✓")
 
     # 5. l'agent qui sort en erreur rend son autopsie, sans flag timeout
     result = blocks.act(context(workdir, ECHOUE, attempt=3))
