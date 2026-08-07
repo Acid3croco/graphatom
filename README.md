@@ -365,7 +365,8 @@ avec le total par type de token. Rien de nouveau en base : les durées
 sortent des horodatages du journal, les tokens du résultat des runs.
 
 [`examples/code-task.json`](examples/code-task.json) est le graph qui fait
-tourner ce repo : implémentation par agent, **agent de test backend**
+tourner ce repo : **jugement de la taille et des critères** (`scope`),
+implémentation par agent, **agent de test backend**
 (imports, crash-test), **agent de test frontend au navigateur headless**
 (le DOM rendu et des screenshots, pas du curl), puis review humaine —
 question fermée sur l'issue GitHub. La boucle se ferme ensuite toute
@@ -375,16 +376,60 @@ seule : **release** (commit, push, PR, merge surveillé jusqu'au SHA),
 propres) — ces deux derniers sans aucun modèle, comme la préparation du
 worktree : du shell.
 
+**Une porte de jugement avant la construction.** Toute issue partait droit
+en implémentation, quelle que soit sa taille : une issue trop grande
+produisait un cycle interminable — des timeouts d'`implement` en série — ou
+un résultat bâclé, et les critères de succès restaient implicites, chaque
+agent de test relisant l'issue à sa façon. Le nœud **`scope`**, entre
+`worktree` et `implement`, tranche d'abord. Il ne code jamais, ne touche pas
+au worktree : il lit, il écrit, il crée des issues.
+
+- **Atomique** → il écrit `criteria.md` dans le workspace de l'item : la
+  liste *fermée*, numérotée et falsifiable des critères de succès, chacun
+  avec la preuve qui le tranche — une commande, un fichier, un élément du
+  DOM rendu. Fermée veut dire : ce qui n'y est pas n'est pas demandé.
+  Outcome `ready`, l'implémentation part.
+- **Trop grande** (plusieurs livrables indépendants, ou infaisable en un
+  cycle) → il la **découpe** : une issue fille par livrable (`gh issue
+  create --label graphatom`), chacune atomique avec ses critères dans son
+  corps, chaînées par `Depends-on: #N` quand l'ordre compte — deux filles
+  qui touchent les mêmes fichiers se sérialisent —, et une task list
+  `- [ ] #fille` dans la mère pour l'œil. Outcome `split`, vers le terminal
+  dédié `close_split` ; les filles suivent le pipeline normal, admises par
+  le sync comme n'importe quelle issue.
+
+`criteria.md` est **contractuel** pour la suite du cycle : `implement` le
+lit comme cahier des charges, les deux agents de test comme checklist en
+plus de l'issue, et le futur nœud `validate` le cochera formellement. Une
+fille porte déjà ses critères dans son corps — figés au découpage : `scope`
+les reprend tels quels au lieu de les réinventer.
+
+**La découpe est bornée.** Une ligne `Lineage-budget: <n>` dans le corps dit
+combien de découpes restent permises sous cette issue : le pendant lisible
+du `lineage_budget` du sujet, dans la même grammaire fermée que
+`Depends-on:` — le canal ne lit que ce qu'il déclare lire. Absente, elle
+vaut 3, le défaut de la colonne ; chaque fille reçoit celui de sa mère moins
+un ; à `0`, `scope` traite l'issue comme atomique quelle que soit sa taille,
+et son rapport le dit. Rien ne se découpe à l'infini.
+
+Créer une issue est un effet, et un nœud se rejoue — tentative retentée,
+passage rouvert par une escalade. Avant tout `gh issue create`, `scope`
+liste les issues du dépôt et compare les titres **exactement** : une fille
+déjà créée par une exécution précédente est reprise par son numéro, jamais
+dupliquée. Le worktree que la mère avait préparé n'a jamais servi, mais il
+existe : la sortie `split` passe par `cleanup_split` — le même shell que les
+deux autres retraits — avant son terminal.
+
 **Un modèle et un effort par atome.** Le `cmd` d'un nœud est une ligne de
 shell : il porte aussi le coût. Tous les nœuds ne font pas le même travail,
 donc ils ne paient pas le même tarif :
 
 | nœuds | modèle / effort | pourquoi |
 | --- | --- | --- |
-| `implement` | défaut, `--effort high` | le seul vrai travail de conception |
+| `scope`, `implement` | défaut, `--effort high` | le jugement d'avant la construction, puis le seul vrai travail de conception |
 | `test_backend`, `test_frontend` | `--model sonnet --effort medium` | procéduraux, mais avec du jugement |
 | `release` | `--model haiku --effort low`, script-first | le script fait le nominal ; l'agent ne sert qu'à la panne |
-| `worktree`, `deploy`, `verify_deploy`, `cleanup`, `cleanup_unresolved` | pas d'agent | du shell pur, qui écrit son `outcome.json` |
+| `worktree`, `deploy`, `verify_deploy`, `cleanup`, `cleanup_unresolved`, `cleanup_split` | pas d'agent | du shell pur, qui écrit son `outcome.json` |
 
 **Les nœuds mécaniques n'ont pas d'agent.** `worktree`, `deploy` et
 `verify_deploy` étaient des agents qui suivaient un prompt scripté pas à
@@ -471,8 +516,8 @@ branche ; s'ils touchent les mêmes fichiers, le second merge voit le conflit :
 release rebase quand le rebase passe tout seul, sort en `rebased` — retour aux
 tests — quand il a fallu résoudre à la main, et en `conflict` quand elle n'y
 arrive pas. Le retrait (worktree + branche locale) est un **nœud du
-graph** : toutes les sorties passent par `cleanup`
-ou `cleanup_unresolved` avant leur terminal — le graph *est* la garantie de
+graph** : toutes les sorties passent par `cleanup`,
+`cleanup_unresolved` ou `cleanup_split` avant leur terminal — le graph *est* la garantie de
 cleanup, le noyau n'en sait rien. Les agents demandent un worker sur
 l'hôte (voir le commentaire dans `docker-compose.yml`) ; le bail par nœud
 (`config.lease_s`) couvre leur durée, et l'ordonnanceur exécute chaque
