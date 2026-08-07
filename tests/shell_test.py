@@ -13,8 +13,10 @@ qui autorise un nœud sans agent : il écrit toujours son `outcome.json`.
      jamais un nœud coincé
   6. `deploy` accepte un clone de référence qui est un worktree, où `.git`
      est un fichier de renvoi et non un répertoire
-  7. `scripts/release.sh` nomme le pas qui a lâché et sort sur son code
-  8. la frontière tient dans le bundle : un nœud mécanique ne lance aucun
+  7. `deploy` passe aussi quand ce worktree n'a pas `main` : la branche est
+     tenue par le checkout principal, et la tête détachée ne la dispute pas
+  8. `scripts/release.sh` nomme le pas qui a lâché et sort sur son code
+  9. la frontière tient dans le bundle : un nœud mécanique ne lance aucun
      modèle, un nœud à modèle rend son `usage.json`, les trois nœuds de
      retrait sont le même shell, et aucun ne teste `.git` comme un chemin
 
@@ -71,6 +73,28 @@ def reference_worktree(tmp: Path) -> Path:
     reference = tmp / "reference"
     git(hote, "worktree", "add", "-q", str(reference), "main")
     return reference
+
+
+def reference_worktree_main_prise(tmp: Path) -> Path:
+    """Le même worktree, mais `main` est tenue par le checkout principal.
+
+    C'est la forme observée en prod : l'hôte reste sur `main`, donc aucun
+    worktree ne peut la reprendre. Seule une tête détachée passe.
+    """
+    hote = tmp / "hote-sur-main"
+    subprocess.run(["git", "clone", "-q", str(tmp / "origin.git"), str(hote)], check=True)
+    reference = tmp / "reference-main-prise"
+    git(hote, "worktree", "add", "-q", "--detach", str(reference), "main")
+    return reference
+
+
+def sha_deploye(workspace: Path) -> str:
+    """Le SHA sur lequel `deploy.md` dit s'être détaché."""
+    marque = "HEAD détachée sur origin/main - "
+    for ligne in (workspace / "deploy.md").read_text().splitlines():
+        if ligne.startswith(marque):
+            return ligne[len(marque):]
+    raise AssertionError("deploy.md ne dit pas sur quel SHA il s'est détaché")
 
 
 def sans_gh(tmp: Path) -> str:
@@ -157,23 +181,34 @@ def main() -> None:
 
     # 6. le clone de référence est parfois un worktree — son `.git` est alors
     #    un fichier, et le garde-fou du deploy doit quand même le reconnaître.
-    #    Sans `gh`, les trois pas git se jouent puis le nœud s'arrête au jeton :
+    #    Sans `gh`, les deux pas git se jouent puis le nœud s'arrête au jeton :
     #    le test ne construit jamais d'image ni ne lance de service.
     reference = reference_worktree(tmp)
     assert (reference / ".git").is_file(), "le clone de référence n'est pas un worktree"
     outcome = joue("deploy", reference, workspace, plus={"PATH": sans_gh(tmp)})
     assert outcome["outcome"] == "failed", outcome
     assert "pas 2" in outcome["summary"], outcome  # le jeton, pas le garde-fou
-    assert "$ git reset --hard origin/main" in (workspace / "deploy.md").read_text()
+    assert "$ git switch --detach origin/main" in (workspace / "deploy.md").read_text()
+    assert sha_deploye(workspace) == git(reference, "rev-parse", "--short", "origin/main")
     print(f"6. {outcome['summary']} ✓")
 
-    # 7. le script de release sort sur le code du pas qui a lâché
+    # 7. le même worktree, mais `main` est tenue par le checkout principal :
+    #    `switch -f main` sortait là en code 128, la tête détachée passe
+    prise = reference_worktree_main_prise(tmp)
+    assert git(prise, "rev-parse", "--abbrev-ref", "HEAD") == "HEAD", "pas détaché"
+    outcome = joue("deploy", prise, workspace, plus={"PATH": sans_gh(tmp)})
+    assert outcome["outcome"] == "failed", outcome
+    assert "pas 2" in outcome["summary"], outcome  # les pas git ont tous passé
+    assert sha_deploye(workspace) == git(prise, "rev-parse", "--short", "origin/main")
+    print(f"7. {outcome['summary']} ✓")
+
+    # 8. le script de release sort sur le code du pas qui a lâché
     assert release(repo, workspace, "pipeline-x:oom") == 2  # sujet illisible
     assert release(repo, workspace, "gh:Acid3croco/graphatom#999") == 3  # autre branche
     assert "code 3" in (workspace / "release.md").read_text()
-    print("7. release.sh : code 2 sur le sujet, code 3 sur le worktree ✓")
+    print("8. release.sh : code 2 sur le sujet, code 3 sur le worktree ✓")
 
-    # 8. la frontière du bundle, relue à chaque tour : les nœuds mécaniques
+    # 9. la frontière du bundle, relue à chaque tour : les nœuds mécaniques
     #    n'appellent aucun modèle, et ceux qui en appellent un rendent le
     #    coût de la tentative — un merge d'amont ne doit rien reprendre
     #    d'un côté ni de l'autre
@@ -197,7 +232,7 @@ def main() -> None:
     shells["scripts/release.sh"] = (ROOT / "scripts" / "release.sh").read_text()
     for nom, shell in shells.items():
         assert "/.git" not in shell, f"{nom} teste .git comme un chemin"
-    print("8. six nœuds sans modèle dont trois retraits identiques, "
+    print("9. six nœuds sans modèle dont trois retraits identiques, "
           "cinq agents qui rendent leur usage, aucun test sur .git ✓")
 
     shutil.rmtree(tmp, ignore_errors=True)
