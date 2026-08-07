@@ -49,6 +49,8 @@ uv run python tests/reconnect_test.py                # couper la base sous le wo
                                                      # il se reconnecte et reprend
 uv run python tests/links_test.py                    # les liens du frontend vers
                                                      # l'issue et la PR, sans base
+uv run python tests/depends_test.py                  # `Depends-on: #N` : l'admission
+                                                     # attend, sans base ni réseau
 ```
 
 Les tests ne touchent jamais au `data/` du repo : chacun travaille dans un
@@ -92,7 +94,8 @@ GITHUB_TOKEN=$(gh auth token) docker compose up -d --build
 Quatre services : Postgres, l'ordonnanceur, le canal GitHub (polling), le
 canal web (secours, port 8850). Ensuite tout se passe sur GitHub :
 
-1. poser le label `graphatom` sur une issue → admission (une seule fois par issue)
+1. poser le label `graphatom` sur une issue → admission (une seule fois par
+   issue ; différée si le corps déclare une dépendance encore ouverte)
 2. le rail accuse la prise en charge en commentaire : item, graph, lien
    trajectoire — et pose le label d'état `rail:<état>`
 3. le rail pose sa question fermée en commentaire
@@ -118,6 +121,32 @@ transition, reconstruit depuis la base, jamais complété à l'aveugle ; une
 sans un seul mail. Aucun parsing de langage naturel, aucune lecture de
 GitHub comme état d'item. La démo : issues [#7](https://github.com/Acid3croco/graphatom/issues/7)
 et [#8](https://github.com/Acid3croco/graphatom/issues/8).
+
+### Dépendances entre tâches : `Depends-on: #N`
+
+Une tâche qui ne doit démarrer qu'après une autre le déclare dans le corps
+de son issue — une ligne par dépendance, grammaire fermée comme `/answer` :
+
+```
+Depends-on: #29
+```
+
+Le corps est lu au moment de l'admission seulement, jamais relu en cours de
+route. Tant qu'une des issues visées est ouverte, l'admission est différée :
+aucun item n'est créé, l'issue reçoit un commentaire « en attente de #29 »
+— une seule fois, à clé logique — et porte le label `rail:blocked`. Quand la
+dernière dépendance se ferme, l'admission part au tick suivant, par le chemin
+normal. Une dépendance vers une issue inexistante ou vers elle-même est
+ignorée, mais dite en commentaire : rien ne passe en silence.
+
+Rien de tout ça n'entre en base : pas de graphe de dépendances, la condition
+se réévalue à chaque tick sur les issues non admises, et le kernel ne change
+pas — c'est de l'admission, donc du ressort du canal. GitHub ne gate rien
+nativement, les task lists et les sub-issues sont de la visualisation : on
+peut poser en plus `- [ ] #29` dans le corps pour la lisibilité, mais la
+vérité du rail reste la ligne `Depends-on:`. Deux issues ouvertes qui
+dépendent l'une de l'autre se bloquent pour toujours — c'est visible (deux
+`rail:blocked`), et c'est à l'humain de casser le cycle en éditant un corps.
 
 ### Config de déploiement : épinglée dans le repo
 
