@@ -49,6 +49,8 @@ uv run python tests/reconnect_test.py                # couper la base sous le wo
                                                      # il se reconnecte et reprend
 uv run python tests/links_test.py                    # les liens du frontend vers
                                                      # l'issue et la PR, sans base
+uv run python tests/depends_test.py                  # `Depends-on: #N` : l'admission
+                                                     # attend, sans base ni réseau
 uv run python tests/hermetic_test.py                 # ce qu'un agent lance ne voit
                                                      # ni la base ni le dépôt de la
                                                      # production
@@ -95,7 +97,8 @@ GITHUB_TOKEN=$(gh auth token) docker compose up -d --build
 Quatre services : Postgres, l'ordonnanceur, le canal GitHub (polling), le
 canal web (secours, port 8850). Ensuite tout se passe sur GitHub :
 
-1. poser le label `graphatom` sur une issue → admission (une seule fois par issue)
+1. poser le label `graphatom` sur une issue → admission (une seule fois par
+   issue ; différée si le corps déclare une dépendance encore ouverte)
 2. le rail accuse la prise en charge en commentaire : item, graph, lien
    trajectoire — et pose le label d'état `rail:<état>`
 3. le rail pose sa question fermée en commentaire
@@ -121,6 +124,32 @@ transition, reconstruit depuis la base, jamais complété à l'aveugle ; une
 sans un seul mail. Aucun parsing de langage naturel, aucune lecture de
 GitHub comme état d'item. La démo : issues [#7](https://github.com/Acid3croco/graphatom/issues/7)
 et [#8](https://github.com/Acid3croco/graphatom/issues/8).
+
+### Dépendances entre tâches : `Depends-on: #N`
+
+Une tâche qui ne doit démarrer qu'après une autre le déclare dans le corps
+de son issue — une ligne par dépendance, grammaire fermée comme `/answer` :
+
+```
+Depends-on: #29
+```
+
+Le corps est lu au moment de l'admission seulement, jamais relu en cours de
+route. Tant qu'une des issues visées est ouverte, l'admission est différée :
+aucun item n'est créé, l'issue reçoit un commentaire « en attente de #29 »
+— une seule fois, à clé logique — et porte le label `rail:blocked`. Quand la
+dernière dépendance se ferme, l'admission part au tick suivant, par le chemin
+normal. Une dépendance vers une issue inexistante ou vers elle-même est
+ignorée, mais dite en commentaire : rien ne passe en silence.
+
+Rien de tout ça n'entre en base : pas de graphe de dépendances, la condition
+se réévalue à chaque tick sur les issues non admises, et le kernel ne change
+pas — c'est de l'admission, donc du ressort du canal. GitHub ne gate rien
+nativement, les task lists et les sub-issues sont de la visualisation : on
+peut poser en plus `- [ ] #29` dans le corps pour la lisibilité, mais la
+vérité du rail reste la ligne `Depends-on:`. Deux issues ouvertes qui
+dépendent l'une de l'autre se bloquent pour toujours — c'est visible (deux
+`rail:blocked`), et c'est à l'humain de casser le cycle en éditant un corps.
 
 ### Config de déploiement : épinglée dans le repo
 
@@ -170,39 +199,8 @@ alors `prompt.md` dans le workspace, lance la commande configurée, et lit
 Le contrat est minuscule et agnostique : n'importe quel agent CLI (claude,
 codex, pi…) fait l'affaire ; le kernel n'en connaît aucun. Pas
 d'`outcome.json` valide → `crashed`, retenté puis escaladé — comme
-n'importe quel bloc.
-
-**Un processus lancé par un agent ne voit jamais ni la base ni le dépôt de
-la production.** C'est la règle. Elle a coûté une implémentation : un agent
-de test avait lancé un ordonnanceur sur la base jetable *partagée*, en
-gardant le `GRAPHATOM_REPO_DIR` de la production dans son environnement ;
-le cleanup d'un item de test a retiré le worktree d'un vrai item portant le
-même numéro. Trois barrières indépendantes la tiennent maintenant :
-
-1. **Une base jetable par item.** `GRAPHATOM_AGENT_DSN` désigne une
-   *instance*, pas une base : le bloc y crée `graphatom_test_item_<id>` à la
-   volée (idempotent) et pose la `GRAPHATOM_DSN` de l'agent dessus. Deux
-   items qui testent en même temps ne se marchent plus dessus, et un
-   `init-db --drop` ne vide que son propre bac à sable. Le rôle doit avoir
-   `CREATEDB` sur cette instance : c'est le cas de `graphatom`, le
-   `POSTGRES_USER` du conteneur postgres.
-2. **Le `REPO_DIR` ne fuit pas.** Les scripts qui lancent un ordonnanceur —
-   `crash_test.py`, `reconnect_test.py`, la fixture `seed.py` — épinglent
-   `GRAPHATOM_REPO_DIR` sur *leur* dépôt, et retirent l'instance jetable de
-   l'environnement, avant de lancer quoi que ce soit. Un rail de test qui
-   crée des worktrees les crée alors sous son propre `.worktrees/`.
-3. **Le cleanup vérifie sa cible.** Avant `worktree remove --force`, le
-   shell exige que le worktree soit enregistré dans *son* `REPO_DIR`, sous
-   `.worktrees/`, et qu'il porte la branche `rail/issue-<num>` du sujet de
-   *son* item (`GRAPHATOM_SUBJECT_KEY`). Sinon il ne touche à rien, l'écrit
-   dans `cleanup.md`, et rend `done` quand même — un cleanup ne bloque
-   jamais une sortie. Le même nœud drop la base jetable de l'item
-   (`graphatom drop-agent-db`), qui refuse toute base ne portant pas le
-   préfixe `graphatom_test_item_`.
-
-[`tests/hermetic_test.py`](tests/hermetic_test.py) exerce les trois, cleanup
-du graph joué tel quel sur un dépôt jetable. Rien de tout cela n'est dans le
-noyau : c'est l'affaire du canal et des `cmd` du graph.
+n'importe quel bloc. L'agent ne voit jamais la base du rail :
+`GRAPHATOM_AGENT_DSN` lui substitue une base jetable.
 
 **La révocation a deux moitiés** : l'autorité en base, et le processus.
 L'agent tourne dans sa propre session — au timeout, le bloc révoque tout

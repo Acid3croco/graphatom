@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import web  # noqa: E402
+from graphatom import blocks, web  # noqa: E402
 
 ISSUE_URL = "https://github.com/Acid3croco/graphatom/issues/27"
 PR_URL = "https://github.com/Acid3croco/graphatom/pull/31"
@@ -50,9 +50,14 @@ def main() -> None:
     print("2. sujet quelconque : texte brut, échappé ✓")
 
     # 3. la PR vient de release.json, écrit par le nœud release
+    #    Le répertoire déplacé est celui du résolveur, `blocks.DATA_DIR` — comme
+    #    dans les autres tests. Poser un `web.DATA_DIR` que le module ne définit
+    #    pas fabriquait la constante au lieu de la vérifier : le test passait et
+    #    la page d'item rendait 500 (NameError).
+    assert not hasattr(web, "DATA_DIR"), "web lit le workspace par item_workspace()"
     with tempfile.TemporaryDirectory() as tmp:
-        web.DATA_DIR = Path(tmp)
-        workspace = web.DATA_DIR / "item-14"
+        blocks.DATA_DIR = Path(tmp)
+        workspace = blocks.item_workspace(14)
         workspace.mkdir()
         assert web._pr(14) == ""  # pas de release : rien à dire
 
