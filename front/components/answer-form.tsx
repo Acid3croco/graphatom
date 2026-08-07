@@ -10,6 +10,10 @@
  * Une fois la réponse enregistrée, la route que la page sonde (`feed`) est
  * relue tout de suite, sans attendre le tour suivant : la question passe
  * d'ouverte à répondue sous les yeux, et rien d'autre de la page ne bouge.
+ *
+ * C'est le seul geste du front, et il se fait souvent au téléphone : les
+ * boutons font 40 px de haut sous `md:` — la cible d'un doigt — et
+ * retrouvent les 32 px de la variante `sm` au-delà.
  */
 import { useState } from "react";
 import { useSWRConfig } from "swr";
@@ -55,6 +59,7 @@ export function AnswerForm({
           key={option}
           variant="outline"
           size="sm"
+          className="h-10 px-4 md:h-8 md:px-3"
           disabled={pending}
           onClick={() => answer(option)}
         >

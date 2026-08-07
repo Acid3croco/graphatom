@@ -40,6 +40,11 @@
  * sans exécution — la vitrine d'une révision publiée — n'en a pas : son
  * `current` est vide, aucun nœud n'est peint, et c'est `onSelect` qui rend
  * alors les nœuds cliquables pour lire leur config.
+ *
+ * Sur téléphone le dessin se met à la largeur du bloc, comme partout : un
+ * graph de six couches y tient en entier mais en tout petit, et c'est le
+ * zoom qui le rend lisible. Les boutons de la visionneuse sont donc la
+ * seule façon de s'en servir au doigt : ils passent à 36 px sous `sm:`.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Expand, Minimize, RotateCcw, ZoomIn, ZoomOut } from "lucide-react";
@@ -52,6 +57,9 @@ import { Button } from "@/components/ui/button";
 const MIN = 0.25; // bornes du zoom, en facteur de l'ajustement initial
 const MAX = 4;
 const STEP = 1.3; // un cran de bouton
+
+// cible tactile sous `sm:`, taille d'origine au-dessus
+const ICON = "h-9 w-9 p-0 sm:h-7 sm:w-7";
 
 type View = { x: number; y: number; w: number; h: number };
 /** Ce qu'un item garde : son orientation, et son cadrage s'il en a un. */
@@ -319,7 +327,7 @@ export function GraphSvg({
         <Button
           variant="outline"
           size="sm"
-          className="h-7 w-7 p-0"
+          className={ICON}
           aria-label="zoom avant"
           title="zoom avant"
           onClick={() => step(STEP)}
@@ -329,7 +337,7 @@ export function GraphSvg({
         <Button
           variant="outline"
           size="sm"
-          className="h-7 w-7 p-0"
+          className={ICON}
           aria-label="zoom arrière"
           title="zoom arrière"
           onClick={() => step(1 / STEP)}
@@ -339,7 +347,7 @@ export function GraphSvg({
         <Button
           variant="outline"
           size="sm"
-          className="h-7 w-7 p-0"
+          className={ICON}
           aria-label="reset de la vue"
           title="reset de la vue"
           onClick={reset}
@@ -349,7 +357,7 @@ export function GraphSvg({
         <Button
           variant="outline"
           size="sm"
-          className="h-7 px-2"
+          className="h-9 px-3 sm:h-7 sm:px-2"
           aria-label={`orientation ${orient}, basculer en ${
             orient === "LR" ? "TB" : "LR"
           }`}
@@ -361,7 +369,7 @@ export function GraphSvg({
         <Button
           variant="outline"
           size="sm"
-          className="h-7 w-7 p-0"
+          className={ICON}
           aria-label={full ? "quitter le plein écran" : "plein écran"}
           title={full ? "quitter le plein écran" : "plein écran"}
           onClick={fullscreen}

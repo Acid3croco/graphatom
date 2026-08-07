@@ -8,6 +8,9 @@
  * `- [x] <n>. <constaté>`. La coche affichée est celle du validate, la
  * preuve affichée est son constaté : le front montre le verdict, il ne le
  * prononce pas. Sans `validate.md`, les carrés restent vides, honnêtes.
+ *
+ * Un critère cite souvent une commande ou un sha : le texte se coupe au
+ * milieu d'un mot plutôt que de pousser la page hors de l'écran.
  */
 import { Square, SquareCheck } from "lucide-react";
 
@@ -89,7 +92,7 @@ export function CriteriaList({
             ) : (
               <Square className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
             )}
-            <span className="flex flex-col gap-0.5">
+            <span className="flex min-w-0 flex-col gap-0.5 break-words">
               <span>
                 <b className="text-muted-foreground">{item.number}.</b>{" "}
                 {item.text}

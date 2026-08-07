@@ -11,6 +11,9 @@
  * La page ne fait que poser les sections et leur donner ce que le serveur a
  * lu : chacune sonde ensuite `/api/item/<id>` pour son compte, et se repeint
  * seule quand sa tranche bouge. La coquille, elle, ne se rend qu'une fois.
+ *
+ * C'est la page la plus large du front, et elle doit tenir dans 360 px :
+ * le graph et les tables glissent chacun dans leur bloc, jamais la page.
  */
 import Link from "next/link";
 import { notFound } from "next/navigation";

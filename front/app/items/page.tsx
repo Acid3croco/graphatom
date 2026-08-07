@@ -26,7 +26,7 @@ export default async function ItemsPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <h1 className="text-xl font-semibold">items</h1>
+      <h1 className="text-lg font-semibold sm:text-xl">items</h1>
       <ItemsTable initial={items} />
     </div>
   );
