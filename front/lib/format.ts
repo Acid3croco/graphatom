@@ -70,6 +70,11 @@ export function tokens(usage: Usage | null | undefined): string {
     .join(" · ");
 }
 
+/** Le numéro d'une issue, tiré de son URL : `#83` pour `…/issues/83`. */
+export function issueNumber(url: string): string {
+  return `#${url.split("/").pop()}`;
+}
+
 /** Un horodatage ISO en jour/mois heure — vide quand il n'y en a pas. */
 export function moment(iso: string | null | undefined, withSeconds = false): string {
   if (!iso) {
