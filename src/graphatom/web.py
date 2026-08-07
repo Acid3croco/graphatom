@@ -14,6 +14,8 @@ Les mêmes vues se lisent en JSON, pour un client qui rend la page lui-même :
                      critères, fichiers du workspace
     /api/questions   les questions ouvertes, et le jeton de `POST /answer`
     /api/heartbeat   les deux battements bruts : le worker, et le canal GitHub
+    /api/graphs      les révisions publiées : nom, date, items qui la portent
+    /api/graph/<rév> le bundle entier de cette révision, config comprise
 
 Une projection, pas un second modèle : mêmes requêtes, mêmes durées, mêmes
 totaux de tokens que les pages — seul le rendu change. Rien ne s'y écrit :
@@ -693,6 +695,40 @@ def _api_graph(bundle: dict, current: str) -> dict:
     }
 
 
+def _api_graphs(conn) -> list[dict]:
+    """Les révisions publiées, la plus récente de chaque nom en tête.
+
+    Le compte d'items est ce qui sépare une révision vivante d'une révision
+    oubliée : un item en vol épingle la sienne, et cette révision-là reste
+    sa vérité tant qu'il tourne — même si le nom a été republié depuis.
+    """
+    rows = conn.execute(
+        "SELECT g.id, g.name, g.published_at, "
+        "(SELECT count(*) FROM work_item w WHERE w.revision = g.id) AS items "
+        "FROM graph_revision g ORDER BY g.name, g.published_at DESC, g.id"
+    ).fetchall()
+    return [{"id": r["id"], "name": r["name"], "published_at": r["published_at"],
+             "items": r["items"]} for r in rows]
+
+
+def _api_graph_revision(conn, revision: str) -> dict | None:
+    """Le bundle d'une révision, tel qu'il a été publié. None si inconnue.
+
+    Rien n'est recalculé ni résumé : la config entière de chaque nœud sort
+    de la base comme elle y est entrée — prompt des agents compris. C'est
+    ce que lit le worker qui exécute cette révision, et donc ce que la
+    vitrine doit montrer.
+    """
+    row = conn.execute(
+        "SELECT g.id, g.bundle, g.published_at, "
+        "(SELECT count(*) FROM work_item w WHERE w.revision = g.id) AS items "
+        "FROM graph_revision g WHERE g.id = %s", (revision,)).fetchone()
+    if row is None:
+        return None
+    return row["bundle"] | {"revision": row["id"], "items": row["items"],
+                            "published_at": row["published_at"]}
+
+
 def _api_question(q: dict) -> dict:
     """Une question en JSON, avec le contexte de son item quand la requête l'a joint."""
     payload = {
@@ -862,10 +898,18 @@ def serve(port: int = 8848, by: str = "web", notify_cmd: str | None = None,
                         return self._json(200, _api_heartbeat(
                             heartbeat.last(conn, heartbeat.RAIL),
                             heartbeat.last(conn, heartbeat.GITHUB_SYNC)))
+                    if path == "/api/graphs":
+                        return self._json(200, _api_graphs(conn))
                     if path.startswith("/api/item/") and path[10:].isdigit():
                         payload = _api_item(conn, int(path[10:]))
                         if payload is None:
                             return self._json(404, {"error": f"item {path[10:]} inconnu"})
+                        return self._json(200, payload)
+                    if path.startswith("/api/graph/"):
+                        revision = unquote(path[11:])
+                        payload = _api_graph_revision(conn, revision)
+                        if payload is None:
+                            return self._json(404, {"error": f"révision {revision} inconnue"})
                         return self._json(200, payload)
             except Exception as exc:  # une API qui tombe le dit, en JSON
                 return self._json(500, {"error": str(exc)})

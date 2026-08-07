@@ -7,11 +7,19 @@ d'écriture ; `front/` est un service séparé qui la consomme.
 
 ## Ce qu'il rend
 
-| route        | ce qu'on y voit                                                     |
-| ------------ | ------------------------------------------------------------------- |
-| `/`          | les questions ouvertes, un bouton par option                         |
-| `/items`     | tous les items : titre vers l'issue, état courant, lien vers l'item  |
-| `/item/<id>` | graph, journal, runs, critères, effets, workspace, questions         |
+| route             | ce qu'on y voit                                                      |
+| ----------------- | -------------------------------------------------------------------- |
+| `/`               | les questions ouvertes, un bouton par option                          |
+| `/items`          | tous les items : titre vers l'issue, état courant, lien vers l'item   |
+| `/item/<id>`      | graph, journal, runs, critères, effets, workspace, questions          |
+| `/graphs`         | les révisions publiées, la plus récente de chaque nom en tête         |
+| `/graphs/<rév>`   | le graph d'une révision, et la config de chaque nœud — lecture seule  |
+
+La vue d'un graph montre ce qui est configuré, pas ce qui tourne : la même
+visionneuse SVG que la page d'un item — pan, zoom, LR/TB, plein écran —
+mais sans nœud courant, et un clic sur un nœud ouvre sa config, prompt de
+l'agent compris. L'URL porte la révision : une ancienne révision reste
+consultable telle qu'elle a été publiée, ce que ses items en vol épinglent.
 
 Toutes les pages portent le bandeau heartbeat, et lui seul sonde : un
 `fetch` SWR toutes les 5 s sur `/api/heartbeat`, puis un rendu serveur

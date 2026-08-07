@@ -1,6 +1,6 @@
 """Le test de l'API JSON du canal web : la projection, sans base ni serveur.
 
-Les quatre lectures sont des fonctions pures d'une base et d'un workspace —
+Les six lectures sont des fonctions pures d'une base et d'un workspace —
 elles se jouent ici sur une base factice et un répertoire jetable :
 
   1. `/api/items` : les clés du contrat, `status` qui n'est pas `state`,
@@ -14,6 +14,9 @@ elles se jouent ici sur une base factice et un répertoire jetable :
      le HTML, et les options de chaque question ouverte
   5. `/api/heartbeat`, et tout le reste sérialisable : les horodatages
      sortent en ISO 8601, jamais un `TypeError` au moment de répondre
+  6. `/api/graphs` et `/api/graph/<rév>` : les révisions publiées avec le
+     compte d'items qui les portent, et le bundle entier d'une révision —
+     config des nœuds comprise —, une révision inconnue rendant None
 
 Usage : uv run python tests/api_test.py
 """
@@ -38,7 +41,11 @@ BUNDLE = {
     "on_kernel": {"escalate_to": "escalate", "exhausted_to": "closed"},
     "nodes": {
         "ingest": {"block": "FETCH", "edges": {"ok": "decide"}},
-        "decide": {"block": "JUDGE", "edges": {"fix": "closed", "raise": "escalate"}},
+        "decide": {"block": "JUDGE",
+                   "config": {"lease_s": 600,
+                              "agent": {"cmd": "vrai", "prompt": "le prompt entier",
+                                        "timeout_s": 900}},
+                   "edges": {"fix": "closed", "raise": "escalate"}},
         "escalate": {"block": "WAIT", "escalade": True,
                      "edges": {"retry": "ingest", "expired": "closed"}},
         "closed": {"terminal": True},
@@ -197,6 +204,31 @@ def main() -> None:
         assert T0.isoformat() in body, "les horodatages sortent en ISO 8601"
         assert json.loads(body)["item"]["id"] == 14
         print("7. /api/heartbeat, et le payload sérialisable en ISO 8601 ✓")
+
+        # 6. les graphs publiés : la liste des révisions, avec leurs items
+        published = [
+            {"id": "rev-neuve", "name": "code-task", "published_at": T0, "items": 2},
+            {"id": "rev-vieille", "name": "code-task",
+             "published_at": T0 - dt.timedelta(days=1), "items": 7},
+        ]
+        graphs = web._api_graphs(FakeConn(graph_revision=published))
+        # la fonction ne retrie rien : l'ordre est celui de la requête — par
+        # nom, puis date décroissante, donc la plus récente en tête
+        assert [g["id"] for g in graphs] == ["rev-neuve", "rev-vieille"], graphs
+        assert graphs[0]["name"] == "code-task" and graphs[0]["items"] == 2, graphs
+        assert graphs[0]["published_at"] == T0, graphs
+        print("8. /api/graphs : nom, révision, date, items qui la portent ✓")
+
+        # le bundle d'une révision, tel qu'il a été publié — rien de résumé
+        revision = FakeConn(graph_revision=[{"id": "rev-neuve", "bundle": BUNDLE,
+                                             "published_at": T0, "items": 2}])
+        one = web._api_graph_revision(revision, "rev-neuve")
+        assert one["revision"] == "rev-neuve" and one["items"] == 2, one
+        assert one["nodes"] == BUNDLE["nodes"], one
+        assert one["nodes"]["decide"]["config"]["agent"]["prompt"] == "le prompt entier"
+        assert one["entry"] == "ingest" and one["on_kernel"], one
+        assert web._api_graph_revision(FakeConn(graph_revision=[]), "inconnue") is None
+        print("9. /api/graph/<rév> : le bundle entier, l'inconnue rend None ✓")
 
     print("\napi : OK — les pages se lisent en JSON, sans dépendance ni écriture")
 
