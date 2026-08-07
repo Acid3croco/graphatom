@@ -9,7 +9,8 @@ un agent qui travaille dix minutes ne bloque ni le faucheur ni les
 autres items. claim() garantit qu'un item n'a qu'un run à la fois.
 
 Tuer ce processus n'importe quand est un cas nominal, pas une panne :
-c'est le contrat que le crash-test vérifie.
+c'est le contrat que le crash-test vérifie. Perdre la base l'est aussi :
+la boucle se reconnecte avec un backoff borné et reprend où elle en est.
 """
 
 import threading
@@ -21,6 +22,8 @@ from . import kernel
 from .blocks import BLOCKS, Context
 from .graph import load_bundle
 
+RECONNECT_MAX_S = 30.0  # plafond du backoff : une base absente n'est jamais abandonnée
+
 
 def tick(conn: psycopg.Connection) -> int:
     did = kernel.reap(conn)
@@ -30,12 +33,33 @@ def tick(conn: psycopg.Connection) -> int:
 
 
 def run_forever(poll_s: float = 0.5) -> None:
+    """Ticks à l'infini — une coupure de la base est un incident nominal.
+
+    Postgres qui disparaît (redémarrage, docker, réseau) ne tue pas le
+    worker : on ferme la connexion morte, on attend 1 s, 2 s, 4 s… plafonné
+    à RECONNECT_MAX_S, on en rouvre une et on reprend les ticks. Rien n'est
+    perdu : tout l'état est dans la base, et le faucheur rattrape au retour
+    les runs restés orphelins.
+
+    Seule l'OperationalError est rattrapée. Toute autre exception fait
+    crasher le processus, bruyamment : elle n'était pas attendue.
+    """
     from .db import connect
 
-    with connect() as conn:
-        while True:
-            if tick(conn) == 0:
-                time.sleep(poll_s)
+    wait_s = 1.0
+    while True:
+        try:
+            with connect() as conn:
+                while True:
+                    did = tick(conn)
+                    wait_s = 1.0  # un tick passé : la base répond, on repart de 1 s
+                    if did == 0:
+                        time.sleep(poll_s)
+        except psycopg.OperationalError as exc:
+            print(f"base injoignable : {exc} — reconnexion dans {wait_s:.0f}s",
+                  flush=True)
+            time.sleep(wait_s)
+            wait_s = min(wait_s * 2, RECONNECT_MAX_S)
 
 
 def _settle_waits(conn: psycopg.Connection) -> int:
