@@ -103,7 +103,7 @@ def _pr(item_id: int) -> str:
     markdown : trois clés lues telles quelles, jamais un parseur de prose.
     Pas de fichier, pas d'URL dedans : pas de lien, et rien à dire.
     """
-    path = DATA_DIR / f"item-{item_id}" / "release.json"
+    path = item_workspace(item_id) / "release.json"
     if not path.is_file():
         return ""
     try:
