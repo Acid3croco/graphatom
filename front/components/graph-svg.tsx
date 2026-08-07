@@ -16,13 +16,26 @@
  * jamais : c'est ce qui garde le point sous le curseur immobile pendant le
  * zoom.
  *
+ * Ce que l'œil a choisi vit ici, côté client, et nulle part ailleurs. La
+ * page se refait rendre toutes les cinq secondes — le sondage du bandeau de
+ * battement — et `graph` arrive alors en nouvel objet : rien de tout ça ne
+ * doit toucher à la vue. D'où `view` à `null`, qui veut dire « l'ajustement
+ * initial » : il se recalcule à chaque rendu depuis la géométrie du moment,
+ * donc il suit les données sans jamais remettre à zéro un cadrage choisi.
+ * Un rendu de plus n'est plus un événement.
+ *
+ * Ce choix se range dans `localStorage`, une entrée par item, sous
+ * `graph-view:<item>` : l'orientation et le cadrage. Une entrée absente,
+ * illisible ou d'une autre forme est ignorée en silence — la visionneuse
+ * repart de l'ajustement initial, ce n'est pas une panne.
+ *
  * Le nœud courant est peint en orange : c'est là qu'est l'item.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Expand, Minimize, RotateCcw, ZoomIn, ZoomOut } from "lucide-react";
 
 import type { Graph } from "@/lib/api";
-import { H, W, layout, type Orient } from "@/lib/graph-layout";
+import { H, W, layout, type Layout, type Orient } from "@/lib/graph-layout";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
@@ -31,34 +44,96 @@ const MAX = 4;
 const STEP = 1.3; // un cran de bouton
 
 type View = { x: number; y: number; w: number; h: number };
+/** Ce qu'un item garde : son orientation, et son cadrage s'il en a un. */
+type Kept = { orient: Orient; view: View | null };
 
 /** Le `viewBox` reste lisible : deux décimales suffisent au pixel près. */
 const round = (n: number) => Math.round(n * 100) / 100;
 
-export function GraphSvg({ graph }: { graph: Graph }) {
+/** L'ajustement initial : tout le dessin, et rien de plus. */
+const fit = (plan: Layout): View => ({
+  x: 0,
+  y: 0,
+  w: plan.width,
+  h: plan.height,
+});
+
+/** L'entrée de rangement d'un item. */
+const slot = (item: number) => `graph-view:${item}`;
+
+const num = (n: unknown): n is number =>
+  typeof n === "number" && Number.isFinite(n);
+
+/** Ce qui est rangé pour cet item, ou `null` si rien de lisible n'y est. */
+function read(item: number): Kept | null {
+  let kept: Record<string, unknown> | null = null;
+  try {
+    kept = JSON.parse(localStorage.getItem(slot(item)) ?? "");
+  } catch {
+    // rien de rangé, ou du texte qui n'est pas du json : on repart de zéro
+    return null;
+  }
+  const orient = kept?.orient;
+  if (orient !== "LR" && orient !== "TB") {
+    return null;
+  }
+  const { x, y, w, h } = kept ?? {};
+  const view = num(x) && num(y) && num(w) && num(h) ? { x, y, w, h } : null;
+  return { orient, view };
+}
+
+/** Ranger la vue de cet item. Un stockage qui refuse ne casse rien. */
+function write(item: number, kept: Kept) {
+  try {
+    localStorage.setItem(
+      slot(item),
+      JSON.stringify({ orient: kept.orient, ...kept.view }),
+    );
+  } catch {
+    // stockage plein ou interdit : la vue reste juste pour cette page-ci
+  }
+}
+
+export function GraphSvg({ graph, item }: { graph: Graph; item: number }) {
   const [orient, setOrient] = useState<Orient>("LR");
   const [full, setFull] = useState(false);
+  // le cadrage choisi, ou `null` pour l'ajustement initial
+  const [view, setView] = useState<View | null>(null);
   const box = useRef<HTMLDivElement>(null);
   const svg = useRef<SVGSVGElement>(null);
   // les pointeurs en cours : un pour le glisser, deux pour le pincement
   const points = useRef(new Map<number, { x: number; y: number }>());
 
   const plan = useMemo(() => layout(graph, orient), [graph, orient]);
-  const [view, setView] = useState<View>(() => ({
-    x: 0,
-    y: 0,
-    w: plan?.width ?? 1,
-    h: plan?.height ?? 1,
-  }));
 
-  const reset = useCallback(() => {
-    if (plan) {
-      setView({ x: 0, y: 0, w: plan.width, h: plan.height });
+  // au montage, la vue rangée pour cet item revient. La page monte un graph
+  // par item, donc `item` ne change jamais sous les pieds du composant.
+  useEffect(() => {
+    const kept = read(item);
+    if (kept) {
+      setOrient(kept.orient);
+      setView(kept.view);
     }
-  }, [plan]);
+  }, [item]);
 
-  // changer d'orientation refait la géométrie : la vue repart de l'ajustement
-  useEffect(reset, [reset]);
+  // et chaque geste range à son tour — sauf le premier tour, qui vient de lire
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    write(item, { orient, view });
+  }, [item, orient, view]);
+
+  /** Revenir à l'ajustement initial : la vue n'a plus de choix à garder. */
+  const reset = useCallback(() => setView(null), []);
+
+  /** L'autre orientation, c'est une autre géométrie : la vue repart de zéro. */
+  function turn() {
+    setOrient(orient === "LR" ? "TB" : "LR");
+    setView(null);
+  }
 
   const zoomAt = useCallback(
     (factor: number, cx: number, cy: number) => {
@@ -67,7 +142,8 @@ export function GraphSvg({ graph }: { graph: Graph }) {
         return;
       }
       const point = new DOMPoint(cx, cy).matrixTransform(ctm.inverse());
-      setView((v) => {
+      setView((seen) => {
+        const v = seen ?? fit(plan);
         const w = Math.min(
           Math.max(v.w / factor, plan.width / MAX),
           plan.width / MIN,
@@ -154,11 +230,14 @@ export function GraphSvg({ graph }: { graph: Graph }) {
       return; // trois doigts ou plus : on ne devine pas ce que ça veut dire
     }
     const ctm = svg.current?.getScreenCTM();
-    if (!ctm) {
+    if (!ctm || !plan) {
       return;
     }
     const [dx, dy] = [(e.clientX - from.x) / ctm.a, (e.clientY - from.y) / ctm.d];
-    setView((v) => ({ ...v, x: v.x - dx, y: v.y - dy }));
+    setView((seen) => {
+      const v = seen ?? fit(plan);
+      return { ...v, x: v.x - dx, y: v.y - dy };
+    });
   }
 
   function up(e: React.PointerEvent) {
@@ -168,6 +247,9 @@ export function GraphSvg({ graph }: { graph: Graph }) {
   if (!plan) {
     return null;
   }
+
+  // ce que le `viewBox` montre : le choix de l'œil, sinon l'ajustement
+  const seen = view ?? fit(plan);
 
   return (
     <div
@@ -216,7 +298,7 @@ export function GraphSvg({ graph }: { graph: Graph }) {
             orient === "LR" ? "TB" : "LR"
           }`}
           title={`orientation ${orient} — basculer`}
-          onClick={() => setOrient(orient === "LR" ? "TB" : "LR")}
+          onClick={turn}
         >
           {orient}
         </Button>
@@ -237,8 +319,8 @@ export function GraphSvg({ graph }: { graph: Graph }) {
       </div>
       <svg
         ref={svg}
-        viewBox={`${round(view.x)} ${round(view.y)} ${round(view.w)} ${round(
-          view.h,
+        viewBox={`${round(seen.x)} ${round(seen.y)} ${round(seen.w)} ${round(
+          seen.h,
         )}`}
         xmlns="http://www.w3.org/2000/svg"
         className={cn(
