@@ -777,8 +777,9 @@ donc `GRAPHATOM_DSN` et `GRAPHATOM_AGENT_DSN` d'entrée et épingle
 `GRAPHATOM_REPO_DIR` sur l'atelier du candidat — aucune porte ne *peut*
 toucher une base ni le clone de référence partagé, quelle que soit la
 distraction de qui éditera la liste. `tests/crash_test.py`, qui drope la base
-nommée par `GRAPHATOM_DSN`, n'y est donc pas : `test_backend` le joue après
-la course, une fois seul. Des jeux de portes lancés en même temps ne coûtent
+nommée par `GRAPHATOM_DSN`, n'y est donc pas ; `tests/shell_test.py` non plus,
+depuis que le verrou de la file du `deploy` lui en demande une. `test_backend`
+les joue après la course, une fois seul. Des jeux de portes lancés en même temps ne coûtent
 presque rien de plus qu'un seul — trois mettaient **53 s**, une seconde de
 plus qu'un seul ; le budget du nœud passe de 25 à
 **28 min** (`timeout_s: 1680`, bail `lease_s: 1740`) pour que l'agent garde
