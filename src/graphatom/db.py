@@ -106,10 +106,13 @@ def init_db(drop: bool = False) -> list[str]:
     with connect() as conn:
         # protection 1 : une transaction inactive meurt d'elle-même. Vaut
         # pour les sessions ouvertes après ce passage, les nôtres comme
-        # celles d'un client tiers — c'est le rôle qui la porte.
-        conn.execute(sql.SQL("ALTER ROLE CURRENT_USER SET "
+        # celles d'un client tiers — c'est le rôle qui la porte. Sur la base
+        # de ce passage seulement : l'instance des bases jetables porte celle
+        # de chaque item, et un item n'impose rien à ses voisins.
+        base = conn.execute("SELECT current_database() AS n").fetchone()["n"]
+        conn.execute(sql.SQL("ALTER ROLE CURRENT_USER IN DATABASE {} SET "
                              "idle_in_transaction_session_timeout = {}")
-                     .format(sql.Literal(IDLE_TX_TIMEOUT)))
+                     .format(sql.Identifier(base), sql.Literal(IDLE_TX_TIMEOUT)))
         # protection 2 : le DDL qui suit attend au plus LOCK_TIMEOUT
         conn.execute(sql.SQL("SET lock_timeout = {}").format(sql.Literal(LOCK_TIMEOUT)))
         if drop:
@@ -147,8 +150,11 @@ def _bloqueurs(conn: psycopg.Connection) -> str:
         "WHERE c.relkind = 'r' AND c.relnamespace = to_regnamespace(current_schema()) "
         "AND a.pid <> pg_backend_pid()"
     ).fetchall()
+    # la requête sur une ligne et bornée : un `schema.sql` entier en journal
+    # d'erreur noierait le pid, qui est ce qu'on vient y chercher
     return " ; ".join(
-        f"pid {r['pid']} ({r['state']}) : {r['query']}" for r in rows
+        f"pid {r['pid']} ({r['state']}) : {' '.join(r['query'].split())[:120]}"
+        for r in rows
     ) or "aucune session — le bloqueur est parti entre-temps"
 
 
