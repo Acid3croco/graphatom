@@ -652,10 +652,15 @@ def main() -> None:
                 "cleanup", "cleanup_unresolved", "cleanup_split"):
         cmd = BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
         assert "claude " not in cmd, f"{nom} lance encore un modèle"
-    for nom in ("scope", "implement", "test_backend", "test_frontend", "release"):
+    for nom in ("scope", "implement"):
         cmd = BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
         assert "claude " in cmd, f"{nom} n'est plus un agent"
         assert "usage.json" in cmd, f"{nom} ne rend pas son usage.json"
+    # depuis la bascule des nœuds légers, release et les deux tests passent
+    # par l'adaptateur codex : c'est lui qui remplit usage.json, pas le `cmd`
+    for nom in ("test_backend", "test_frontend", "release"):
+        cmd = BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
+        assert "agent-codex.sh" in cmd, f"{nom} n'est plus sur l'adaptateur codex"
     # les trois retraits sont le même shell : seul leur prompt les distingue,
     # et une correction sur l'un doit se voir sur les trois
     retraits = {BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
