@@ -167,11 +167,12 @@ def main() -> None:
     print("   repeat absent vaut une fois ✓")
 
     # 6. sans fan-out, rien ne change — l'exemple en déclare un sur `implement`
-    # depuis que la course y est en production : on le retire pour retrouver un
-    # bundle nu, plutôt que de faire semblant qu'il n'y en a jamais eu
-    nu = bundle_nu()
-    assert nu["nodes"]["implement"]["config"].pop("fanout"), \
+    # depuis que la course y est en production, et `bundle_nu` le retire déjà
+    # pour retrouver un bundle nu, plutôt que de faire semblant qu'il n'y en a
+    # jamais eu. Le constat reste dit ici, sur le bundle livré.
+    assert bundle_livre()["nodes"]["implement"]["config"].get("fanout"), \
         "`implement` ne déclare plus de fan-out dans l'exemple"
+    nu = bundle_nu()
     assert "fanout" not in json.dumps(nu), "aucun autre nœud n'en déclare"
     graph.validate(nu)
     assert graph.publish(FakeConn(), nu) == graph.content_hash(nu)

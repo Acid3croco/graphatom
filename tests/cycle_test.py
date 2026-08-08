@@ -10,13 +10,15 @@ Ce qui est joué pour de vrai : le graph, ses arêtes, ses budgets, la
 réduction `keep_n` et son `n`, le nœud arbitre et sa source, l'ordonnanceur,
 la base, git — les ateliers des candidats sont de vrais worktrees et leurs
 commits de vrais commits. Ce qui est remplacé : les seules `cmd` qui
-appellent un modèle ou sortent sur le réseau. Un cycle qui paie trois agents
-et un juge ne se joue pas dans une suite de tests ; ce qui route un item, en
-revanche, ce sont les arêtes et les issues, et elles sont ici d'origine.
+appellent un modèle ou sortent sur le réseau — celle du nœud, et celles que
+ses variantes surchargent, car une variante qui nomme sa propre CLI en
+appelle un aussi. Un cycle qui paie tous les candidats et un juge ne se joue
+pas dans une suite de tests ; ce qui route un item, en revanche, ce sont les
+arêtes et les issues, et elles sont ici d'origine.
 
 Le chemin attendu, celui du profil :
 
-    ingest → worktree → scope → implement (3 candidats, keep_n = 2)
+    ingest → worktree → scope → implement (les candidats du profil, keep_n = 2)
            → judge (2 finalistes → chosen) → test_backend → test_frontend
            → validate → review (l'humain répond `merger`) → release
            → deploy → verify_deploy → cleanup → close
@@ -58,9 +60,17 @@ ATTENDU = ["ingest", "worktree", "scope", "implement", "judge", "test_backend",
            "test_frontend", "validate", "review", "release", "deploy",
            "verify_deploy", "cleanup", "close"]
 
+# Combien de candidats `implement` fait courir — le profil le dit, et ce
+# n'est pas au test de le figer : ce qu'il vérifie, c'est que `keep_n` en
+# garde deux quel qu'en soit le nombre.
+CANDIDATS = len(graph.fanout_variants(
+    json.loads(PROFIL.read_text())["nodes"]["implement"]))
+COUT_CANDIDAT = 0.50  # ce que la doublure `CANDIDAT` déclare dans son usage.json
+
 # Un candidat de `implement` : il commite pour de vrai dans son atelier, avec
-# un mot à lui, puis rend `done`. Trois candidats, trois diffs différents —
-# de quoi donner au juge quelque chose à départager.
+# un mot à lui, puis rend `done`. Autant de candidats que le profil en
+# déclare, autant de diffs différents — de quoi donner au juge quelque chose
+# à départager.
 CANDIDAT = """
 set -e
 K=$(basename "$(pwd)")
@@ -119,6 +129,12 @@ def bundle() -> dict:
     fanout = spec["nodes"]["implement"]["config"]["fanout"]
     assert fanout["reduce"] == "keep_n", fanout  # le ticket, en une ligne
     assert fanout["n"] == 2, fanout
+    # une variante peut surcharger l'agent du nœud pour courir sur une autre
+    # CLI : c'est encore un modèle, et un réseau. On lui retire sa surcharge,
+    # elle retombe sur la doublure du nœud — le nombre de candidats, lui, ne
+    # bouge pas, et c'est lui que la réduction départage.
+    for variant in fanout["variants"]:
+        variant.pop("agent", None)
     assert graph.judge_source(spec["nodes"]["judge"]) == "implement"
     return spec
 
@@ -261,11 +277,11 @@ def verifier(conn, item_id: int) -> None:
     candidats = [r for r in runs if r["node"] == "implement"]
     finalistes = [r for r in candidats if r["status"] == "applied"]
     recales = [r for r in candidats if r["status"] == "superseded"]
-    assert len(candidats) == 3, candidats
+    assert len(candidats) == CANDIDATS, candidats
     assert len(finalistes) == 2, finalistes  # `n` = 2, et pas un de plus
-    assert len(recales) == 1, recales
+    assert len(recales) == CANDIDATS - 2, recales
     print(f"4. {len(candidats)} candidats courus, {len(finalistes)} finalistes "
-          f"transmis, {len(recales)} recalé ✓")
+          f"transmis, {len(recales)} recalé{'s' if len(recales) > 1 else ''} ✓")
 
     arbitre = [r for r in runs if r["node"] == "judge"]
     assert len(arbitre) == 1 and arbitre[0]["outcome"] == "chosen", arbitre
@@ -279,7 +295,7 @@ def verifier(conn, item_id: int) -> None:
         "WHERE item_id = %s AND node IN ('judge', 'implement') GROUP BY 1",
         (item_id,))}
     assert prix.get("jugement") == 4.0, prix
-    assert prix.get("candidats") == 1.5, prix  # 3 candidats × 0,50
+    assert prix.get("candidats") == CANDIDATS * COUT_CANDIDAT, prix
     print(f"5. prix du jugement {prix['jugement']} $ face aux candidats "
           f"{prix['candidats']} $ — deux parts, pas un total ✓")
 
