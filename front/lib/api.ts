@@ -42,12 +42,26 @@ export type Item = {
 
 export type Usage = Record<string, number>;
 
+/**
+ * Le prix de l'item, coupé en trois parts disjointes.
+ *
+ * Les deux bouts de l'haltère se lisent l'un à côté de l'autre : ce que le
+ * jugement a coûté, et ce que la génération des candidats a coûté. `other`
+ * est tout le reste — les nœuds ordinaires, ni juges ni candidats.
+ */
+export type UsageSplit = {
+  judgement: Usage;
+  candidates: Usage;
+  other: Usage;
+};
+
 export type ItemHead = Item & {
   revision: string;
   lineage_budget: number;
   wall_deadline: string | null;
   duration_s: number;
   usage: Usage;
+  usage_split: UsageSplit;
 };
 
 /**
@@ -74,6 +88,8 @@ export type GraphNode = {
   terminal: boolean;
   escalade: boolean;
   fanout?: NodeFanout;
+  /** Le nœud de fan-out dont ce nœud départage les finalistes — un arbitre. */
+  finalists_from?: string;
 };
 
 export type GraphEdge = { from: string; outcome: string; to: string };

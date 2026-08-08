@@ -22,14 +22,19 @@ KERNEL_OUTCOMES = {"crashed", "stalled", "timed_out", "invalid_result",
 # Le jeu des réductions légales est une table « type de bloc → réductions
 # permises », tranchée à la publication et non découverte à l'exécution : une
 # réduction par vote sur un nœud qui produit du code n'a aucun sens.
-# `first_pass` — le premier candidat dont l'issue passe gagne — est la seule
-# réduction livrée à ce jour ; `keep_n` et `best_by` viendront plus tard et ne
-# sont donc légales nulle part. Un WAIT garde le jeu vide : une question posée
-# à un humain ne se multiplie pas.
+#
+# `first_pass` — le premier candidat dont l'issue passe gagne — est celle qui
+# n'attend personne, et elle est permise partout où un fan-out l'est.
+# `keep_n` garde les n candidats qui ont réussi et les passe en aval à un juge
+# au lieu d'en élire un : elle n'a de sens que là où les candidats produisent
+# un travail qu'on peut comparer, c'est-à-dire sur un ACT. Ailleurs — une
+# lecture, un constat, un effet — il n'y a rien à départager, et elle est
+# refusée à la publication. `best_by` n'est livrée nulle part. Un WAIT garde
+# le jeu vide : une question posée à un humain ne se multiplie pas.
 FANOUT_REDUCERS: dict[str, set[str]] = {
     "FETCH": {"first_pass"},
     "JUDGE": {"first_pass"},
-    "ACT": {"first_pass"},
+    "ACT": {"first_pass", "keep_n"},
     "CHECK": {"first_pass"},
     "EFFECT": {"first_pass"},
     "WAIT": set(),
@@ -38,6 +43,24 @@ FANOUT_REDUCERS: dict[str, set[str]] = {
 # La borne dure du nombre de candidats d'un nœud — variantes × répétitions.
 # Une config fautive ne doit pas lancer mille agents.
 FANOUT_MAX_CANDIDATES = 8
+
+# La borne dure du `n` de `keep_n`, et elle est étroite exprès : le juge lit N
+# diffs entiers, son contexte explose au-delà de trois et la valeur marginale
+# d'un quatrième finaliste s'effondre. En deçà de deux, il n'y a personne à
+# départager — c'est `first_pass` qu'on voulait, en plus cher.
+FANOUT_KEEP_MIN = 2
+FANOUT_KEEP_MAX = 3
+
+# Le nœud qui départage les finalistes le dit par cette clé de config : elle
+# nomme le nœud de fan-out dont il reçoit les candidats. Sa présence fait le
+# nœud arbitre — le bloc court-circuite, appelle un modèle ou renvoie en
+# arrière selon ce qu'il trouve, au lieu de jouer un agent comme un JUDGE
+# ordinaire. Voir `blocks.judge`.
+JUDGE_SOURCE = "finalists_from"
+
+# Les trois issues fermées d'un nœud arbitre, et il les déclare toutes les
+# trois : un finaliste unique, un élu parmi plusieurs, aucun finaliste.
+JUDGE_OUTCOMES = ("sole", "chosen", "none")
 
 
 class GraphError(Exception):
@@ -89,12 +112,68 @@ def _validate_fanout(name: str, spec: dict) -> None:
     if reduce not in permises:
         raise GraphError(f"{name} : réduction {reduce!r} refusée sur un bloc {kind} — "
                          f"permises : {sorted(permises) or 'aucune'}")
+    if reduce == "keep_n":
+        _validate_keep_n(name, fanout)
 
     candidats = len(variants) * repeat
     if candidats > FANOUT_MAX_CANDIDATES:
         raise GraphError(f"{name} : {len(variants)} variantes × {repeat} = {candidats} "
                          f"candidats, au-delà de la limite dure "
                          f"FANOUT_MAX_CANDIDATES = {FANOUT_MAX_CANDIDATES}")
+
+
+def _validate_keep_n(name: str, fanout: dict) -> None:
+    """Le `n` de `keep_n` : présent, entier, et dans la borne dure.
+
+    Le message nomme la borne. Une config qui la rate se corrige en la
+    lisant, sans aller ouvrir le code du noyau.
+    """
+    if "n" not in fanout:
+        raise GraphError(f"{name} : réduction keep_n sans n — la borne est "
+                         f"{FANOUT_KEEP_MIN} ≤ n ≤ {FANOUT_KEEP_MAX}")
+    n = fanout["n"]
+    if isinstance(n, bool) or not isinstance(n, int):
+        raise GraphError(f"{name} : keep_n.n doit être un entier, vu {n!r} — la "
+                         f"borne est {FANOUT_KEEP_MIN} ≤ n ≤ {FANOUT_KEEP_MAX}")
+    if not FANOUT_KEEP_MIN <= n <= FANOUT_KEEP_MAX:
+        raise GraphError(f"{name} : keep_n.n = {n} hors de la borne dure "
+                         f"{FANOUT_KEEP_MIN} ≤ n ≤ {FANOUT_KEEP_MAX} — au-delà, le "
+                         f"juge lit trop de diffs ; en deçà, il n'a rien à départager")
+
+
+def judge_source(spec: dict) -> str | None:
+    """Le nœud de fan-out dont ce nœud reçoit les finalistes. None sinon.
+
+    C'est le seul signe qui distingue un JUDGE arbitre d'un JUDGE ordinaire :
+    il est déclaré, jamais deviné.
+    """
+    return (spec.get("config") or {}).get(JUDGE_SOURCE)
+
+
+def _validate_judge(name: str, spec: dict, nodes: dict) -> None:
+    """Le nœud arbitre : son bloc, sa source, et ses trois issues.
+
+    Sa source doit être un nœud déclaré qui réduit bien par `keep_n` — sans
+    quoi il n'y aurait jamais qu'un candidat à lui présenter, et le nœud
+    entier serait un tampon. Ses trois issues sont fermées et obligatoires :
+    un finaliste unique, un élu, aucun finaliste.
+    """
+    source = judge_source(spec)
+    if source is None:
+        return
+    if spec.get("block") != "JUDGE":
+        raise GraphError(f"{name} : {JUDGE_SOURCE} demande un bloc JUDGE, "
+                         f"vu {spec.get('block')}")
+    if source not in nodes:
+        raise GraphError(f"{name}.{JUDGE_SOURCE} → nœud non déclaré {source}")
+    amont = (nodes[source].get("config") or {}).get("fanout") or {}
+    if amont.get("reduce") != "keep_n":
+        raise GraphError(f"{name}.{JUDGE_SOURCE} → {source} ne réduit pas par "
+                         f"keep_n : rien à départager")
+    manquantes = [o for o in JUDGE_OUTCOMES if o not in (spec.get("edges") or {})]
+    if manquantes:
+        raise GraphError(f"{name} : nœud arbitre sans arête {manquantes} — les "
+                         f"trois issues {list(JUDGE_OUTCOMES)} sont fermées")
 
 
 def fanout_variants(spec: dict) -> list[dict]:
@@ -170,6 +249,7 @@ def validate(bundle: dict) -> None:
         if spec.get("block") not in BLOCK_KINDS:
             raise GraphError(f"{name} : bloc inconnu {spec.get('block')}")
         _validate_fanout(name, spec)
+        _validate_judge(name, spec, nodes)
         edges = spec.get("edges") or {}
         if not edges:
             raise GraphError(f"{name} : aucun nœud non-terminal sans arête")

@@ -35,6 +35,12 @@ porte : c'est elle qui s'interpole dans son prompt et dans sa commande.
 Le bloc n'a jamais à deviner où est son checkout : `GRAPHATOM_WORKTREE` le
 lui dit, celui de son candidat ou celui de son item selon ce qu'il est.
 
+Un JUDGE qui déclare `finalists_from` ne joue pas un agent comme les autres :
+il départage les finalistes que la réduction `keep_n` du nœud nommé a laissés
+passer. Un seul finaliste, et il est traversé sans dépenser un jeton ;
+plusieurs, et un modèle lit leurs diffs — anonymes — puis élit ; aucun, et le
+travail repart en amont. Voir `judge` et `_arbitrate`.
+
 L'agent tourne dans son propre groupe de processus : au timeout, c'est
 tout le groupe qui est révoqué — un descendant ne survit pas au bail.
 Le pgid est aussi persisté dans le workspace : si c'est le worker qui
@@ -75,7 +81,8 @@ from pathlib import Path
 
 import psycopg
 
-from . import db
+from . import db, worktree
+from .graph import KERNEL_OUTCOMES, judge_source
 from .worktree import run_worktree
 
 DATA_DIR = Path("data")  # les tests le font pointer sur un répertoire temporaire
@@ -135,6 +142,10 @@ class Context:
         self.node = node
         self.bundle = bundle
         self.config = node.get("config") or {}
+        # ce qu'un bloc ajoute au prompt de son nœud, tel quel : posé après
+        # l'interpolation, il n'est ni rempli ni expansé — un diff qui porte
+        # un `$HOME` reste un diff, il ne devient pas un chemin
+        self.extra = ""
         self.workspace = run_workspace(item["id"], run)
         self.workspace.mkdir(parents=True, exist_ok=True)
         # l'atelier suit le bureau : celui du candidat, ouvert ici s'il ne
@@ -215,14 +226,30 @@ def _prompt(ctx: Context, workspace: Path, subject: str) -> str:
     outcome_path = workspace / OUTCOME_NAME
     return os.path.expandvars(
         _fill(ctx, ctx.config["agent"]["prompt"], subject)
-    ) + (
+    ) + ctx.extra + (
         "\n\n--- Contrat GraphAtom ---\n"
         f"Tu es le bloc « {ctx.run['node']} » d'un rail d'exécution. "
         f"Ton workspace : {workspace}\n"
+        + _commun(ctx) +
         f"Avant de terminer, écris impérativement {outcome_path} : "
         f'{{"outcome": <une valeur parmi {outcomes}>, "summary": "<une phrase>"}}\n'
         "Sans ce fichier, ta tentative est classée crashed et sera retentée."
     ) + _reprise(ctx, workspace)
+
+
+def _commun(ctx: Context) -> str:
+    """Où sont les fichiers communs de l'item, quand ce ne sont pas les siens.
+
+    Un candidat de fan-out a son bureau à lui, sous celui de l'item : les
+    fichiers que le cycle entier partage — `criteria.md`, `validate.md` — y
+    sont d'un cran au-dessus. Le dire ici évite qu'un candidat cherche son
+    cahier des charges à côté de son propre journal et ne trouve rien. Un run
+    sans candidat n'a rien à distinguer : son workspace est celui de l'item.
+    """
+    if ctx.run.get("candidate") is None:
+        return ""
+    return (f"Les fichiers communs du cycle — criteria.md, validate.md — sont dans "
+            f"le workspace de l'item : {item_workspace(ctx.item['id']).resolve()}\n")
 
 
 DEATHS = {  # ce qui a tué la tentative précédente, dit en clair au repreneur
@@ -727,11 +754,168 @@ def fetch(ctx: Context) -> dict:
 
 
 def judge(ctx: Context) -> dict:
+    if judge_source(ctx.node):  # un JUDGE qui départage des finalistes
+        return _arbitrate(ctx)
     if "agent" in ctx.config:
         return _agent(ctx)
     ctx.simulate_work()
     # le stub répond ce que la config scripte ; un vrai JUDGE appelle un agent
     return {"outcome": ctx.config["stub_outcome"]}
+
+
+# ------------------------------------------------------------------- arbitrage
+
+VERDICT_NAME = "verdict.md"  # le verdict du juge, comme `validate.md` du validate
+JUDGE_WORK_CHARS = 30000  # le travail d'un finaliste cité dans le prompt du juge
+LETTRES = "ABCDEFGH"  # le nom anonyme d'un finaliste dans le dossier du juge
+
+
+def _finalists(ctx: Context) -> list[int]:
+    """Les candidats que la réduction `keep_n` a laissés passer, dans l'ordre.
+
+    Ce sont les runs encore `applied` de la dernière tentative du nœud de
+    fan-out d'amont : `keep_n` a recalé les autres réussites en `superseded`,
+    et les échecs portent une issue du noyau. Le statut fait donc foi, sans
+    table de plus ni colonne de plus.
+
+    L'ordre est celui des dates de fin, celui-là même dont `keep_n` s'est
+    servie : deux juges qui lisent le même item lisent le même dossier.
+    """
+    source = judge_source(ctx.node)
+    rows = ctx.conn.execute(
+        "SELECT candidate, status, outcome FROM node_run WHERE item_id = %s "
+        "AND node = %s AND (cycle, attempt) = ("
+        "  SELECT cycle, attempt FROM node_run WHERE item_id = %s AND node = %s "
+        "  ORDER BY cycle DESC, attempt DESC LIMIT 1) "
+        "ORDER BY finished_at, id",
+        (ctx.item["id"], source, ctx.item["id"], source),
+    ).fetchall()
+    return [r["candidate"] for r in rows
+            if r["candidate"] is not None and r["status"] == "applied"
+            and r["outcome"] and r["outcome"] not in KERNEL_OUTCOMES]
+
+
+def _verdict(ctx: Context, texte: str) -> None:
+    """Écrit — ou complète — le verdict du juge dans le workspace de l'item.
+
+    Le nœud écrit son constat là où `validate` écrit le sien : un fichier du
+    workspace, que le front sert et que l'humain lit. Quand un modèle est
+    passé, il a déjà posé sa comparaison dans le même fichier ; le bloc n'y
+    ajoute que la décision, à la fin, en toutes lettres.
+    """
+    path = ctx.workspace / VERDICT_NAME
+    with path.open("a") as f:
+        f.write(texte)
+
+
+def _dossier(ctx: Context, finalists: list[int]) -> str:
+    """Le dossier du juge : un finaliste par lettre, son travail, et rien d'autre.
+
+    **Ce qui n'y est pas est le cœur du nœud.** Ni le modèle, ni la CLI, ni le
+    `label` ou la `strategy` de la variante, ni même le numéro de candidat :
+    un juge qui saurait qu'un finaliste vient d'un « gros » modèle le
+    préfèrerait, et la mesure qu'on cherche à faire perdrait tout son sens.
+    Il ne reste que les diffs et les critères — de quoi juger le travail, pas
+    son auteur.
+    """
+    parts = [
+        f"\n\n--- Les finalistes ({len(finalists)}) ---\n"
+        "Chaque finaliste est une implémentation complète, partie du même commit. "
+        "Tu ne sais rien de qui l'a produite, et c'est voulu : juge le travail, "
+        "pas son auteur."
+    ]
+    for lettre, candidate in zip(LETTRES, finalists):
+        work = worktree.candidate_work(ctx.item["id"], candidate, JUDGE_WORK_CHARS)
+        parts.append(f"\n### Finaliste {lettre}\n\n"
+                     + (work or "(travail illisible : aucun diff à lire)"))
+    return "\n".join(parts)
+
+
+def _elu(ctx: Context, workspace: Path, finalists: list[int]) -> int | None:
+    """La lettre que le juge a rendue, retraduite en numéro de candidat.
+
+    Le contrat du nœud est celui de tout le monde — `outcome.json` —, avec un
+    champ de plus : `elu`, la lettre du finaliste choisi. Une lettre absente
+    ou qui ne nomme aucun finaliste n'est pas un choix : le bloc rend None, et
+    le noyau reverra la tentative.
+    """
+    try:
+        elu = str(json.loads((workspace / OUTCOME_NAME).read_text())["elu"]).strip()
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    index = LETTRES.find(elu[:1].upper()) if elu else -1
+    return finalists[index] if 0 <= index < len(finalists) else None
+
+
+def _promote(ctx: Context, candidate: int) -> str:
+    """Le travail de l'élu devient celui de l'item, et les ateliers partent.
+
+    L'ordre compte : promouvoir d'abord, ranger ensuite — l'inverse
+    détruirait la branche qu'on allait fusionner. Ce que `keep_n` avait
+    laissé debout pour le juge disparaît ici, gagnant compris : sa branche
+    n'a plus rien d'unique une fois fusionnée.
+    """
+    promue = worktree.promote(ctx.item["id"], candidate)
+    retirees = worktree.discard(ctx.item["id"])
+    if promue is None:
+        return ("Promotion refusée : le travail de l'élu n'a pas rejoint la branche "
+                f"de l'item. Ateliers retirés : {', '.join(retirees) or 'aucun'}.\n")
+    return (f"Travail de l'élu promu sur la branche de l'item. Ateliers des "
+            f"finalistes retirés : {', '.join(retirees) or 'aucun'}.\n")
+
+
+def _arbitrate(ctx: Context) -> dict:
+    """Le nœud arbitre : il choisit entre des finalistes, il ne corrige rien.
+
+    Trois issues fermées, et la première est la plus importante :
+
+    - `sole`, un seul finaliste — le nœud est traversé **sans dépenser un
+      seul jeton**. Un juge à qui l'on présente une option unique dit
+      toujours oui : ce serait un tampon payant, qui fabriquerait de la
+      fausse confiance. Le court-circuit est mécanique, décidé avant
+      d'appeler quoi que ce soit ;
+    - `chosen`, plusieurs finalistes — un modèle lit les diffs et les
+      critères, élit, et dit pourquoi ;
+    - `none`, aucun finaliste — retour vers l'amont, comme un échec de
+      `validate`, et borné par le budget d'escalade existant.
+
+    Dans les trois cas, le verdict est écrit dans le workspace. Dans les deux
+    premiers, le travail de l'élu est promu sur la branche de l'item et les
+    ateliers des finalistes sont détruits.
+    """
+    finalists = _finalists(ctx)
+    if not finalists:
+        _verdict(ctx, f"# Verdict — {ctx.run['node']}\n\n"
+                      "Aucun finaliste : rien à départager, le travail repart en "
+                      "amont.\n")
+        return {"outcome": "none",
+                "summary": "aucun finaliste — retour en amont sans jugement"}
+
+    if len(finalists) == 1:
+        rangement = _promote(ctx, finalists[0])
+        _verdict(ctx, f"# Verdict — {ctx.run['node']}\n\n"
+                      "Élu : finaliste A, et il était seul. Court-circuit mécanique : "
+                      "aucun modèle n'a été appelé, aucun jeton dépensé — un juge à "
+                      "qui l'on présente une option unique dit toujours oui.\n\n"
+                      + rangement)
+        return {"outcome": "sole",
+                "summary": "finaliste unique — traversé sans appel de modèle"}
+
+    workspace = ctx.workspace.resolve()
+    ctx.extra = _dossier(ctx, finalists)
+    result = _agent(ctx)
+    if result["outcome"] != "chosen":  # panne, dépassement, issue illisible
+        return result
+
+    candidate = _elu(ctx, workspace, finalists)
+    if candidate is None:
+        return result | {"outcome": "invalid_result",
+                         "error": "issue « chosen » sans lettre de finaliste lisible"}
+    lettre = LETTRES[finalists.index(candidate)]
+    _verdict(ctx, f"\n\n## Verdict\n\nÉlu : finaliste {lettre} — "
+                  f"{result.get('summary') or 'sans raison rendue'}\n\n"
+                  + _promote(ctx, candidate))
+    return result | {"elu": lettre}
 
 
 def act(ctx: Context) -> dict:
