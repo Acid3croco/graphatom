@@ -66,7 +66,7 @@ from urllib.parse import parse_qs, quote, unquote
 
 from . import channel, db, heartbeat
 from .blocks import item_workspace
-from .graph import candidate_node, fanout_variants, load_bundle
+from .graph import candidate_node, fanout_variants, judge_source, load_bundle
 
 STYLE = """
 body { font-family: system-ui, sans-serif; max-width: 58rem; margin: 2rem auto;
@@ -468,6 +468,40 @@ def _totals(runs: list[dict]) -> dict[str, float]:
     return totals
 
 
+def _arbitres(bundle: dict) -> set[str]:
+    """Les nœuds arbitres du graph, et le nœud de fan-out de chacun.
+
+    Rendu en un seul jeu : les nœuds dont le prix est celui du *jugement*, par
+    opposition à celui de la *génération*, qui est celui des candidats du nœud
+    d'amont. C'est la seule distinction qui compte ici.
+    """
+    return {n for n, spec in bundle["nodes"].items() if judge_source(spec)}
+
+
+def _cost_split(bundle: dict, runs: list[dict]) -> dict[str, dict[str, float]]:
+    """Ce que le jugement a coûté, face à ce que la génération a coûté.
+
+    L'haltère a deux bouts, et la seule façon de savoir s'il est bien réglé est
+    de les voir l'un à côté de l'autre : le prix des candidats qu'on fabrique,
+    et le prix du juge qui les départage. Un total unique les mélangerait, et
+    la question — le jugement vaut-il ce qu'il coûte ? — deviendrait invisible.
+
+    Trois parts, disjointes et exhaustives : les runs des nœuds arbitres, les
+    runs de candidats de fan-out, et tout le reste. Un item qui n'est jamais
+    passé par un juge n'a que la troisième, et rien de ceci ne s'affiche.
+    """
+    arbitres = _arbitres(bundle)
+    parts = {"judgement": [], "candidates": [], "other": []}
+    for run in runs:
+        if run["node"] in arbitres:
+            parts["judgement"].append(run)
+        elif run.get("candidate") is not None:
+            parts["candidates"].append(run)
+        else:
+            parts["other"].append(run)
+    return {part: _totals(lot) for part, lot in parts.items()}
+
+
 def _tokens(usage: dict) -> str:
     """Un usage en une ligne : les types tels qu'ils viennent, rien d'inventé."""
     parts = []
@@ -531,6 +565,21 @@ def _criteria(item_id: int) -> str | None:
     return path.read_text() if path.is_file() else None
 
 
+def _split_line(bundle: dict, runs: list[dict]) -> str:
+    """La ligne qui met le prix du jugement en face de celui de la génération.
+
+    Elle n'apparaît que sur un item qui est passé par un juge : ailleurs, il
+    n'y a rien à comparer et une ligne vide ne dirait rien.
+    """
+    split = _cost_split(bundle, runs)
+    if not split["judgement"] and not split["candidates"]:
+        return ""
+    return ("<p class='meta' id='cout-jugement'>"
+            f"jugement {_tokens(split['judgement']) or 'aucun usage rapporté'}"
+            " · candidats "
+            f"{_tokens(split['candidates']) or 'aucun usage rapporté'}</p>")
+
+
 def _item_page(conn, item_id: int, beat: dt.datetime | None) -> str | None:
     item = conn.execute(ITEM_SELECT + "WHERE w.id = %s", (item_id,)).fetchone()
     if item is None:
@@ -568,6 +617,7 @@ def _item_page(conn, item_id: int, beat: dt.datetime | None) -> str | None:
         f"<p class='meta'>temps total {_dur(total)}"
         + ("" if item["terminal_at"] else " (en cours)")
         + (f" · {_tokens(totals)}" if totals else " · aucun usage rapporté") + "</p>",
+        _split_line(bundle, runs),
         _graph_svg(bundle, item["state"]),
     ]
 
@@ -728,6 +778,10 @@ def _api_graph(bundle: dict, current: str) -> dict:
                    "terminal": bool(spec.get("terminal")),
                    "escalade": bool(spec.get("escalade"))}
                   | ({"fanout": fanout} if (fanout := _api_fanout(spec)) else {})
+                  # un nœud arbitre nomme sa source : c'est ce qui permet au
+                  # client de séparer le prix du jugement de celui des candidats
+                  | ({"finalists_from": source} if (source := judge_source(spec))
+                     else {})
                   for n, spec in nodes.items()],
         "edges": [{"from": n, "outcome": outcome, "to": target}
                   for n, spec in nodes.items()
@@ -820,6 +874,9 @@ def _api_item(conn, item_id: int) -> dict | None:
             "wall_deadline": item["wall_deadline"],
             "duration_s": (end - events[0]["at"]).total_seconds() if events else 0.0,
             "usage": _totals(runs),
+            # les deux bouts de l'haltère, séparés : ce que le jugement coûte
+            # face à ce que la génération coûte
+            "usage_split": _cost_split(bundle, runs),
         },
         "graph": _api_graph(bundle, item["state"]),
         "journal": [{"version": e["item_version"], "at": e["at"], "kind": e["kind"],

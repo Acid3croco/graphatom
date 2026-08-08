@@ -31,6 +31,7 @@ import type {
   Question,
   Run,
   Usage,
+  UsageSplit,
   Variant,
   WorkspaceFile,
 } from "@/lib/api";
@@ -133,7 +134,36 @@ export function ItemHeader({ id, initial }: { id: number; initial: ItemHead }) {
         {item.terminal_at ? "" : " (en cours)"} ·{" "}
         {total || "aucun usage rapporté"}
       </p>
+      <CostSplit split={item.usage_split} />
     </section>
+  );
+}
+
+/**
+ * Les deux bouts de l'haltère, l'un en face de l'autre.
+ *
+ * Le total d'un item mélange ce qu'on paie pour *produire* — les candidats
+ * d'un fan-out, tous, perdants compris — et ce qu'on paie pour *choisir* —
+ * le nœud arbitre. Mêlés, la question qui compte n'a plus de réponse : le
+ * jugement vaut-il ce qu'il coûte ? Séparés, elle se lit d'un coup d'œil.
+ *
+ * Un item qui n'est passé ni par un fan-out ni par un juge n'a rien à
+ * comparer : la ligne n'existe pas.
+ */
+function CostSplit({ split }: { split: UsageSplit | undefined }) {
+  const judgement = tokens(split?.judgement);
+  const candidates = tokens(split?.candidates);
+  if (!judgement && !candidates) {
+    return null;
+  }
+  return (
+    <p
+      data-testid="cout-jugement"
+      className="text-sm text-muted-foreground"
+    >
+      jugement {judgement || "aucun usage rapporté"} · candidats{" "}
+      {candidates || "aucun usage rapporté"}
+    </p>
   );
 }
 
