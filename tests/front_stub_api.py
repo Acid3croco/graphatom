@@ -16,8 +16,12 @@ import json
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+# Trois nombres par part, tous distincts d'une part à l'autre, et des coûts
+# qui ne tombent pas ronds : le front écrit un entier autrement qu'un
+# décimal, et le test lit le texte rendu au caractère près.
 JUGEMENT = {"input_tokens": 700000, "output_tokens": 9000, "total_cost_usd": 2.5}
-CANDIDATS = {"input_tokens": 300000, "output_tokens": 21000, "total_cost_usd": 6.0}
+CANDIDATS = {"input_tokens": 300000, "output_tokens": 21000, "total_cost_usd": 6.25}
+TOTAL = {k: JUGEMENT[k] + CANDIDATS[k] for k in JUGEMENT}  # l'ordre des clés tient
 
 ITEM = {
     "item": {
@@ -29,8 +33,7 @@ ITEM = {
         "updated_at": "2026-01-01T12:00:00+00:00",
         "revision": "0" * 64, "lineage_budget": 3,
         "wall_deadline": "2026-01-04T10:00:00+00:00", "duration_s": 7200.0,
-        "usage": {k: JUGEMENT.get(k, 0) + CANDIDATS.get(k, 0)
-                  for k in {*JUGEMENT, *CANDIDATS}},
+        "usage": TOTAL,
         "usage_split": {"judgement": JUGEMENT, "candidates": CANDIDATS, "other": {}},
     },
     "graph": {
