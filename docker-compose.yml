@@ -72,6 +72,12 @@ services:
       GRAPHATOM_TAKE_ALL: ${GRAPHATOM_TAKE_ALL:-}
       GRAPHATOM_WEB_URL: ${GRAPHATOM_WEB_URL:-http://127.0.0.1:8850}
     restart: unless-stopped
+    labels: &sha
+      # le SHA d'origin/main que ce conteneur porte, posé par le nœud `deploy`.
+      # C'est ce qui permet au déploiement suivant de voir qu'il n'a rien à
+      # reconstruire — la seule source de vérité étant le déploiement lui-même,
+      # jamais un fichier de bookkeeping à côté.
+      com.graphatom.sha: "${GRAPHATOM_SHA:-}"
     volumes:
       - ./data:/app/data:ro   # les workspaces du worker hôte — la question de
                               # review y lit le `validate.md` qu'elle cite
@@ -89,6 +95,7 @@ services:
     command: graphatom serve --host 0.0.0.0 --port 8848
     environment: *env
     restart: unless-stopped
+    labels: *sha
     volumes:
       - ./data:/app/data:ro   # les workspaces du worker hôte — previews en lecture seule
     ports:
@@ -111,6 +118,7 @@ services:
       - "127.0.0.1:8851:3000"
     networks: [default, proxy]   # `proxy` : voir plus bas
     labels:
+      <<: *sha
       traefik.enable: "true"
       traefik.http.routers.graphatom-front.rule: Host(`graphatom.veyxzer.com`)
       traefik.http.services.graphatom-front.loadbalancer.server.port: "3000"
