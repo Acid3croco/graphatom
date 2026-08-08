@@ -43,6 +43,8 @@ le test prend celle que `GRAPHATOM_DSN` désigne, sans y écrire une ligne.
  19. le conteneur bâtard d'un `up` interrompu est retiré, et le `up` rejoué
  20. les garde-fous du verrou : seul `deploy` le prend, son attente tient
      dans le couperet du nœud, et le README comme le prompt le justifient
+ 21. le `python3` du PATH n'a pas psycopg — celui du clone de référence
+     l'a, et c'est lui qui prend le verrou
 
 Usage : uv run python tests/shell_test.py
 """
@@ -754,6 +756,33 @@ def main() -> None:
     assert f"{verrou} s d'attente" in readme, "le README ne dit pas le budget retenu"
     print(f"20. seul deploy prend le verrou, attente {verrou} s < timeout_s "
           f"{config['agent']['timeout_s']} s < bail {config['lease_s']} s ✓")
+
+    # 21. le worker du rail n'a pas son venv dans son PATH : le `python3`
+    #    ambiant y est celui du système, sans psycopg. Le nœud doit trouver
+    #    l'interprète du clone de référence — sinon le verrou se tairait, et
+    #    la file ne serait qu'un commentaire dans le bundle
+    nu = tmp / "python-nu"
+    nu.mkdir()
+    cible = depot(nu)
+    venv = cible / ".venv" / "bin"
+    venv.mkdir(parents=True)
+    (venv / "python3").symlink_to(sys.executable)
+    docker21 = faux_deploiement(nu / "bin")
+    sourd = nu / "bin" / "python3"  # celui du PATH ne sait pas importer psycopg
+    sourd.write_text("#!/bin/sh\nexit 1\n")
+    sourd.chmod(0o755)
+    atelier = nu / "item"
+    atelier.mkdir()
+    tient = tenant(VERROU_DSN, cle_verrou(cible))
+    outcome = joue("deploy", cible, atelier, plus={"PATH": docker21,
+                                                  "GRAPHATOM_VERROU_DELAI_S": "3"})
+    tient.kill()
+    tient.wait()
+    assert outcome["outcome"] == "waiting", \
+        f"le verrou s'est tu faute d'interprète : {outcome}"
+    assert montees(nu / "bin") == [], "un `up` est passé sans le verrou"
+    print("21. le python du PATH n'a pas psycopg : celui du clone de "
+          "référence prend le verrou quand même ✓")
 
     shutil.rmtree(tmp, ignore_errors=True)
     print("\nnœuds shell : OK — déterministes, et jamais sans outcome")

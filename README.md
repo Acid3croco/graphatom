@@ -428,7 +428,12 @@ chemin de `GRAPHATOM_REPO_DIR` : c'est la cible qu'on sérialise, pas le
 rail, et deux rails sur deux clones ne se gênent pas. La base où il vit est
 `GRAPHATOM_VERROU_DSN`, à défaut `GRAPHATOM_AGENT_DSN` — l'instance que tous
 les items partagent ; la `GRAPHATOM_DSN` du bloc, elle, est la base jetable
-de l'item, propre à lui, donc sans effet sur le voisin.
+de l'item, propre à lui, donc sans effet sur le voisin. L'interprète qui
+tient la session est celui du clone de référence,
+`$GRAPHATOM_REPO_DIR/.venv/bin/python3`, avant celui du `PATH` : le worker
+est lancé par chemin absolu, son `PATH` n'a donc pas le venv, et le
+`python3` du système n'a pas psycopg — le prendre ferait taire le verrou
+sans rien dire.
 
 **Exclusion mutuelle *et* attente bornée**, les deux, parce qu'elles
 répondent à deux questions différentes : la première dit qui passe, la
