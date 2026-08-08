@@ -23,10 +23,9 @@ course réelle, et de vrais agents factices pour les candidats :
      ni la révision, ni le passage : il est classé, jamais routé
   7. tous en échec : l'issue majoritaire est routée comme une issue de nœud
      ordinaire ; à égalité, celle du run terminé en premier
-  8. `keep_n` : elle attend tout le monde — rien n'est décidé tant qu'un
-     candidat court — puis laisse passer exactement n finalistes, les n
-     premiers à avoir réussi ; les réussites de trop sont recalées, et zéro
-     réussite se route comme sous `first_pass`
+  8. `keep_n` : elle tranche dès que n candidats ont réussi, laisse passer
+     ces finalistes et révoque les candidats encore en vol ; moins de n
+     réussites et zéro réussite gardent le traitement de fin de lot
 
 Le test ne détruit rien : il crée son sujet, ses items, et laisse la base
 en place — il peut tourner à côté d'un rail vivant.
@@ -392,45 +391,88 @@ def tous_en_echec(conn) -> None:
 
 
 def keep_n(conn) -> None:
-    """9. `keep_n` attend tout le monde, puis laisse passer n finalistes."""
-    item_id = nouvel_item(conn, bundle_stub(4, keep=2))
+    """9. `keep_n` tranche à n réussites et révoque les candidats en vol."""
+    item_id = nouvel_item(conn, bundle_stub(5, keep=2))
     runs = reserve_tout(conn, item_id)
-    assert len(runs) == 4, runs
+    assert len(runs) == 5, runs
     depart = etat(conn, item_id)
 
-    # trois réussissent, un rate — et personne ne tranche avant le dernier
-    issues = ("ok", "crashed", "ok", "ok")
-    statuts = []
-    for run, issue in zip(runs, issues):
-        statuts.append(kernel.apply(conn, run["id"], {"outcome": issue}))
-        item = etat(conn, item_id)
-        if run is not runs[-1]:
-            assert item["version"] == depart["version"], (
-                f"décision prise alors que {len(runs) - 1 - runs.index(run)} "
-                "candidat(s) courent encore")
-            assert item["state"] == "travail", item["state"]
-    print(f"9. item {item_id} : les 3 premiers rendus n'ont rien décidé — "
-          "keep_n attend la fin de tous les candidats ✓")
+    # Un succès ne suffit pas. Le deuxième tranche sans attendre les trois
+    # candidats restants. `_menage` doit recevoir leurs runs pour tuer leurs
+    # groupes de processus hors transaction.
+    revoques = []
+    ancien_revoke = kernel.revoke_orphan
+    kernel.revoke_orphan = lambda item, run: revoques.append((item, run))
+    try:
+        assert kernel.apply(conn, runs[0]["id"], {"outcome": "ok"}) == "applied"
+        attente = etat(conn, item_id)
+        assert attente["version"] == depart["version"], attente
+        assert attente["state"] == "travail", attente["state"]
 
-    # la course finie : deux finalistes, et deux seulement
-    finaux = {r["candidate"]: r for r in runs_de(conn, item_id)}
-    finalistes = sorted(k for k, r in finaux.items()
-                        if r["status"] == "applied" and r["outcome"] == "ok")
-    assert finalistes == [0, 2], f"les deux premières réussites passent : {finalistes}"
-    assert finaux[1]["status"] == "applied" and finaux[1]["outcome"] == "crashed", \
-        f"l'échec garde son issue, il n'est pas finaliste : {finaux[1]}"
-    assert finaux[3]["status"] == "superseded", \
-        f"la troisième réussite est recalée : {finaux[3]['status']}"
-    assert statuts == ["applied", "applied", "applied", "superseded"], statuts
+        assert kernel.apply(conn, runs[1]["id"], {"outcome": "ok"}) == "applied"
+    finally:
+        kernel.revoke_orphan = ancien_revoke
 
     item = etat(conn, item_id)
     assert item["version"] == depart["version"] + 1, "une seule issue de nœud"
     assert item["state"] == "fini", item["state"]
+    assert item["terminal_at"] is not None, item
+
+    finaux = {r["candidate"]: r for r in runs_de(conn, item_id)}
+    finalistes = sorted(k for k, r in finaux.items()
+                        if r["status"] == "applied" and r["outcome"] == "ok")
+    assert finalistes == [0, 1], f"les deux premières réussites passent : {finalistes}"
+    perdants = [finaux[k] for k in (2, 3, 4)]
+    assert all(r["status"] == "superseded" for r in perdants), perdants
+    assert all(r["finished_at"] is not None for r in perdants), perdants
+    assert sorted(revoques) == sorted((item_id, r["id"]) for r in perdants), revoques
+
     routages = [e for e in evenements(conn, item_id) if e["kind"] == "result"]
     assert len(routages) == 1 and routages[0]["outcome"] == "ok", routages
     assert routages[0]["run_id"] == finaux[0]["id"], routages[0]
-    print(f"   deux finalistes c0 et c2 (les deux premiers à réussir), c3 recalé, "
-          f"c1 en échec ; item routé travail → fini, une seule fois ✓")
+    print(f"9. item {item_id} : deux réussites sur cinq suffisent ; c2, c3 et c4 "
+          "révoqués et rendus au ménage ; item routé travail → fini ✓")
+
+    # Un lot ancien peut déjà porter plus de n réussites au moment où cette
+    # règle est déployée. Seules les n premières restent finalistes ; une
+    # réussite finie n'est pas un processus à tuer, contrairement aux runs
+    # encore en vol.
+    item_id = nouvel_item(conn, bundle_stub(5, keep=2))
+    runs = reserve_tout(conn, item_id)
+    conn.execute(
+        "UPDATE node_run SET status = 'applied', outcome = 'ok', finished_at = now() "
+        "WHERE id = ANY(%s)", ([r["id"] for r in runs[:3]],),
+    )
+    ancien = etat(conn, item_id)
+    with conn.transaction():
+        verdict = kernel._keep_n(conn, ancien, runs[2], 2)
+    finaliste, issue, a_tuer = verdict
+    classes = {r["candidate"]: r for r in runs_de(conn, item_id)}
+    assert finaliste["id"] == runs[0]["id"] and issue == "ok", verdict
+    assert [classes[k]["status"] for k in range(5)] == [
+        "applied", "applied", "superseded", "superseded", "superseded",
+    ], classes
+    assert sorted(a_tuer) == sorted(r["id"] for r in runs[3:]), a_tuer
+    print(f"   item {item_id} : une réussite tardive de trop est classée, mais seuls "
+          "les deux runs encore en vol sont rendus pour terminaison ✓")
+
+    # Moins de n réussites possibles : la course attend sa fin, puis laisse
+    # passer les réussites disponibles comme avant la décision anticipée.
+    item_id = nouvel_item(conn, bundle_stub(3, keep=2))
+    runs = reserve_tout(conn, item_id)
+    depart = etat(conn, item_id)
+    for index, (run, issue) in enumerate(zip(runs, ("ok", "crashed", "stalled"))):
+        kernel.apply(conn, run["id"], {"outcome": issue})
+        item = etat(conn, item_id)
+        if index < 2:
+            assert item["version"] == depart["version"], item
+            assert item["state"] == "travail", item["state"]
+    assert item["state"] == "fini", item["state"]
+    assert item["version"] == depart["version"] + 1, item["version"]
+    assert [r["candidate"] for r in runs_de(conn, item_id)
+            if r["status"] == "applied" and r["outcome"] == "ok"] == [0]
+    print(f"   item {item_id} : une réussite sur deux requises attend la fin du lot, "
+          "puis passe comme avant ✓")
 
     # zéro réussite : rien de neuf, l'issue majoritaire se route comme avant
     item_id = nouvel_item(conn, bundle_stub(2, keep=2))
@@ -460,7 +502,7 @@ def main() -> None:
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
-    print("\nfan-out : OK — K candidats courent, un seul survit, "
+    print("\nfan-out : OK — K candidats courent, la réduction garde ses finalistes, "
           "et l'item n'a jamais eu qu'une issue")
 
 

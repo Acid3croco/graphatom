@@ -823,6 +823,10 @@ c'est la course qui le dit. Son `OPENCODE_DIR` est l'atelier du candidat —
 rien à configurer, aucun identifiant, le modèle visé est sans
 authentification.
 
+Son budget total reste de 1 500 s, mais son budget de silence est de 300 s.
+Un appel qui montre du progrès continue ; un fournisseur qui ne rend aucun
+octet pendant cinq minutes libère sa place au lieu de retenir la file.
+
 Un candidat qui perdrait en silence fausserait justement cette mesure.
 L'adaptateur sort donc en **code 3** quand `opencode` est introuvable, en
 nommant la commande manquante ; la commande du candidat s'arrête là — les
@@ -1251,7 +1255,7 @@ silence.
 | réduction | ce qu'elle fait | ce qu'elle coûte |
 | --- | --- | --- |
 | `first_pass` | le premier candidat dont l'issue passe gagne, les autres sont tués sur place | rien : personne n'attend |
-| `keep_n` | **attend tout le monde**, puis laisse passer les `n` premières réussites — les *finalistes* — au nœud d'aval | l'attente du plus lent, et un juge derrière |
+| `keep_n` | tranche dès les `n` premières réussites et révoque les candidats encore en vol ; si le lot finit avec moins de `n` réussites, elles passent toutes | un juge derrière |
 
 **La promotion du gagnant est dans la transaction de la réduction.** Élire,
 promouvoir, router : trois gestes, un seul verrou — celui de l'item, que

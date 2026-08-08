@@ -1,4 +1,4 @@
-portes du candidat — atelier /home/jack/projects/graphatom
+portes du candidat — atelier /home/jack/projects/graphatom/.worktrees/fix-keep-n-early
 $ uv run python -c import graphatom.blocks, graphatom.channel, graphatom.cli, graphatom.db, graphatom.github_sync, graphatom.graph, graphatom.heartbeat, graphatom.kernel, graphatom.scheduler, graphatom.web, graphatom.worktree
 porte « import » passée en 0 s
 $ uv run python tests/validate_test.py
@@ -81,7 +81,7 @@ $ uv run python tests/api_test.py
 9. /api/graph/<rév> : le bundle entier, l'inconnue rend None ✓
 
 api : OK — les pages se lisent en JSON, sans dépendance ni écriture
-porte « tests/api_test.py » passée en 0 s
+porte « tests/api_test.py » passée en 1 s
 $ uv run python tests/checklist_test.py
 1. test_frontend → validate → review / implement, cycle borné ✓
 #60 ← q5
@@ -94,7 +94,7 @@ $ uv run python tests/checklist_test.py
 4. citation bornée à 40 lignes, le reste compté ✓
 
 validate : OK — les critères sont cochés, puis lus par l'humain
-porte « tests/checklist_test.py » passée en 1 s
+porte « tests/checklist_test.py » passée en 0 s
 $ uv run python tests/criteria_test.py
 1. scope → clarify : `go` / `reformuler`, retour borné par `escalade` ✓
 2. le prompt de scope : l'exception, le corps intouché, la spec ✓
@@ -179,12 +179,12 @@ $ uv run python tests/live_test.py
 4. onglet caché et focus respectés, conteneur remplacé, aucun canal ✓
 
 rafraîchissement : OK — la page se suit sans se recharger
-porte « tests/live_test.py » passée en 0 s
+porte « tests/live_test.py » passée en 1 s
 $ uv run python tests/failure_trace_test.py
 1. agent Codex : échec rendu relu dans failure.json, quatre champs bornés ✓
 2. shell sans issue : crashed au même chemin, qui ne porte que ce dernier échec ✓
 3. règle explicite vérifiée ; item neuf et réussite sans trace inventée ✓
-porte « tests/failure_trace_test.py » passée en 1 s
+porte « tests/failure_trace_test.py » passée en 0 s
 $ uv run python tests/codex_routing_test.py
 1. scope et judge Sol high ; course Luna medium + Sol high + DeepSeek gratuit ; portes légères sur Luna ✓
 2. agent-codex transmet gpt-5.6-luna et effort medium à la CLI ✓
@@ -194,20 +194,20 @@ routage codex : OK — modèle et effort explicites, release script-first
 porte « tests/codex_routing_test.py » passée en 0 s
 $ uv run python tests/orphans_test.py
 1. agent fauché au timeout après 2.0s, autopsie -15 ✓
-2. groupe 1567866 entièrement révoqué ✓
+2. groupe 1818450 entièrement révoqué ✓
 3. traces agent-travail-1-1.log et prompt-travail-1-1.md écrites ✓
 4. agent nominal appliqué, usage fusionné : {'outcome': 'ok', 'summary': 'fait', 'usage': {'input_tokens': 12, 'output_tokens': 3456}} ✓
 4 bis. agent sans usage.json : résultat inchangé ✓
 5. autopsie du crash : sortie 42, queue « Execution error » ✓
-6. worker tué, agent orphelin toujours vivant : groupe 1568459 ✓
-orphelin révoqué : groupe 1568459 (ps -o pgid= -p $$ > pgid.txt; sleep 300 & sleep 300)
+6. worker tué, agent orphelin toujours vivant : groupe 1819445 ✓
+orphelin révoqué : groupe 1819445 (ps -o pgid= -p $$ > pgid.txt; sleep 300 & sleep 300)
 7. orphelin révoqué par le faucheur, trace effacée ✓
 8. trace d'une autre tentative : ni suivie ni effacée ✓
 9. identité périmée (naissance, boot) : le faucheur ne tue personne ✓
 10. trace illisible ou amputée : le faucheur passe son chemin ✓
 
 orphelins : OK — ni le bail ni la mort du worker ne laissent d'agent
-porte « tests/orphans_test.py » passée en 2 s
+porte « tests/orphans_test.py » passée en 3 s
 $ uv run python tests/timeout_marge_test.py
 1. 6 paires de l'issue — [(120, 60), (180, 120), (600, 540), (900, 840), (1020, 960), (1800, 1740)] — la dérivation les calcule toutes ✓
 2. un nœud sans `lease_s` garde le défaut de 570 s ✓
@@ -217,7 +217,7 @@ $ uv run python tests/timeout_marge_test.py
 5. gauntlet.json : 6 nœuds à bail, aucun `timeout_s`, couperet dérivé à l'identique ✓
 
 timeout_marge : OK — le couperet descend du bail, une seule marge, les douze valeurs de l'issue inchangées
-porte « tests/timeout_marge_test.py » passée en 1 s
+porte « tests/timeout_marge_test.py » passée en 0 s
 $ uv run python tests/timeout_test.py
 1. 1 appel sortant, borné par TIMEOUT_S = 30.0 s ✓
 2. timeout à 2.0 s : appel rendu en 2.0 s — timed out ✓
