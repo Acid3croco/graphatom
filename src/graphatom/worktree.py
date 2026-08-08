@@ -128,7 +128,7 @@ def open_run(item_id: int, candidate: int) -> Path | None:
         args = ["worktree", "add", str(path), mine]
     else:
         args = ["worktree", "add", str(path), "-b", mine, branch]
-    _git(root, "worktree", "prune")
+    run_git(root, "worktree", "prune")
     if _retry(root, *args) != 0:
         return None
     return path if path.is_dir() else None
@@ -176,7 +176,7 @@ def promote(item_id: int, candidate: int) -> str | None:
     if not _mine(root, path) or registered.get(path) != mine:
         return (f"l'atelier de c{candidate} n'est plus celui du dépôt : {path} "
                 f"n'y est pas enregistré sur {mine}")
-    code, out = _git(item, "merge", "--ff-only", mine)
+    code, out = run_git(item, "merge", "--ff-only", mine)
     if code != 0:
         return f"merge --ff-only de {mine} sur {branch} refusé : {out}"
     return None
@@ -214,7 +214,7 @@ def candidate_work(item_id: int, candidate: int, limit: int) -> str | None:
     parts = []
     for titre, args in (("commits", ["log", "--oneline", f"{branch}..{mine}"]),
                         ("diff", ["diff", f"{branch}...{mine}"])):
-        code, out = _git(root, *args)
+        code, out = run_git(root, *args)
         if code != 0:
             return None
         parts.append(f"{titre} :\n\n```\n{out or '(rien)'}\n```")
@@ -249,14 +249,14 @@ def discard(item_id: int) -> list[str]:
             print(f"atelier étranger laissé en place : {path} "
                   f"(branche {registered.get(path) or 'aucune'} ≠ {mine})", flush=True)
             continue
-        if _git(root, "worktree", "remove", "--force", str(path))[0] == 0:
+        if run_git(root, "worktree", "remove", "--force", str(path))[0] == 0:
             retirees.append(mine)
 
     # les branches qu'aucun worktree ne tient plus : celles qu'on vient de
     # libérer, et celles qu'un atelier disparu autrement aurait laissées
     tenues = set(_registered(root).values())
     for mine in _branches(root, branch):
-        if mine not in tenues and _git(root, "branch", "-D", mine)[0] == 0:
+        if mine not in tenues and run_git(root, "branch", "-D", mine)[0] == 0:
             retirees.append(mine)
     return sorted(set(retirees))
 
@@ -278,13 +278,13 @@ def _candidates(item: Path, registered: dict[Path, str]) -> list[tuple[int, Path
 def _branches(root: Path, branch: str) -> list[str]:
     """Les branches locales de candidats de cet item, dans l'ordre."""
     motif = re.compile(re.escape(branch + CANDIDATE_SUFFIX) + r"\d+$")
-    out = _git(root, "branch", "--list", "--format=%(refname:short)",
+    out = run_git(root, "branch", "--list", "--format=%(refname:short)",
                f"{branch}{CANDIDATE_SUFFIX}*")[1]
     return [line for line in out.splitlines() if motif.fullmatch(line)]
 
 
 def _known_branch(root: Path, branch: str) -> bool:
-    return _git(root, "show-ref", "--quiet", "--verify", f"refs/heads/{branch}")[0] == 0
+    return run_git(root, "show-ref", "--quiet", "--verify", f"refs/heads/{branch}")[0] == 0
 
 
 def _mine(root: Path, path: Path) -> bool:
@@ -308,7 +308,7 @@ def _registered(root: Path) -> dict[Path, str]:
     """
     table: dict[Path, str] = {}
     path = None
-    for line in _git(root, "worktree", "list", "--porcelain")[1].splitlines():
+    for line in run_git(root, "worktree", "list", "--porcelain")[1].splitlines():
         if line.startswith("worktree "):
             path = Path(line[len("worktree "):])
         elif line.startswith("branch refs/heads/") and path is not None:
@@ -316,11 +316,19 @@ def _registered(root: Path) -> dict[Path, str]:
     return table
 
 
-def _git(cwd: Path, *args: str) -> tuple[int, str]:
-    """Un git, sa sortie mêlée. Un git qui ne part pas est un git qui rate."""
+def run_git(cwd: Path, *args: str, timeout: float = GIT_TIMEOUT_S) -> tuple[int, str]:
+    """Un git, cwd et args donnés : son code et sa sortie mêlée.
+
+    Le délai par défaut est celui du dépôt (`GIT_TIMEOUT_S` : les verrous
+    d'un `worktree add` concurrent peuvent traîner) ; `blocks` passe le
+    sien, plus court, pour ne pas retenir un bloc entier sur un git qui
+    s'éternise. Un git qui ne part pas n'est pas la faute de l'appelant —
+    le code 1 le dit, la plainte part telle quelle plutôt que de faire
+    tomber qui appelle.
+    """
     try:
         done = subprocess.run(["git", "-C", str(cwd), *args],
-                              capture_output=True, text=True, timeout=GIT_TIMEOUT_S)
+                              capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.SubprocessError) as exc:
         return 1, f"[git injouable : {exc}]"
     return done.returncode, (done.stdout + done.stderr).strip()
@@ -334,7 +342,7 @@ def _retry(root: Path, *args: str) -> int:
     L'échec qui reste est dit à voix haute, il ne passe pas en silence.
     """
     for essai in range(LOCK_RETRIES):
-        code, out = _git(root, *args)
+        code, out = run_git(root, *args)
         if code == 0:
             return 0
         if essai + 1 < LOCK_RETRIES:
