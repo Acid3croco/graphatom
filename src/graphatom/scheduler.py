@@ -19,6 +19,9 @@ lancés ensemble et réduits à une seule issue avant que l'item n'avance.
 Tuer ce processus n'importe quand est un cas nominal, pas une panne :
 c'est le contrat que le crash-test vérifie. Perdre la base l'est aussi :
 la boucle se reconnecte avec un backoff borné et reprend où elle en est.
+Une migration jouée sous ses plans cachés compte comme une perte de
+connexion — le rail se déploie lui-même, donc il migre son propre schéma
+sous son propre worker : voir `run_forever`.
 """
 
 import threading
@@ -42,16 +45,31 @@ def tick(conn: psycopg.Connection) -> int:
 
 
 def run_forever(poll_s: float = 0.5) -> None:
-    """Ticks à l'infini — une coupure de la base est un incident nominal.
+    """Ticks à l'infini — perdre sa connexion est un incident nominal.
 
-    Postgres qui disparaît (redémarrage, docker, réseau) ne tue pas le
-    worker : on ferme la connexion morte, on attend 1 s, 2 s, 4 s… plafonné
-    à RECONNECT_MAX_S, on en rouvre une et on reprend les ticks. Rien n'est
-    perdu : tout l'état est dans la base, et le faucheur rattrape au retour
-    les runs restés orphelins.
+    Deux incidents la coûtent, et le remède est le même : fermer la
+    connexion, attendre 1 s, 2 s, 4 s… plafonné à RECONNECT_MAX_S, en rouvrir
+    une et reprendre les ticks. Rien n'est perdu : tout l'état est dans la
+    base, et le faucheur rattrape au retour les runs restés orphelins.
 
-    Seule l'OperationalError est rattrapée. Toute autre exception fait
-    crasher le processus, bruyamment : elle n'était pas attendue.
+      - Postgres qui disparaît — redémarrage, docker, réseau : une
+        `OperationalError`, et la connexion n'existe plus.
+      - Le rail qui se déploie lui-même : la migration change la forme d'une
+        table sous une connexion dont psycopg a fait préparer les requêtes,
+        et Postgres refuse un plan caché dont le résultat a changé de forme —
+        `FeatureNotSupported`, SQLSTATE `0A000`. La connexion, elle, est
+        vivante ; ce sont ses plans qui sont périmés, et une connexion neuve
+        en prépare des neufs.
+
+    L'autre voie pour le second cas — couper la préparation des requêtes
+    (`prepare_threshold=None` à la connexion) — supprimerait la classe
+    d'erreurs entièrement. On ne la prend pas : elle paie un aller-retour de
+    plus par requête à chaque tick, pour toujours, contre une migration de
+    loin en loin, et elle rendrait la transition muette. Rattraper laisse une
+    ligne dans le journal du worker, en face de celle du déploiement.
+
+    Ces deux-là seulement sont rattrapées. Toute autre exception fait crasher
+    le processus, bruyamment : elle n'était pas attendue.
     """
     from .db import connect
 
@@ -64,11 +82,18 @@ def run_forever(poll_s: float = 0.5) -> None:
                     wait_s = 1.0  # un tick passé : la base répond, on repart de 1 s
                     if did == 0:
                         time.sleep(poll_s)
-        except psycopg.OperationalError as exc:
-            print(f"base injoignable : {exc} — reconnexion dans {wait_s:.0f}s",
+        except (psycopg.OperationalError, psycopg.errors.FeatureNotSupported) as exc:
+            print(f"{_cause(exc)} : {exc} — reconnexion dans {wait_s:.0f}s",
                   flush=True)
             time.sleep(wait_s)
             wait_s = min(wait_s * 2, RECONNECT_MAX_S)
+
+
+def _cause(exc: Exception) -> str:
+    """Ce que la boucle vient de perdre — la seule chose qui change des deux."""
+    if isinstance(exc, psycopg.OperationalError):
+        return "base injoignable"
+    return "plan caché invalidé par une migration du schéma"
 
 
 def _settle_waits(conn: psycopg.Connection) -> int:

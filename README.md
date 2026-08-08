@@ -59,6 +59,9 @@ uv run python tests/orphans_test.py                  # un bail expiré tue tout 
                                                      # worker mort, sans base
 uv run python tests/reconnect_test.py                # couper la base sous le worker :
                                                      # il se reconnecte et reprend
+uv run python tests/migration_test.py                # migrer le schéma sous le
+                                                     # worker : ses plans cachés
+                                                     # périment, il encaisse et le dit
 uv run python tests/links_test.py                    # les liens du frontend vers
                                                      # l'issue et la PR, et le titre
                                                      # dans la table, sans base
@@ -94,6 +97,10 @@ uv run python tests/answer_test.py                   # `/answer` : la première 
 uv run python tests/silence_test.py                  # le chien de garde : un agent
                                                      # muet est coupé tôt, et le
                                                      # progrès constaté fait l'issue
+uv run python tests/opencode_test.py                 # l'adaptateur opencode : un
+                                                     # nœud réel tourne sous un
+                                                     # modèle gratuit (demande
+                                                     # `opencode` et le réseau)
 ```
 
 Les tests ne touchent jamais au `data/` du repo : chacun travaille dans un
@@ -363,6 +370,34 @@ curl -s http://127.0.0.1:8851/items | grep -c _next   # le front rendu
 curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8850/items  # le secours
 ```
 
+**Une porte attend avant de conclure.** `docker compose up` rend la main
+dès que les conteneurs sont créés, pas quand ils écoutent : un front Next
+reconstruit ouvre son port plusieurs secondes plus tard. Mesuré à cet
+instant-là, le déploiement le plus sain rend `000` — connexion refusée —,
+l'item escalade, et un humain répond `retry` pour constater que tout allait
+bien. Une porte qui échoue à tort finit par être lue comme du bruit : c'est
+exactement ce qu'une porte ne doit jamais devenir. Les portes sondent donc
+toutes les 2 s jusqu'à une réponse, et deux cas restent nets :
+
+- **rien qui répond est une attente** — le `000` de curl, ou un service pas
+  encore en marche : c'est l'état normal juste après un redémarrage ;
+- **une réponse fausse est un échec immédiat** — un `500`, un corps sans
+  `_next`, un `docker compose ps` en erreur : attendre ne les améliorerait
+  pas, cela ne ferait que retarder le diagnostic. La porte 4 n'attend
+  jamais non plus : un `Traceback` déjà écrit ne s'efface pas.
+
+**Le budget d'attente est commun aux quatre portes : 60 s au total**, et
+non 60 s chacune (`GRAPHATOM_PORTES_DELAI_S` le déplace). C'est ce qui rend
+le pire cas du nœud calculable et indépendant du nombre de portes : au
+maximum **60 s d'attente**, plus une sonde en cours (5 s de `--max-time`)
+et les deux appels à `docker compose` — moins de 80 s en tout. Le nœud
+garde donc son `timeout_s` de 120 s et son bail de 180 s inchangés, là où
+60 s par porte auraient demandé de tripler les deux. Le partage n'enlève
+rien au cas qui a motivé la mesure : quand seul le front traîne, les autres
+portes concluent en une sonde et lui laissent le budget entier.
+`verify_deploy.md` porte, porte par porte, le temps attendu avant de
+conclure — c'est ce qui permettra de savoir si 60 s est bien réglé.
+
 ## De vrais agents dans les blocs (milestone 3b)
 
 Un nœud ACT / CHECK / JUDGE peut déclarer `config.agent` — le bloc écrit
@@ -382,6 +417,51 @@ codex, pi…) fait l'affaire ; le kernel n'en connaît aucun. Pas
 d'`outcome.json` valide → `crashed`, retenté puis escaladé — comme
 n'importe quel bloc.
 
+### Le contrat d'un bloc agent, noir sur blanc
+
+C'est lui qui rend le rail agnostique du fournisseur, et tout adaptateur
+de CLI s'y adosse. Il tient en trois fichiers, tous dans le workspace de
+l'item (`data/item-<N>/`), qui est aussi le répertoire courant du `cmd`.
+
+**Ce que la commande reçoit.**
+
+- `prompt.md`, écrit par le bloc dans le workspace avant chaque tentative :
+  le `prompt` du nœud, puis le contrat rappelé en clair — le workspace, le
+  chemin d'`outcome.json`, les issues permises par les `edges` du nœud —,
+  puis l'état laissé par la tentative précédente s'il y en a une.
+- son répertoire courant : le workspace, toujours. Un adaptateur n'a donc
+  rien à résoudre pour trouver `prompt.md` ni où déposer sa sortie.
+- l'environnement du worker, où le bloc pose `GRAPHATOM_WORKSPACE` (le
+  workspace), `GRAPHATOM_SUBJECT_KEY` (la clé du sujet, d'où le cleanup
+  reconnaît son worktree) et, quand l'instance jetable est configurée,
+  `GRAPHATOM_DSN` (la base de l'item, jamais celle du rail).
+  `GRAPHATOM_REPO_DIR` — le clone de référence — vient du worker et passe
+  tel quel.
+
+**Ce que la commande doit écrire.** `outcome.json`, dans le workspace,
+un objet JSON à deux clés :
+
+```json
+{"outcome": "done", "summary": "ce que la tentative a fait, en une phrase"}
+```
+
+`outcome` est obligatoire, et sa valeur est l'une des issues déclarées
+dans les `edges` du nœud — c'est elle qui route. `summary` est libre :
+absente, elle vaut la chaîne vide, et le run n'en souffre pas. Le fichier
+est transitoire, purgé avant chaque tentative ; son contenu vit ensuite
+dans le résultat du run en base.
+
+**Ce qui est facultatif.** `usage.json`, dans le workspace : s'il est là et
+lisible, le bloc le fusionne dans le résultat du run sous la clé `usage`.
+Absent, illisible ou vide : rien, et l'agent reste un citoyen de première
+classe.
+
+**Ce qui ne compte pas.** Le code de sortie du `cmd` ne décide de rien :
+seul `outcome.json` fait l'issue. Une commande qui sort 0 sans écrire le
+fichier est `crashed` ; une commande qui sort 3 après l'avoir écrit est
+routée par ce qu'il dit. Écrire le fichier même en échec est donc la
+bonne manière — c'est ce que font tous les nœuds shell du graph.
+
 **Une extension optionnelle : `usage.json`.** Si la tentative en laisse
 un dans le workspace, le bloc le fusionne dans le résultat du run, sous
 la clé `usage` — les types de tokens tels que l'agent les rapporte
@@ -398,6 +478,65 @@ jq -r '.result // .' agent.json || cat agent.json
 jq -e 'select(.usage|objects) | .usage + {total_cost_usd}' agent.json > usage.json 2>/dev/null || rm -f usage.json
 rm -f agent.json
 exit $RC
+```
+
+### Un adaptateur pour un candidat gratuit : `scripts/agent-opencode.sh`
+
+Le contrat ci-dessus se suffit à lui-même : un adaptateur de CLI n'est
+qu'un pont entre deux formes. `scripts/agent-opencode.sh` en est la
+démonstration — il lance `opencode run` sur le `prompt.md` du workspace et
+traduit ce qu'opencode rend en `outcome.json` conforme :
+
+```sh
+"cmd": "$GRAPHATOM_REPO_DIR/scripts/agent-opencode.sh opencode/deepseek-v4-flash-free"
+```
+
+Le chemin est absolu parce que le `cmd` tourne depuis le workspace de
+l'item, jamais depuis le dépôt : le clone de référence se nomme par
+`GRAPHATOM_REPO_DIR`, comme le font déjà les nœuds shell du graph.
+
+Le modèle se donne en argument, ou par `OPENCODE_MODEL` ; à défaut c'est
+`opencode/deepseek-v4-flash-free`, le seul dont le fonctionnement est
+établi, écriture de fichier comprise. Les variantes gratuites d'opencode
+ne demandent **aucun identifiant** — rien à configurer, rien à mettre dans
+le dépôt. `OPENCODE_TIMEOUT_S` borne l'attente (300 s par défaut),
+`OPENCODE_BIN` désigne le binaire quand le PATH ne suffit pas, et
+`OPENCODE_DIR` le répertoire de travail du modèle.
+
+Le script est déterministe, et ne juge jamais : si le modèle a écrit
+`outcome.json`, il n'y touche pas ; si le modèle a dicté son issue dans
+son texte au lieu de l'écrire, il la recopie telle quelle ; s'il n'a rien
+dit, le script n'invente rien et la tentative est `crashed`, comme
+d'habitude. Il écrit `usage.json` à partir des `step_finish` du flux
+d'opencode, et n'écrit rien quand il n'y a pas de quoi le remplir.
+
+Ses échecs sont nets et nommés, jamais silencieux — chacun son code de
+sortie et son message sur `stderr` :
+
+| code | ce qui a lâché |
+| --- | --- |
+| 2 | pas de `prompt.md` dans le répertoire courant |
+| 3 | `opencode` introuvable — la commande manquante est nommée |
+| 4 | borne d'attente dépassée — le modèle fautif est nommé |
+| 5 | opencode a échoué, et aucune issue n'a été rendue |
+| 6 | opencode a fini sans rendre la moindre issue |
+
+Le code 4 n'est pas théorique : `opencode/north-mini-code-free` ne rend
+rien du tout. Un candidat muet ne doit jamais retenir quoi que ce soit —
+le chien de garde du bloc le couperait de toute façon, mais un adaptateur
+qui se tait est un adaptateur cassé. La borne du script est donc plus
+courte que le `timeout_s` du nœud : c'est l'adaptateur qui doit parler du
+modèle, pas le couperet.
+
+**La mesure, pas l'opinion.** `uv run python tests/opencode_test.py` fait
+tourner un nœud réel du graph sous `opencode/deepseek-v4-flash-free` et
+relit son issue en base : le modèle écrit son `outcome.json`, le noyau
+route, et l'`usage.json` de l'adaptateur rejoint le résultat du run. Le
+test se saute en le disant quand `opencode` n'est pas là. Le modèle muet,
+lui, coûte sa borne d'attente entière et se vérifie donc à la main :
+
+```sh
+OPENCODE_TIMEOUT_S=45 scripts/agent-opencode.sh opencode/north-mini-code-free
 ```
 
 **Les traces sont auditables, jamais écrasées.** Le journal, le prompt et

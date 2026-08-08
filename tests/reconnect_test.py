@@ -170,7 +170,12 @@ class Assez(Exception):
 
 
 def boucle_sans_base() -> None:
-    """Base absente : le backoff plafonne, et seule l'OperationalError est rattrapée."""
+    """Base absente : le backoff plafonne, et rien d'inattendu n'est rattrapé.
+
+    La boucle ne rattrape que ses deux incidents de connexion —
+    `OperationalError` et le plan caché périmé d'une migration. Tout le reste
+    la traverse, et c'est ce que vérifie 6.2.
+    """
     attentes, vrai_connect, vrai_sleep = [], db.connect, time.sleep
 
     def refusee() -> psycopg.Connection:

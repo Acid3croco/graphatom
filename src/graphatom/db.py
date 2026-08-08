@@ -72,11 +72,37 @@ def drop_agent_db() -> str:
     return name
 
 
-def init_db(drop: bool = False) -> None:
+def init_db(drop: bool = False) -> list[str]:
+    """Rejoue `schema.sql`. Rend les changements de forme des tables, s'il y en a.
+
+    Le déploiement passe ici à chaque fois, et le passage est idempotent : la
+    plupart du temps il ne change rien. Quand il change quelque chose, il
+    faut le dire — une migration invisible périme les plans cachés des
+    connexions ouvertes, et un worker qui se reconnecte sans qu'on sache
+    pourquoi est deux fois plus dur à diagnostiquer (voir
+    `scheduler.run_forever`).
+
+    Ce qu'on relève est la forme des tables, colonne par colonne : c'est
+    exactement ce qu'un plan caché voit changer. Une base neuve rend donc
+    toutes ses colonnes — elle vient bien d'être créée.
+    """
     with connect() as conn:
         if drop:
             conn.execute(
                 "DROP TABLE IF EXISTS question, effect, event, node_run, "
                 "work_item, subject, graph_revision, heartbeat CASCADE"
             )
+        before = _shape(conn)
         conn.execute(_schema().read_text())
+        after = _shape(conn)
+    return ([f"+ {t}.{c} ({d})" for t, c, d in sorted(after - before)]
+            + [f"- {t}.{c} ({d})" for t, c, d in sorted(before - after)])
+
+
+def _shape(conn: psycopg.Connection) -> set[tuple[str, str, str]]:
+    """La forme des tables du schéma courant : une ligne par colonne."""
+    rows = conn.execute(
+        "SELECT table_name, column_name, data_type FROM information_schema.columns "
+        "WHERE table_schema = current_schema()"
+    ).fetchall()
+    return {(r["table_name"], r["column_name"], r["data_type"]) for r in rows}
