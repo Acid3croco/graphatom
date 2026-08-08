@@ -2,7 +2,7 @@
 
 Les sorties de fournisseur ci-dessous sont des enregistrements minimaux :
 elles gardent la forme du flux de chaque CLI et le message exact que
-l'adaptateur doit reconnaître. Le test tranche quatre propriétés :
+l'adaptateur doit reconnaître. Le test tranche cinq propriétés :
 
   1. le bloc rend `starved`, fournisseur et raison, sans interpréter la CLI
   2. sans fichier valide, il garde `crashed`
