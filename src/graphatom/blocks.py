@@ -92,8 +92,19 @@ PGID_FILE = "agent.pgid"  # la trace qui survit au worker, écrasée à chaque t
 OUTCOME_NAME = "outcome.json"  # transitoire : purgé avant chaque tentative
 PROMPT_NAME = "prompt.md"  # l'interface avec le cmd, archivée après la tentative
 USAGE_NAME = "usage.json"  # idem — ce que l'agent veut bien dire de sa consommation
+FAILURE_NAME = "failure.json"  # emplacement stable du dernier échec de l'item
 TAIL_LINES = 20  # queue du log rendue dans l'autopsie d'une tentative crashée
 TAIL_CHARS = 2000
+REPORT_CHARS = 4000  # queue du compte rendu citée dans la trace d'échec
+# Le noyau a ses propres issues d'échec. Le domaine garde les noms négatifs
+# employés par les graphes. Une issue n'est un échec que si elle est dans l'un
+# de ces deux ensembles : une réussite, même non terminale, ne laisse donc pas
+# de fausse trace.
+DOMAIN_FAILURE_OUTCOMES = {
+    "abandon", "abandonner", "conflict", "expired", "fail", "failed",
+    "none", "raise", "reformuler", "retry", "revise", "stuck",
+    "uncertain", "unclear",
+}
 AGENT_TIMEOUT_S = 570  # budget d'une tentative d'agent, quand le nœud n'en dit rien
 AGENT_SILENCE_S = 180  # silence toléré par le chien de garde, idem
 PROBE_S = 5.0  # granularité du relevé de progrès, resserrée par un silence court
@@ -131,6 +142,16 @@ def attempt_name(run: dict) -> str:
 def attempt_log(workspace: Path, run: dict) -> Path:
     """Le journal d'une tentative, dans le workspace de son item."""
     return workspace / f"agent-{attempt_name(run)}.log"
+
+
+def failure_path(item_id: int) -> Path:
+    """L'emplacement unique de la trace du dernier échec d'un item."""
+    return item_workspace(item_id) / FAILURE_NAME
+
+
+def is_failure_outcome(outcome: str) -> bool:
+    """Une issue d'échec est une issue du noyau ou un nom négatif du domaine."""
+    return outcome in KERNEL_OUTCOMES or outcome in DOMAIN_FAILURE_OUTCOMES
 
 
 class Context:
@@ -618,6 +639,77 @@ def _tail(log: Path) -> str:
     except OSError as exc:  # un log illisible est lui-même une information
         return f"[journal illisible : {exc}]"
     return "\n".join(lines)[-TAIL_CHARS:]
+
+
+def _attempt_marker(workspace: Path, run: dict) -> Path | None:
+    """La trace qui date le début de la tentative, archivée ou encore active."""
+    archived = workspace / f"prompt-{attempt_name(run)}.md"
+    if archived.is_file():
+        return archived
+    active = workspace / PROMPT_NAME
+    return active if active.is_file() else None
+
+
+def _attempt_report(workspace: Path, run: dict) -> dict | None:
+    """Le compte rendu Markdown écrit pendant cette tentative, s'il existe.
+
+    Le nom du rapport n'est pas une convention du noyau : `deploy` écrit
+    `deploy.md`, mais `implement` peut écrire `implementation.md` puis
+    `portes.md`. Le prompt de la tentative sert donc de borne temporelle, et
+    le dernier Markdown touché après lui est le rapport rendu par ce nœud.
+    Les prompts archivés et la trace stable ne sont jamais des candidats.
+    """
+    marker = _attempt_marker(workspace, run)
+    if marker is None:
+        return None
+    try:
+        started = marker.stat().st_mtime_ns
+        reports = [
+            path for path in workspace.glob("*.md")
+            if not path.name.startswith("prompt-")
+            and path.name != PROMPT_NAME
+            and path.stat().st_mtime_ns >= started
+        ]
+    except OSError:
+        return None
+    if not reports:
+        return None
+    report = max(reports, key=lambda path: (path.stat().st_mtime_ns, path.name))
+    try:
+        content = report.read_text(errors="replace")[-REPORT_CHARS:]
+    except OSError as exc:
+        content = f"[compte rendu illisible : {exc}]"
+    return {"name": report.name, "content": content}
+
+
+def write_failure_trace(item_id: int, run: dict, outcome: str) -> Path | None:
+    """Remplace la trace stable quand un run rend une issue d'échec.
+
+    Agent, adaptateur de fournisseur et script shell ont tous le même contrat
+    de bloc. Le rail connaît donc les quatre données sans aide de la commande :
+    le nœud et l'issue du run, le journal de sa tentative et le dernier compte
+    rendu Markdown écrit pendant cette tentative. Journal et rapport sont
+    bornés par `TAIL_LINES`/`TAIL_CHARS` et `REPORT_CHARS`.
+
+    Une réussite ne touche rien. Un item neuf ne reçoit ainsi aucune trace, et
+    une réussite ultérieure conserve bien le dernier échec observé. Chaque
+    nouvel échec remplace le JSON entier au même chemin, sans accumulation.
+    """
+    if not is_failure_outcome(outcome):
+        return None
+    workspace = run_workspace(item_id, run)
+    path = failure_path(item_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    trace = {
+        "node": run["node"],
+        "outcome": outcome,
+        "log_tail": _tail(attempt_log(workspace, run)),
+        "report": _attempt_report(workspace, run),
+    }
+    temporary = path.with_suffix(f"{path.suffix}.tmp")
+    temporary.write_text(json.dumps(trace, ensure_ascii=False, indent=2) + "\n")
+    temporary.replace(path)
+    return path
 
 
 def _kill_group(proc: subprocess.Popen) -> None:
