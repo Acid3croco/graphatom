@@ -11,6 +11,7 @@ import type { ReactNode } from "react";
 import { X } from "lucide-react";
 
 import type { BundleNode } from "@/lib/api";
+import { agentModel } from "@/lib/agent-model";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -57,6 +58,7 @@ export function NodeConfig({
 }) {
   const config = node.config ?? {};
   const agent = config.agent;
+  const model = agentModel(agent?.cmd);
   const edges = Object.entries(node.edges ?? {});
   const rest = Object.entries(config).filter(([key]) => !KNOWN.has(key));
 
@@ -84,6 +86,7 @@ export function NodeConfig({
       <CardContent className="flex flex-col gap-4 text-sm">
         <p className="flex flex-wrap gap-x-4 gap-y-1">
           <Field name="bloc" value={node.block ?? "—"} />
+          {model !== null && <Field name="model" value={model} />}
           {config.lease_s !== undefined && (
             <Field name="lease_s" value={`${config.lease_s} s`} />
           )}
