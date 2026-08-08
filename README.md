@@ -1028,9 +1028,13 @@ fichiers neufs non encore suivis) et décident :
   ni front/ — test frontend non concerné », sans lancer l'agent ;
 - en miroir côté backend : ni `src/`, ni `tests/`, ni `schema.sql` → même
   court-circuit ;
-- le diff **vide** n'est pas un skip, c'est un symptôme — implémentation
-  perdue, worktree absent → `outcome` `fail`, avec le chemin du worktree
-  dans le résumé. L'incident de l'item 10 aurait été vu dès `test_backend`.
+- le diff **vide** n'est pas un skip, c'est un symptôme → `outcome` `fail`,
+  « rien à tester dans cet atelier », avec le chemin du worktree dans le
+  résumé. Le message ne nomme aucune cause : la porte constate, elle ne
+  devine pas. Un atelier lu trop tôt, lui, n'en est plus une — la promotion
+  du gagnant d'une course est dans la transaction de la réduction, donc
+  faite avant que le nœud suivant ne réserve quoi que ce soit. L'incident de
+  l'item 10 aurait été vu dès `test_backend`.
 
 Le résumé dit toujours pourquoi le test n'a pas tourné : le journal et la
 page de l'item le lisent comme n'importe quel autre. Un chemin que la
@@ -1139,6 +1143,18 @@ silence.
 | --- | --- | --- |
 | `first_pass` | le premier candidat dont l'issue passe gagne, les autres sont tués sur place | rien : personne n'attend |
 | `keep_n` | **attend tout le monde**, puis laisse passer les `n` premières réussites — les *finalistes* — au nœud d'aval | l'attente du plus lent, et un juge derrière |
+
+**La promotion du gagnant est dans la transaction de la réduction.** Élire,
+promouvoir, router : trois gestes, un seul verrou — celui de l'item, que
+`claim` prend aussi. Le premier run du nœud suivant ne peut donc pas être
+réservé avant que le travail du gagnant soit sur la branche de l'item.
+L'ordre est garanti, pas probable : c'est la même propriété que « un
+résultat qui arrive après la décision ne la change jamais ». Le premier
+usage réel du fan-out avait perdu trois items sur quatre là-dessus — la
+porte d'aval lisait un atelier deux secondes avant que le gagnant n'y
+arrive. Et une promotion qui échoue — merge non-ff, atelier disparu, git en
+erreur — est un **échec du nœud**, nommé comme tel dans le run : l'item ne
+part pas en avant sur un atelier vide en croyant que tout va bien.
 
 `keep_n` ne choisit pas : c'est un nœud `JUDGE` **arbitre** qui départage,
 déclaré par `finalists_from: <nœud de fan-out>`. Sa borne sur `n` est dure —
