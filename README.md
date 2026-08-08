@@ -59,6 +59,9 @@ uv run python tests/orphans_test.py                  # un bail expiré tue tout 
                                                      # worker mort, sans base
 uv run python tests/reconnect_test.py                # couper la base sous le worker :
                                                      # il se reconnecte et reprend
+uv run python tests/migration_test.py                # migrer le schéma sous le
+                                                     # worker : ses plans cachés
+                                                     # périment, il encaisse et le dit
 uv run python tests/links_test.py                    # les liens du frontend vers
                                                      # l'issue et la PR, et le titre
                                                      # dans la table, sans base
