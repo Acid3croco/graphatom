@@ -22,16 +22,28 @@ qui autorise un nœud sans agent : il écrit toujours son `outcome.json`.
  10. la frontière tient dans le bundle : un nœud mécanique ne lance aucun
      modèle, un nœud à modèle rend son `usage.json`, les trois nœuds de
      retrait sont le même shell, et aucun ne teste `.git` comme un chemin
+ 11. une porte de `verify_deploy` attend un service qui met des secondes à
+     écouter, au lieu de conclure sur le refus de connexion
+ 12. un service qui ne répond jamais la fait échouer, et le rapport comme
+     l'outcome disent combien de temps elle a attendu
+ 13. une réponse fausse — un 500, un corps sans `_next` — la fait échouer
+     tout de suite, sans consommer le budget d'attente
+ 14. ce budget tient dans le `timeout_s` du nœud, donc dans son bail, et le
+     README le justifie
 
 Usage : uv run python tests/shell_test.py
 """
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -110,9 +122,85 @@ def sans_gh(tmp: Path) -> str:
     return f"{binaires}:{os.environ['PATH']}"
 
 
+def faux_docker(tmp: Path, nom: str, services: str, log: str = "sync au repos\n") -> str:
+    """Un PATH où `docker` répond sans docker, pour les portes 1 et 4.
+
+    Le shim ne connaît que les deux sous-commandes que `verify_deploy`
+    lance : `compose ps` rend la liste des services, `compose logs` rend le
+    journal du sync. Tout le reste sort en erreur, comme un vrai docker
+    devant une commande qu'il ne comprend pas.
+    """
+    binaires = tmp / nom
+    binaires.mkdir()
+    (binaires / "services.txt").write_text(services)
+    (binaires / "log.txt").write_text(log)
+    faux = binaires / "docker"
+    faux.write_text(
+        "#!/bin/sh\n"
+        f"ICI={binaires}\n"
+        'for MOT in "$@"; do\n'
+        '  case "$MOT" in\n'
+        '    ps) cat "$ICI/services.txt"; exit 0 ;;\n'
+        '    logs) cat "$ICI/log.txt"; exit 0 ;;\n'
+        '  esac\n'
+        "done\n"
+        'echo "commande inconnue : $*" >&2\n'
+        "exit 1\n"
+    )
+    faux.chmod(0o755)
+    return f"{binaires}:{os.environ['PATH']}"
+
+
+class Serveur(threading.Thread):
+    """Un serveur HTTP jetable qui n'ouvre son écoute qu'après `delai`.
+
+    Le port est réservé dès la construction, mais la file d'écoute n'ouvre
+    qu'au démarrage du thread : d'ici là toute connexion est refusée, et
+    `curl` rend `000`. C'est l'état d'un conteneur qui vient d'être
+    reconstruit — celui que la porte doit attendre au lieu de le condamner.
+    Jamais démarré, le serveur reste un port qui ne répondra pas.
+    """
+
+    def __init__(self, code: int = 200, corps: str = "<html>/_next/ok</html>",
+                 delai: float = 0.0):
+        super().__init__(daemon=True)
+        self.delai = delai
+
+        class Poignee(BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802 - le nom vient de la stdlib
+                page = corps.encode()
+                self.send_response(code)
+                self.send_header("Content-Length", str(len(page)))
+                self.end_headers()
+                self.wfile.write(page)
+
+            def log_message(self, *args):
+                pass  # le journal du serveur n'est pas la preuve cherchée
+
+        self.httpd = HTTPServer(("127.0.0.1", 0), Poignee, bind_and_activate=False)
+        self.httpd.server_bind()
+        self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}"
+
+    def run(self) -> None:
+        time.sleep(self.delai)
+        self.httpd.server_activate()
+        self.httpd.serve_forever(poll_interval=0.1)
+
+    def stop(self) -> None:
+        if self.is_alive():
+            self.httpd.shutdown()
+        self.httpd.server_close()
+
+
 def joue(node: str, repo: Path, workspace: Path, subject: str = SUJET,
          plus: dict | None = None) -> dict:
-    """Le `cmd` d'un nœud du graph, joué tel quel. Rend son outcome.json."""
+    """Le `cmd` d'un nœud du graph, joué tel quel. Rend son outcome.json.
+
+    Les deux URL des portes visent par défaut le port 9, où rien n'écoute :
+    aucun test ne doit tomber sur le déploiement réel de la machine. Le
+    budget d'attente, lui, est ramené à quelques secondes — les 60 s de
+    production se vérifient en lisant le `cmd`, pas en les subissant.
+    """
     (workspace / "outcome.json").unlink(missing_ok=True)
     subprocess.run(
         BUNDLE["nodes"][node]["config"]["agent"]["cmd"],
@@ -120,9 +208,18 @@ def joue(node: str, repo: Path, workspace: Path, subject: str = SUJET,
         env=os.environ | {"GRAPHATOM_REPO_DIR": str(repo),
                           "GRAPHATOM_WORKSPACE": str(workspace),
                           "GRAPHATOM_SUBJECT_KEY": subject,
-                          "GRAPHATOM_WEB_URL": "http://127.0.0.1:9"} | (plus or {}),
+                          "GRAPHATOM_WEB_URL": "http://127.0.0.1:9",
+                          "GRAPHATOM_FRONT_URL": "http://127.0.0.1:9",
+                          "GRAPHATOM_PORTES_DELAI_S": "4"} | (plus or {}),
     )
     return json.loads((workspace / "outcome.json").read_text())
+
+
+def attente(rapport: str, porte: int) -> int:
+    """Le temps qu'une porte dit avoir attendu, lu dans `verify_deploy.md`."""
+    vu = re.search(rf"porte {porte} - conclue après (\d+) s", rapport)
+    assert vu, f"la porte {porte} ne dit pas son attente :\n{rapport}"
+    return int(vu.group(1))
 
 
 def release(repo: Path, workspace: Path, subject: str,
@@ -347,6 +444,71 @@ def main() -> None:
         assert "/.git" not in shell, f"{nom} teste .git comme un chemin"
     print("10. six nœuds sans modèle dont trois retraits identiques, "
           "cinq agents qui rendent leur usage, aucun test sur .git ✓")
+
+    # 11. les portes de verify_deploy attendent. `docker compose up` rend la
+    #    main avant que les services écoutent : un front reconstruit ouvre
+    #    son port quelques secondes plus tard, et la porte doit le voir
+    #    arriver au lieu de conclure sur le refus de connexion
+    portes = tmp / "portes"
+    portes.mkdir()
+    docker = faux_docker(tmp, "docker-en-marche", "github-sync\nweb\nfront\n")
+    lent, secours = Serveur(delai=4.0), Serveur(corps="{}")
+    lent.start()
+    secours.start()
+    outcome = joue("verify_deploy", tmp, portes, plus={
+        "PATH": docker, "GRAPHATOM_FRONT_URL": lent.url,
+        "GRAPHATOM_WEB_URL": secours.url, "GRAPHATOM_PORTES_DELAI_S": "30"})
+    assert outcome["outcome"] == "pass", outcome
+    rapport = (portes / "verify_deploy.md").read_text()
+    assert attente(rapport, 2) >= 3, rapport  # elle a bien attendu le front
+    lent.stop()
+    print(f"11. {outcome['summary']} ✓")
+
+    # 12. le service qui ne répond jamais : la porte échoue, mais après avoir
+    #    épuisé le budget, et elle dit combien de temps elle a tenu
+    sourd = Serveur()  # jamais démarré : le port est réservé, rien n'écoute
+    outcome = joue("verify_deploy", tmp, portes, plus={
+        "PATH": docker, "GRAPHATOM_FRONT_URL": sourd.url,
+        "GRAPHATOM_WEB_URL": secours.url, "GRAPHATOM_PORTES_DELAI_S": "6"})
+    assert outcome["outcome"] == "fail", outcome
+    assert "porte 2" in outcome["summary"], outcome
+    tenu = re.search(r"après (\d+) s d'attente", outcome["summary"])
+    assert tenu and int(tenu.group(1)) >= 6, outcome
+    assert attente((portes / "verify_deploy.md").read_text(), 2) >= 6
+    sourd.stop()
+    print(f"12. {outcome['summary']} ✓")
+
+    # 13. la réponse fausse ne s'améliore pas en attendant : un 500, ou un
+    #    corps sans `_next`, fait échouer la porte tout de suite. Le budget
+    #    est mis à 60 s exprès — si la porte le consommait, on le verrait
+    for nom, serveur, marque in (
+            ("un 500", Serveur(code=500, corps="erreur"), "500"),
+            ("le stdlib", Serveur(corps="<html>le web stdlib</html>"), "_next")):
+        serveur.start()
+        depart = time.monotonic()
+        outcome = joue("verify_deploy", tmp, portes, plus={
+            "PATH": docker, "GRAPHATOM_FRONT_URL": serveur.url,
+            "GRAPHATOM_WEB_URL": secours.url, "GRAPHATOM_PORTES_DELAI_S": "60"})
+        ecoule = time.monotonic() - depart
+        assert outcome["outcome"] == "fail", outcome
+        assert "porte 2" in outcome["summary"] and marque in outcome["summary"], outcome
+        assert ecoule < 15, f"{nom} a consommé {ecoule:.0f} s du budget de 60 s"
+        assert attente((portes / "verify_deploy.md").read_text(), 2) < 15
+        serveur.stop()
+    secours.stop()
+    print("13. un 500 et un corps sans _next : échec immédiat, budget intact ✓")
+
+    # 14. le budget d'attente tient dans le couperet du nœud, donc dans son
+    #    bail — et le README dit pourquoi cette valeur-là
+    config = BUNDLE["nodes"]["verify_deploy"]["config"]
+    cmd = config["agent"]["cmd"]
+    budget = int(re.search(r"GRAPHATOM_PORTES_DELAI_S:-(\d+)", cmd).group(1))
+    assert budget < config["agent"]["timeout_s"] < config["lease_s"], config
+    readme = (ROOT / "README.md").read_text()
+    assert "GRAPHATOM_PORTES_DELAI_S" in readme, "le README ne justifie pas le budget"
+    assert f"{budget} s d'attente" in readme, "le README ne dit pas le budget retenu"
+    print(f"14. budget d'attente {budget} s < timeout_s "
+          f"{config['agent']['timeout_s']} s < bail {config['lease_s']} s ✓")
 
     shutil.rmtree(tmp, ignore_errors=True)
     print("\nnœuds shell : OK — déterministes, et jamais sans outcome")
