@@ -329,7 +329,15 @@ def _passation(ctx: Context) -> str:
 
     Ce n'est pas un prétexte à re-décider : l'issue du prédécesseur est déjà
     routée, on la lit, on ne la rejuge pas.
+
+    Une exception, et une seule : le nœud arbitre. Lui ne continue pas le
+    travail de son prédécesseur, il le juge — et son prédécesseur est un
+    finaliste, dont la passation et la queue de journal nommeraient la CLI, le
+    modèle et la variante. C'est exactement ce que `_dossier` cache pour que
+    le juge juge le travail et non son auteur. Rien ne lui est donc posé.
     """
+    if judge_source(ctx.node):
+        return ""
     previous = _predecessor(ctx)
     if previous is None:  # nœud d'entrée, ou entrée par un WAIT : rien à porter
         return ""
