@@ -25,7 +25,7 @@
  * étape garde son run unique et son usage, exactement comme avant.
  */
 import type { Graph, JournalEntry, Run, Usage, Variant } from "@/lib/api";
-import { agentModel } from "@/lib/agent-model";
+import { execution } from "@/lib/agent-model";
 
 // les issues que le noyau nomme lui-même : un run qui en rend une a raté.
 // Miroir de `KERNEL_OUTCOMES` dans `src/graphatom/graph.py`.
@@ -62,18 +62,6 @@ export type Step = {
 
 /** La clé d'une tentative : celle que les candidats partagent. */
 const attemptKey = (run: Run) => `${run.node}/${run.cycle}/${run.attempt}`;
-
-/**
- * La CLI d'un candidat : le premier mot de sa commande.
- *
- * La commande reste la vérité, comme pour le modèle — on lit ce qu'elle
- * lance, on n'en déduit rien d'autre. Une commande qui commence par une
- * affectation d'environnement ou un chemin se montre telle quelle.
- */
-function agentCli(cmd: string | null | undefined): string | null {
-  const word = (cmd ?? "").trim().split(/\s+/)[0];
-  return word ? word.split("/").pop()! : null;
-}
 
 /**
  * Pourquoi ce candidat a perdu — `null` tant qu'il n'a pas perdu.
@@ -166,12 +154,15 @@ export function steps(
       .map((candidate) => {
         const cmd = declared[candidate.candidate!]?.cmd ?? null;
         const end = candidate.finished_at;
+        // la commande dit la CLI et le modèle ensemble, ou ne dit ni l'une
+        // ni l'autre : un candidat en shell pur n'a aucun des deux
+        const exec = execution(cmd);
         return {
           run: candidate,
           index: candidate.candidate!,
           variant: declared[candidate.candidate!]?.variant ?? {},
-          model: agentModel(cmd ?? undefined),
-          cli: agentCli(cmd),
+          model: exec.kind === "model" ? exec.model : null,
+          cli: exec.kind === "model" ? exec.cli : null,
           duration_s:
             start === null || end === null
               ? candidate.duration_s
