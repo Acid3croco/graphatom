@@ -398,6 +398,47 @@ portes concluent en une sonde et lui laissent le budget entier.
 `verify_deploy.md` porte, porte par porte, le temps attendu avant de
 conclure — c'est ce qui permettra de savoir si 60 s est bien réglé.
 
+### Un seul déploiement à la fois : la concurrence est une file
+
+Le rail travaille couramment à quatre ou six items en parallèle, et cela
+marche partout **sauf sur `deploy`** : tous les autres nœuds agissent chacun
+sur son atelier, `deploy` est le seul à agir sur une cible unique, la
+production. Deux `docker compose up` concurrents sur le même projet se
+disputent les noms de conteneurs, et docker refuse le second — un faux
+échec, qui escaladait chez l'humain alors que le déploiement était bon.
+
+**Le nœud prend un verrou de session postgres.** `pg_advisory_lock`, ni
+fichier ni démon : la mort de la session le libère, donc un shell tué en
+plein vol n'en laisse jamais un orphelin — un verrou qui survivrait à un
+crash serait pire que pas de verrou. La clé est la somme de contrôle du
+chemin de `GRAPHATOM_REPO_DIR` : c'est la cible qu'on sérialise, pas le
+rail, et deux rails sur deux clones ne se gênent pas. La base où il vit est
+`GRAPHATOM_VERROU_DSN`, à défaut `GRAPHATOM_AGENT_DSN` — l'instance que tous
+les items partagent ; la `GRAPHATOM_DSN` du bloc, elle, est la base jetable
+de l'item, propre à lui, donc sans effet sur le voisin.
+
+**Exclusion mutuelle *et* attente bornée**, les deux, parce qu'elles
+répondent à deux questions différentes : la première dit qui passe, la
+seconde combien de temps on patiente avant de rendre la main. L'exclusion
+seule laisserait le second item pendu au bail d'un déploiement qui traîne —
+le couperet le tuerait en `timed_out`, qui escalade sans compter les
+tentatives, c'est-à-dire exactement la panne qu'on veut supprimer.
+L'attente bornée seule ne sérialiserait rien. Passé
+`GRAPHATOM_VERROU_DELAI_S`, soit **300 s d'attente**, le nœud rend
+`waiting` et le graph le renvoie sur `deploy` : la file avance, personne
+n'escalade. Ces 300 s et le build tiennent ensemble dans le `timeout_s` du
+nœud, passé à 1260 s, donc dans son bail, passé à 1320 s.
+
+**Deux effets de bord du même mécanisme.** Le verrou obtenu, le shell
+compare le SHA visé à celui que portent les conteneurs — l'étiquette
+`com.graphatom.sha`, que le compose pose sur les trois services déployés :
+si un voisin a déployé le même `main` pendant l'attente, il n'y a rien à
+reconstruire et l'issue est un succès. La vérité est ainsi lue sur le
+déploiement lui-même, jamais sur un fichier tenu à côté. Et si un `up`
+interrompu a laissé un conteneur bâtard, le message `The container name …
+is already in use` nomme le coupable : le shell le retire et rejoue le
+`up`, une fois — plus d'humain dans la boucle.
+
 ## De vrais agents dans les blocs (milestone 3b)
 
 Un nœud ACT / CHECK / JUDGE peut déclarer `config.agent` — le bloc écrit
