@@ -6,12 +6,22 @@
  * agent sa commande et son prompt entier. Ce qui n'entre dans aucune de
  * ces cases sort quand même, en JSON : une clé qu'un bloc range dans sa
  * config se montre sous son nom plutôt que de disparaître de la vue.
+ *
+ * Une seule chose est lue plutôt que recopiée, et le bundle ne la porte
+ * nulle part : **ce qui exécute le nœud**. Elle se lit dans la commande, et
+ * elle est toujours dite — une CLI et son modèle, du shell déterministe, ou
+ * rien du tout. Un nœud sans modèle n'a pas un champ vide : il a une nature
+ * qui se nomme.
+ *
+ * Un nœud en fan-out n'a pas d'exécutant unique et le panneau n'en invente
+ * pas : son en-tête compte les candidats et dit la réduction qui les
+ * départage, et chaque variante porte ensuite la sienne.
  */
 import type { ReactNode } from "react";
 import { X } from "lucide-react";
 
-import type { BundleFanout, BundleNode, Variant } from "@/lib/api";
-import { agentModel } from "@/lib/agent-model";
+import type { BundleAgent, BundleFanout, BundleNode, Variant } from "@/lib/api";
+import { execution, executionLabel } from "@/lib/agent-model";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,12 +37,27 @@ const KNOWN = new Set([
   "fanout",
 ]);
 
+// les clés d'une variante que le panneau nomme lui-même ; le reste sort
+// comme le reste de la config — en clair si c'est un scalaire, en JSON
+// sinon, l'`agent` surchargé compris
+const VARIANT_KNOWN = new Set(["label", "strategy"]);
+
 /** Un champ du bundle : sa clé, telle qu'elle s'écrit, et sa valeur. */
 function Field({ name, value }: { name: string; value: ReactNode }) {
   return (
     <span className="whitespace-nowrap">
       <span className="text-muted-foreground">{name}</span> <b>{value}</b>
     </span>
+  );
+}
+
+/** Un champ dont la valeur est un texte : il se replie au lieu de défiler. */
+function Text({ name, value }: { name: string; value: string }) {
+  return (
+    <p>
+      <span className="text-muted-foreground">{name}</span>{" "}
+      <span className="whitespace-pre-wrap">{value}</span>
+    </p>
   );
 }
 
@@ -48,56 +73,75 @@ function Block({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-/**
- * Le fan-out d'un nœud : ses variantes, sa répétition, sa réduction.
- *
- * Une variante est un fragment de config : les clés qu'elle nomme
- * surchargent celles du nœud, celles qu'elle tait sont héritées. On la
- * montre donc telle qu'elle est déclarée — les scalaires en clair, un
- * `agent` surchargé en JSON, parce que c'est bien là que se lit ce que
- * cette variante change.
- *
- * Le nombre de candidats est `variantes × répétition` : c'est le seul
- * chiffre du bloc qui ne s'y lit pas directement, et c'est celui qui dit
- * combien de runs le nœud lancera.
- */
-function Fanout({ fanout }: { fanout: BundleFanout }) {
-  const repeat = fanout.repeat ?? 1;
-  return (
-    <Block title="fanout">
-      <p className="flex flex-wrap gap-x-4 gap-y-1">
-        <Field name="reduce" value={fanout.reduce} />
-        <Field name="repeat" value={repeat} />
-        <Field name="variants" value={fanout.variants.length} />
-        <Field name="candidats" value={fanout.variants.length * repeat} />
-      </p>
-      <ul className="mt-1 flex flex-col gap-2">
-        {fanout.variants.map((variant, index) => (
-          <li key={index} className="flex flex-col gap-1 border-l pl-2">
-            <VariantFields variant={variant} />
-          </li>
-        ))}
-      </ul>
-    </Block>
-  );
+/** Ce qui exécute une commande, en toutes lettres — jamais vide. */
+function execField(cmd: string | undefined) {
+  return <Field name="exécution" value={executionLabel(execution(cmd))} />;
 }
 
-/** Une variante déclarée : ses clés en clair, ses objets en JSON. */
-function VariantFields({ variant }: { variant: Variant }) {
-  const entries = Object.entries(variant);
-  const flat = entries.filter(
+/**
+ * La réduction, avec son paramètre quand elle en a un.
+ *
+ * `keep_n` garde n finalistes et le dit — `keep_n n=2` ; `first_pass` n'a
+ * rien à paramétrer et se lit seule.
+ */
+function reduction(fanout: BundleFanout): string {
+  return fanout.n === undefined
+    ? fanout.reduce
+    : `${fanout.reduce} n=${fanout.n}`;
+}
+
+/**
+ * La commande d'une variante : la sienne, ou celle du nœud.
+ *
+ * Une variante est un fragment de config — les clés qu'elle nomme
+ * surchargent celles du nœud, celles qu'elle tait sont héritées. Une
+ * variante qui ne surcharge pas `agent` court donc la commande du nœud, et
+ * c'est bien le même exécutant qu'il faut lui afficher.
+ */
+function variantCmd(variant: Variant, node: string | undefined) {
+  const agent = variant.agent as BundleAgent | undefined;
+  return agent?.cmd ?? node;
+}
+
+/**
+ * Une variante déclarée : ce qui la distingue, et ce qui l'exécute.
+ *
+ * Trois choses la décrivent, et le fan-out les met toutes les trois dans la
+ * config : son étiquette, la stratégie qu'on lui impose, et l'exécutant que
+ * sa commande nomme. Le reste de ce qu'elle surcharge sort ensuite tel
+ * qu'il est déclaré — c'est bien là que se lit ce que cette variante change.
+ */
+function VariantConfig({
+  variant,
+  index,
+  cmd,
+}: {
+  variant: Variant;
+  index: number;
+  cmd: string | undefined;
+}) {
+  const rest = Object.entries(variant).filter(([key]) => !VARIANT_KNOWN.has(key));
+  const flat = rest.filter(
     ([, value]) => typeof value !== "object" || value === null,
   );
-  const nested = entries.filter(
+  const nested = rest.filter(
     ([, value]) => typeof value === "object" && value !== null,
   );
   return (
     <>
       <p className="flex flex-wrap gap-x-4 gap-y-1">
+        <Field
+          name="étiquette"
+          value={variant.label === undefined ? `c${index}` : String(variant.label)}
+        />
+        {execField(variantCmd(variant, cmd))}
         {flat.map(([key, value]) => (
           <Field key={key} name={key} value={String(value)} />
         ))}
       </p>
+      {variant.strategy !== undefined && (
+        <Text name="stratégie" value={String(variant.strategy)} />
+      )}
       {nested.length > 0 && (
         <pre className="max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs break-words whitespace-pre-wrap">
           {JSON.stringify(Object.fromEntries(nested), null, 2)}
@@ -118,7 +162,8 @@ export function NodeConfig({
 }) {
   const config = node.config ?? {};
   const agent = config.agent;
-  const model = agentModel(agent?.cmd);
+  const fanout = config.fanout;
+  const repeat = fanout?.repeat ?? 1;
   const edges = Object.entries(node.edges ?? {});
   const rest = Object.entries(config).filter(([key]) => !KNOWN.has(key));
 
@@ -146,7 +191,18 @@ export function NodeConfig({
       <CardContent className="flex flex-col gap-4 text-sm">
         <p className="flex flex-wrap gap-x-4 gap-y-1">
           <Field name="bloc" value={node.block ?? "—"} />
-          {model !== null && <Field name="model" value={model} />}
+          {/* un nœud en fan-out n'a pas d'exécutant unique : il a K
+              candidats et une réduction qui les départage, et c'est cela
+              que son en-tête doit dire */}
+          {fanout ? (
+            <>
+              <Field name="candidats" value={fanout.variants.length * repeat} />
+              <Field name="réduction" value={reduction(fanout)} />
+              {repeat > 1 && <Field name="répétition" value={repeat} />}
+            </>
+          ) : (
+            execField(agent?.cmd)
+          )}
           {config.lease_s !== undefined && (
             <Field name="lease_s" value={`${config.lease_s} s`} />
           )}
@@ -169,7 +225,21 @@ export function NodeConfig({
           </Block>
         )}
 
-        {config.fanout && <Fanout fanout={config.fanout} />}
+        {fanout && (
+          <Block title={`variantes (${fanout.variants.length})`}>
+            <ul className="flex flex-col gap-2">
+              {fanout.variants.map((variant, index) => (
+                <li key={index} className="flex flex-col gap-1 border-l pl-2">
+                  <VariantConfig
+                    variant={variant}
+                    index={index}
+                    cmd={agent?.cmd}
+                  />
+                </li>
+              ))}
+            </ul>
+          </Block>
+        )}
 
         {config.question !== undefined && (
           <Block title="question">
