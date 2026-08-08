@@ -97,6 +97,14 @@ uv run python tests/answer_test.py                   # `/answer` : la première 
 uv run python tests/silence_test.py                  # le chien de garde : un agent
                                                      # muet est coupé tôt, et le
                                                      # progrès constaté fait l'issue
+uv run python tests/judge_test.py                    # le nœud arbitre : un finaliste
+                                                     # unique ne coûte pas un jeton,
+                                                     # plusieurs se départagent à
+                                                     # l'aveugle, aucun repart en amont
+uv run python tests/cycle_test.py                    # le profil code-task de bout en
+                                                     # bout : keep_n, puis judge, puis
+                                                     # close — le vrai ordonnanceur,
+                                                     # des doublures pour les modèles
 uv run python tests/opencode_test.py                 # l'adaptateur opencode : un
                                                      # nœud réel tourne sous un
                                                      # modèle gratuit (demande
@@ -993,9 +1001,45 @@ silence.
   comme les tentatives se multiplient déjà aujourd'hui, mais en parallèle
   plutôt qu'en série ;
 - il n'y a **aucune jointure** : les candidats ne fusionnent jamais, un seul
-  survit et les autres sont tués et détruits ;
+  travail finit sur la branche de l'item et les autres sont détruits ;
 - la réduction produit **une seule issue** avant que l'item n'avance : vu du
   noyau, un nœud en fan-out se comporte comme un nœud ordinaire.
+
+**Deux réductions, et elles ne coûtent pas la même chose.**
+
+| réduction | ce qu'elle fait | ce qu'elle coûte |
+| --- | --- | --- |
+| `first_pass` | le premier candidat dont l'issue passe gagne, les autres sont tués sur place | rien : personne n'attend |
+| `keep_n` | **attend tout le monde**, puis laisse passer les `n` premières réussites — les *finalistes* — au nœud d'aval | l'attente du plus lent, et un juge derrière |
+
+`keep_n` ne choisit pas : c'est un nœud `JUDGE` **arbitre** qui départage,
+déclaré par `finalists_from: <nœud de fan-out>`. Sa borne sur `n` est dure —
+`2 ≤ n ≤ 3` — parce que le juge lit `n` diffs entiers : au-delà son contexte
+explose, en deçà il n'a rien à départager. Trois issues fermées :
+
+- `sole` — un seul finaliste : le nœud est traversé **sans dépenser un seul
+  jeton**. Un juge à qui l'on présente une option unique dit toujours oui ;
+  ce serait un tampon payant, qui fabriquerait de la fausse confiance. Le
+  court-circuit est mécanique, décidé avant d'appeler quoi que ce soit ;
+- `chosen` — plusieurs finalistes : le juge lit les diffs, élit, et dit
+  pourquoi dans `verdict.md`, là où `validate` écrit le sien ;
+- `none` — aucun finaliste : retour en amont, comme un échec de `validate`,
+  et borné par le même budget d'escalade.
+
+**Le juge ne voit jamais qui a produit quoi.** Ni le modèle, ni la CLI, ni
+l'étiquette de variante ne lui sont présentés : uniquement les diffs, sous
+des lettres, et `criteria.md`. Un juge qui saurait qu'un candidat vient d'un
+« gros » modèle le préfèrerait, et la mesure entière perdrait son sens — or
+c'est précisément la question qu'on cherche à trancher. Il est cher, et
+c'est voulu : c'est l'un des deux bouts de l'haltère, et la page d'un item
+montre son prix **à part** de celui des candidats, pour qu'on puisse
+comparer ce que coûte le jugement face à ce que coûte la génération.
+
+`validate` reste en place et garde son rôle : le juge **choisit entre des
+candidats**, `validate` **vérifie le résultat retenu** contre les critères.
+Deux questions différentes, deux nœuds différents. Et le juge n'écrit jamais
+dans les ateliers des candidats : il lit leurs diffs par les noms de
+branches, depuis le dépôt.
 
 Les deux ne se confondent donc jamais : *jointure de plusieurs
 prédécesseurs* — refusée pour toujours ; *candidats concurrents d'un même
@@ -1034,7 +1078,7 @@ moyens :
 
 Périmètre négatif, assumé — ces refus *sont* le design :
 
-- **Pas de jointure, ni de fan-out de chemins** dans un item — le parallélisme entre travaux, c'est plusieurs items. Un état unique ne représente pas plusieurs prédécesseurs actifs, et deux branches d'un graph ne se rejoignent jamais : la jointure est refusée pour toujours. Ce qui est permis, en revanche, c'est le **fan-out de candidats** — plusieurs runs concurrents d'un *même* nœud, réduits à une seule issue avant que l'item n'avance (voir [des myriades de modèles bon marché](#des-myriades-de-modèles-bon-marché)). L'invariant d'état unique tient parce que rien ne fusionne : l'item garde un seul état, une seule révision, une seule issue de nœud, il n'est jamais sur deux nœuds à la fois ; les candidats ne se voient jamais, un seul survit et les autres sont tués et détruits. Vu du noyau, un nœud en fan-out se comporte comme un nœud ordinaire.
+- **Pas de jointure, ni de fan-out de chemins** dans un item — le parallélisme entre travaux, c'est plusieurs items. Un état unique ne représente pas plusieurs prédécesseurs actifs, et deux branches d'un graph ne se rejoignent jamais : la jointure est refusée pour toujours. Ce qui est permis, en revanche, c'est le **fan-out de candidats** — plusieurs runs concurrents d'un *même* nœud, réduits à une seule issue avant que l'item n'avance (voir [des myriades de modèles bon marché](#des-myriades-de-modèles-bon-marché)). L'invariant d'état unique tient parce que rien ne fusionne : l'item garde un seul état, une seule révision, une seule issue de nœud, il n'est jamais sur deux nœuds à la fois ; les candidats ne se voient jamais, un seul travail finit sur la branche de l'item et les autres sont détruits. Quand la réduction est `keep_n`, plusieurs candidats survivent le temps qu'un nœud arbitre les départage — mais il en élit un, et un seul : c'est une sélection différée, jamais une jointure. Vu du noyau, un nœud en fan-out se comporte comme un nœud ordinaire.
 - **Pas de conversation inter-agents** — la coordination est le graph. N agents qui discutent produisent un transcript inauditable.
 - **Pas de langage de workflow** — la déclaration reste de la configuration étroite au-dessus de blocs typés. Expressions et conditions arbitraires : non.
 - **Pas de question ouverte** aux humains — toute question est fermée, avec des options et une deadline.
