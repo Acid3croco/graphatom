@@ -1010,10 +1010,12 @@ nœud tient en une phrase : lance le script ; sortie 0 → `done`, rien
 d'autre — le nominal coûte un aller-retour de modèle. Si le script lâche,
 l'agent a le droit d'agir, dans une frontière stricte : réparer la
 mécanique — relancer un push, recréer une PR obsolète d'un cycle passé,
-résoudre le conflit du code 9 — puis relancer le script, oui ; merger du
+résoudre le conflit du code 9, réparer la rupture d'intégration du code 11 —
+puis relancer le script, oui ; merger du
 code qu'il a modifié, jamais. D'où trois issues fermées : `done`, `conflict` (l'agent
 n'y arrive pas, l'humain reprend) et **`rebased`** — il a fallu résoudre de
-vrais conflits, donc pas de merge : l'arête renvoie la branche à
+vrais conflits, ou réparer ce que la porte de construction a arrêté, donc
+pas de merge : l'arête renvoie la branche à
 `test_backend`, parce qu'une fusion est une combinaison que personne n'a
 testée. Cette arête referme un cycle release → test → … → release :
 `release` porte donc `escalade`, et le budget d'escalades de l'item borne
