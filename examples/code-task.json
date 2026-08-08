@@ -251,7 +251,7 @@
       "config": {
         "lease_s": 120,
         "agent": {
-          "cmd": "WT=\"$GRAPHATOM_REPO_DIR/.worktrees/rail-$(basename \"$GRAPHATOM_WORKSPACE\")\"\nNUM=$(printf '%s' \"${GRAPHATOM_SUBJECT_KEY##*#}\" | tr -cd '0-9')\nBR=$(git -C \"$GRAPHATOM_REPO_DIR\" worktree list --porcelain 2>/dev/null | grep -FxA2 \"worktree $WT\" | sed -n 's|^branch refs/heads/||p')\nMIEN=\"\"\ncase \"$GRAPHATOM_REPO_DIR\" in /*) [ -n \"$NUM\" ] && [ \"$BR\" = \"rail/issue-$NUM\" ] && MIEN=1;; esac\n{ echo \"sujet ${GRAPHATOM_SUBJECT_KEY:-?} → worktree $WT (branche ${BR:-aucune})\"\n  if [ -n \"$MIEN\" ]; then\n    git -C \"$GRAPHATOM_REPO_DIR\" worktree remove --force \"$WT\" && git -C \"$GRAPHATOM_REPO_DIR\" branch -D \"$BR\"\n  else\n    echo \"cible étrangère : hors de $GRAPHATOM_REPO_DIR/.worktrees/, ou branche ${BR:-aucune} ≠ rail/issue-${NUM:-?} — on ne touche à rien\"\n  fi\n  \"$GRAPHATOM_REPO_DIR/.venv/bin/graphatom\" drop-agent-db\n} > cleanup.md 2>&1\nif [ -n \"$MIEN\" ] && [ ! -d \"$WT\" ]; then S=\"worktree $WT et branche rail/issue-$NUM retirés\"; else S=\"worktree $WT laissé en place — voir cleanup.md\"; fi\nprintf '{\"outcome\": \"done\", \"summary\": \"%s\"}\\n' \"$S\" > outcome.json",
+          "cmd": "bash \"$GRAPHATOM_REPO_DIR/scripts/cleanup.sh\"",
           "prompt": "Retrait du worktree de l'item, de sa branche locale et de sa base jetable. Pas d'agent ici : un shell suffit, et il écrit toujours son outcome.json — c'est ce qui autorise le graph à faire passer toutes ses sorties par ce nœud sans jamais s'y coincer.\n\nLe shell vérifie sa cible avant de détruire : le worktree doit être enregistré dans $GRAPHATOM_REPO_DIR, sous son `.worktrees/`, et porter la branche `rail/issue-<num>` du sujet de CET item. Une cible qui ne matche pas — un rail de test qui aurait hérité du REPO_DIR de production — n'est pas touchée, et cleanup.md le dit."
         }
       },
@@ -264,7 +264,7 @@
       "config": {
         "lease_s": 120,
         "agent": {
-          "cmd": "WT=\"$GRAPHATOM_REPO_DIR/.worktrees/rail-$(basename \"$GRAPHATOM_WORKSPACE\")\"\nNUM=$(printf '%s' \"${GRAPHATOM_SUBJECT_KEY##*#}\" | tr -cd '0-9')\nBR=$(git -C \"$GRAPHATOM_REPO_DIR\" worktree list --porcelain 2>/dev/null | grep -FxA2 \"worktree $WT\" | sed -n 's|^branch refs/heads/||p')\nMIEN=\"\"\ncase \"$GRAPHATOM_REPO_DIR\" in /*) [ -n \"$NUM\" ] && [ \"$BR\" = \"rail/issue-$NUM\" ] && MIEN=1;; esac\n{ echo \"sujet ${GRAPHATOM_SUBJECT_KEY:-?} → worktree $WT (branche ${BR:-aucune})\"\n  if [ -n \"$MIEN\" ]; then\n    git -C \"$GRAPHATOM_REPO_DIR\" worktree remove --force \"$WT\" && git -C \"$GRAPHATOM_REPO_DIR\" branch -D \"$BR\"\n  else\n    echo \"cible étrangère : hors de $GRAPHATOM_REPO_DIR/.worktrees/, ou branche ${BR:-aucune} ≠ rail/issue-${NUM:-?} — on ne touche à rien\"\n  fi\n  \"$GRAPHATOM_REPO_DIR/.venv/bin/graphatom\" drop-agent-db\n} > cleanup.md 2>&1\nif [ -n \"$MIEN\" ] && [ ! -d \"$WT\" ]; then S=\"worktree $WT et branche rail/issue-$NUM retirés\"; else S=\"worktree $WT laissé en place — voir cleanup.md\"; fi\nprintf '{\"outcome\": \"done\", \"summary\": \"%s\"}\\n' \"$S\" > outcome.json",
+          "cmd": "bash \"$GRAPHATOM_REPO_DIR/scripts/cleanup.sh\"",
           "prompt": "Même retrait que `cleanup`, mêmes vérifications de cible, sur les sorties non abouties : abandon de review, abandon d'escalade, expiration, budget épuisé. Le travail n'est pas mergé — la branche part quand même, elle est retrouvable dans le journal."
         }
       },
@@ -277,7 +277,7 @@
       "config": {
         "lease_s": 120,
         "agent": {
-          "cmd": "WT=\"$GRAPHATOM_REPO_DIR/.worktrees/rail-$(basename \"$GRAPHATOM_WORKSPACE\")\"\nNUM=$(printf '%s' \"${GRAPHATOM_SUBJECT_KEY##*#}\" | tr -cd '0-9')\nBR=$(git -C \"$GRAPHATOM_REPO_DIR\" worktree list --porcelain 2>/dev/null | grep -FxA2 \"worktree $WT\" | sed -n 's|^branch refs/heads/||p')\nMIEN=\"\"\ncase \"$GRAPHATOM_REPO_DIR\" in /*) [ -n \"$NUM\" ] && [ \"$BR\" = \"rail/issue-$NUM\" ] && MIEN=1;; esac\n{ echo \"sujet ${GRAPHATOM_SUBJECT_KEY:-?} → worktree $WT (branche ${BR:-aucune})\"\n  if [ -n \"$MIEN\" ]; then\n    git -C \"$GRAPHATOM_REPO_DIR\" worktree remove --force \"$WT\" && git -C \"$GRAPHATOM_REPO_DIR\" branch -D \"$BR\"\n  else\n    echo \"cible étrangère : hors de $GRAPHATOM_REPO_DIR/.worktrees/, ou branche ${BR:-aucune} ≠ rail/issue-${NUM:-?} — on ne touche à rien\"\n  fi\n  \"$GRAPHATOM_REPO_DIR/.venv/bin/graphatom\" drop-agent-db\n} > cleanup.md 2>&1\nif [ -n \"$MIEN\" ] && [ ! -d \"$WT\" ]; then S=\"worktree $WT et branche rail/issue-$NUM retirés\"; else S=\"worktree $WT laissé en place — voir cleanup.md\"; fi\nprintf '{\"outcome\": \"done\", \"summary\": \"%s\"}\\n' \"$S\" > outcome.json",
+          "cmd": "bash \"$GRAPHATOM_REPO_DIR/scripts/cleanup.sh\"",
           "prompt": "Même retrait que `cleanup`, mêmes vérifications de cible, sur la sortie `split` : l'issue était trop grande, `scope` l'a découpée, et le cycle de la mère s'arrête là. Le worktree préparé n'a jamais servi — `scope` ne code pas — mais il existe, et sa branche aussi : les deux partent, comme sur toute autre sortie. Chaque fille aura le sien."
         }
       },
