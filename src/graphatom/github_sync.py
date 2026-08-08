@@ -76,6 +76,9 @@ CRITERIA = "criteria.md"    # les critères figés par le nœud scope, même wor
 CRITERIA_LINES = 80         # une spécification proposée est plus longue qu'une checklist
 CRITERIA_TITLE = "**Ce que le rail a compris** — critères figés par `scope`"
 TIMEOUT_TITLE = "**Escalade après timeout** — le budget du nœud a été dépassé"
+# la pendaison d'un agent, à ne pas confondre avec le label STALLED ci-dessus,
+# qui parle du worker : l'un est un run muet, l'autre un rail sans battement
+HUNG_TITLE = "**Escalade après pendaison** — l'agent n'a jamais rien produit"
 TIMEOUT_S = 30.0            # tout appel sortant est borné : au-delà, GitHub est injoignable
 
 
@@ -449,22 +452,29 @@ def _budget_s(conn: Connection, run: dict) -> float:
     return float(agent.get("timeout_s", AGENT_TIMEOUT_S))
 
 
-def _timeout_report(conn: Connection, item_id: int, node: str) -> str:
-    """Le post-mortem du timeout qui vient d'escalader — sinon rien du tout.
+def _death_report(conn: Connection, item_id: int, node: str) -> str:
+    """Le post-mortem du couperet qui vient d'escalader — sinon rien du tout.
 
-    Un dépassement de budget ne se relance plus tout seul : c'est l'humain
-    qui tranche entre `retry` et `abandon`, et il tranche mieux en sachant
-    quel budget a sauté et sur quoi l'agent en était. Le budget est le
-    `timeout_s` du nœud, la queue du journal celle de l'autopsie du run.
+    Deux morts, et l'humain ne tranche pas pareil entre les deux, donc le
+    message dit laquelle :
+
+    - `timed_out` — l'agent produisait, il n'a pas fini dans son budget. La
+      question utile est celle du budget, avec sur quoi il en était : le
+      `timeout_s` du nœud et la queue du journal de l'autopsie.
+    - `stalled` — l'agent était pendu, muet du début à la fin, et les
+      relances sur place n'y ont rien changé. La question utile est celle de
+      l'infra, pas celle de la tâche : rien n'a jamais été essayé.
 
     On ne lit que le dernier pas — l'événement qui a armé cette question :
-    un timeout d'un passage précédent ne regarde pas celui-ci.
+    une mort d'un passage précédent ne regarde pas celui-ci.
     """
     event = conn.execute(
         "SELECT outcome, run_id FROM event WHERE item_id = %s AND to_state = %s "
         "ORDER BY item_version DESC LIMIT 1", (item_id, node),
     ).fetchone()
-    if not event or event["outcome"] != "timed_out" or event["run_id"] is None:
+    if not event or event["run_id"] is None:
+        return ""
+    if event["outcome"] not in ("timed_out", "stalled"):
         return ""
     run = conn.execute(
         "SELECT n.*, w.revision FROM node_run n JOIN work_item w ON w.id = n.item_id "
@@ -472,12 +482,18 @@ def _timeout_report(conn: Connection, item_id: int, node: str) -> str:
     ).fetchone()
     if run is None:
         return ""
+    if event["outcome"] == "timed_out":
+        entete = (f"{TIMEOUT_TITLE} : `{run['node']}` a dépassé son `timeout_s` de "
+                  f"{_budget_s(conn, run):.0f} s "
+                  f"(passage {run['cycle']}, tentative {run['attempt']}).")
+    else:
+        entete = (f"{HUNG_TITLE} : `{run['node']}` a été coupé sans avoir écrit un "
+                  "octet ni toucher un fichier — l'agent n'a jamais démarré. "
+                  f"{run['attempt']} tentatives relancées sur place n'y ont rien "
+                  f"changé (passage {run['cycle']}).")
     tail = ((run["result"] or {}).get("log_tail") or "").strip()
     quoted = "\n".join(f"> {line}".rstrip() for line in tail.splitlines())
-    return (f"{TIMEOUT_TITLE} : `{run['node']}` a dépassé son `timeout_s` de "
-            f"{_budget_s(conn, run):.0f} s "
-            f"(passage {run['cycle']}, tentative {run['attempt']}).\n\n"
-            + (f"Queue du journal :\n\n{quoted}\n\n" if quoted else ""))
+    return entete + "\n\n" + (f"Queue du journal :\n\n{quoted}\n\n" if quoted else "")
 
 
 def _question_body(conn: Connection, q: dict, web: str) -> str:
@@ -485,7 +501,7 @@ def _question_body(conn: Connection, q: dict, web: str) -> str:
     options = " / ".join(f"`{o}`" for o in q["options"])
     return (f"**Question du rail** — pour @{q['owner']}, "
             f"avant le {q['deadline']:%d/%m %H:%M} UTC\n\n{q['text']}\n\n"
-            f"{_timeout_report(conn, q['item_id'], q['node'])}"
+            f"{_death_report(conn, q['item_id'], q['node'])}"
             f"{_cite(q['item_id'], CRITERIA, CRITERIA_LINES, CRITERIA_TITLE, web)}"
             f"{_cite(q['item_id'], CHECKLIST, CHECKLIST_LINES, CHECKLIST_TITLE, web)}"
             f"Options : {options}\n"
