@@ -88,6 +88,9 @@ uv run python tests/criteria_test.py                 # le nœud scope qui parle 
 uv run python tests/api_test.py                      # l'API JSON du canal web : les
                                                      # mêmes vues en données, sans
                                                      # base ni serveur
+uv run python tests/answer_test.py                   # `/answer` : la première ligne
+                                                     # décide, la prose passe, et la
+                                                     # commande mal formée se dit
 ```
 
 Les tests ne touchent jamais au `data/` du repo : chacun travaille dans un
