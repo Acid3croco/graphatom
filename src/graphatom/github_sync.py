@@ -442,14 +442,14 @@ def _publish_criteria(conn: Connection, gh: GitHub) -> None:
 
 
 def _budget_s(conn: Connection, run: dict) -> float:
-    """Le budget d'une tentative sur ce nœud — son `timeout_s`, ou le défaut.
+    """Le couperet d'une tentative sur ce nœud — le bail moins la marge.
 
     Le run porte la révision de son item : le budget lu est celui du graph
     sous lequel la tentative a tourné, pas celui d'une révision plus récente.
+    La dérivation est celle du kernel, la même que le bloc qui exécute.
     """
     node = graph.load_bundle(conn, run["revision"])["nodes"][run["node"]]
-    agent = (node.get("config") or {}).get("agent") or {}
-    return float(agent.get("timeout_s", AGENT_TIMEOUT_S))
+    return kernel.agent_timeout_s(node.get("config") or {}, AGENT_TIMEOUT_S)
 
 
 def _death_report(conn: Connection, item_id: int, node: str) -> str:
