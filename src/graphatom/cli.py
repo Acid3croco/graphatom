@@ -65,7 +65,12 @@ def main() -> None:
     args = p.parse_args()
 
     if args.cmd == "init-db":
-        changes = db.init_db(drop=args.drop)
+        try:
+            changes = db.init_db(drop=args.drop)
+        except RuntimeError as err:
+            # migration bloquée par un verrou : échouer vite en nommant le
+            # bloqueur, plutôt que de faire s'empiler les lectures derrière
+            sys.exit(str(err))
         print("base initialisée")
         # le journal du déploiement dit ce que la migration a changé : sans
         # cette ligne, un worker qui se reconnecte sur un plan périmé au même

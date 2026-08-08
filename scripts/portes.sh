@@ -66,7 +66,8 @@ pyproject.toml"
 # n'y est pas, parce que les K candidats partagent une base. Sont donc
 # dehors crash, migration, escalade_timeout, passage, fanout, fanout_worktree,
 # reconnect, opencode, silence, hermetic, shell — qui demande une base depuis
-# que `deploy` y pose le verrou de sa file — et fanout_opencode.
+# que `deploy` y pose le verrou de sa file —, verrou — qui crée la sienne pour
+# y tenir des verrous et y faire mourir des sessions — et fanout_opencode.
 # `test_backend` les joue après la course, une fois seul.
 TESTS="tests/validate_test.py
 tests/fanout_config_test.py
