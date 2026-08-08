@@ -127,11 +127,14 @@ def rendre(conn) -> int:
 # -------------------------------------------------------------------- épreuves
 
 
+LARGE = 3  # la course la plus large semée ici — voir la borne effective plus bas
+
+
 def plafond_global(conn) -> None:
     """1 et 2 : jamais plus de N en vol, et ce qui attend ne coûte rien."""
     scheduler.MAX_RUNS, scheduler.MAX_RUNS_PER_ITEM = 2, 2
     simples = [seme(conn, None) for _ in range(4)]
-    large = seme(conn, 3)
+    large = seme(conn, LARGE)
     items = simples + [large]
     assert en_vol(conn) == 0, "la base de test n'est qu'à nous"
 
@@ -150,7 +153,17 @@ def plafond_global(conn) -> None:
     print(f"2. items {attendus} en attente : aucune ligne node_run, donc "
           "aucun bail posé et aucune tentative consommée ✓")
 
-    # les ticks suivants les prennent, deux par deux, jusqu'au dernier
+    # les ticks suivants les prennent, jusqu'au dernier
+    #
+    # Le plafond borne le **nombre de courses simultanées**, jamais la largeur
+    # d'une seule : une course se réserve entière, sans quoi `keep_n`
+    # trancherait sur un lot amputé. Une course plus large que le plafond ne
+    # peut donc pas être différée — elle serait interdite pour toujours — et
+    # passe seule, rail vide. Ici le plafond vaut 2 et la course en compte 3 :
+    # la borne effective est celle de la plus large course semée. En
+    # production le cas n'existe pas, les plafonds ayant `FANOUT_MAX_CANDIDATES`
+    # pour plancher.
+    borne = max(scheduler.MAX_RUNS, LARGE)
     charges = [en_vol(conn)]
     for _ in range(40):
         if not actifs(conn, items):
@@ -158,13 +171,13 @@ def plafond_global(conn) -> None:
         rendre(conn)
         scheduler.tick(conn)
         charges.append(en_vol(conn))
-        assert charges[-1] <= scheduler.MAX_RUNS, \
-            f"{charges[-1]} runs en vol pour un plafond de {scheduler.MAX_RUNS}"
+        assert charges[-1] <= borne, \
+            f"{charges[-1]} runs en vol pour une borne de {borne}"
     rendre(conn)
     assert not actifs(conn, items), f"des items n'ont jamais démarré : {actifs(conn, items)}"
-    assert max(charges) <= scheduler.MAX_RUNS, charges
+    assert max(charges) <= borne, charges
     print(f"   charge tick par tick : {charges} — jamais au-dessus de "
-          f"{scheduler.MAX_RUNS} ✓")
+          f"{borne} (plafond {scheduler.MAX_RUNS}, course la plus large {LARGE}) ✓")
 
     # 3. aucun run n'a échoué d'avoir attendu, et aucun n'a brûlé de tentative
     for item_id in items:
@@ -178,32 +191,45 @@ def plafond_global(conn) -> None:
 
 
 def plafond_par_item(conn) -> None:
-    """4 : un fan-out large ne prend pas toute la place — l'autre item démarre."""
+    """4 : un fan-out large ne prend pas toute la place — l'autre item démarre.
+
+    Et il ne part **jamais en morceaux** : une course se réserve entière ou
+    attend. Une course coupée en deux serait pire qu'une course différée —
+    `keep_n` attend « tout le monde » en constatant qu'aucun run du lot ne
+    tourne, or ce lot est ce qui existe en base et non ce qui devrait exister.
+    Deux candidats sur quatre finissent, plus rien ne tourne, la réduction
+    tranche sur une course amputée, et les deux autres ne naîtront jamais.
+    """
     scheduler.MAX_RUNS, scheduler.MAX_RUNS_PER_ITEM = 3, 2
     large = seme(conn, 4)   # K = 4, au-dessus de son plafond de 2
     petit = seme(conn, None)  # le nœud bon marché, admis après lui
 
     scheduler.tick(conn)
-    assert par_item(conn, large) == 2, par_item(conn, large)
+    assert par_item(conn, large) == 0, \
+        f"la course est partie en morceaux : {par_item(conn, large)} candidats sur 4"
+    assert runs_de(conn, large) == [], \
+        "une course retenue ne doit poser ni bail ni tentative"
     assert par_item(conn, petit) == 1, \
         "l'item bon marché n'a pas démarré : le fan-out a mangé la capacité"
-    assert en_vol(conn) == 3, en_vol(conn)
-    # les candidats que le plafond de l'item retient n'ont, eux non plus, rien
-    assert len(runs_de(conn, large)) == 2, runs_de(conn, large)
-    print(f"4. item {large} en fan-out de 4 → 2 runs (son plafond), item "
-          f"{petit} démarre au même tick → {en_vol(conn)} en vol pour 3 ✓")
+    print(f"4. item {large} en fan-out de 4 : rien réservé — la course attend "
+          f"entière ; item {petit} démarre au même tick ✓")
+
+    # rail vidé, la course passe d'un bloc : le plafond borne le nombre de
+    # courses simultanées, jamais la largeur d'une seule
+    rendre(conn)
+    scheduler.tick(conn)
+    assert par_item(conn, large) == 4, par_item(conn, large)
+    print(f"   rail vide au tick suivant → les 4 candidats partent ensemble, "
+          "jamais en deux fois ✓")
 
     rendre(conn)
     for _ in range(20):
         if not actifs(conn, [large, petit]):
             break
         scheduler.tick(conn)
-        assert par_item(conn, large) <= scheduler.MAX_RUNS_PER_ITEM, par_item(conn, large)
-        assert en_vol(conn) <= scheduler.MAX_RUNS, en_vol(conn)
         rendre(conn)
     assert not actifs(conn, [large, petit]), actifs(conn, [large, petit])
-    print("   les deux items sont allés au bout, aucun item au-dessus de son "
-          f"plafond de {scheduler.MAX_RUNS_PER_ITEM} ✓")
+    print("   les deux items sont allés au bout ✓")
 
 
 def defaut_des_coeurs() -> None:
@@ -217,12 +243,24 @@ def defaut_des_coeurs() -> None:
             os.environ.pop(cle, None)
         importlib.reload(scheduler)
         coeurs = os.cpu_count() or 4
-        assert scheduler.MAX_RUNS == max(2, coeurs // 2), \
-            f"{scheduler.MAX_RUNS} n'est pas dérivé des {coeurs} cœurs"
-        assert scheduler.MAX_RUNS_PER_ITEM == max(1, scheduler.MAX_RUNS // 2), \
+        # le plancher : une course se réserve entière, donc un plafond sous
+        # la plus large course publiable l'interdirait pour toujours
+        assert scheduler.MAX_RUNS == max(graph.FANOUT_MAX_CANDIDATES,
+                                        coeurs // 2), \
+            f"{scheduler.MAX_RUNS} n'est ni les {coeurs} cœurs ni le plancher"
+        assert scheduler.MAX_RUNS_PER_ITEM == max(graph.FANOUT_MAX_CANDIDATES,
+                                                 scheduler.MAX_RUNS // 2), \
             scheduler.MAX_RUNS_PER_ITEM
-        assert scheduler.MAX_RUNS_PER_ITEM < scheduler.MAX_RUNS, \
-            "un item pourrait prendre toute la capacité"
+        # Le plafond par item reste sous le global **dès que la machine a de
+        # quoi** — c'est ce qui empêche un item d'affamer les autres. Sur une
+        # petite machine les deux tombent sur le même plancher, et c'est
+        # assumé : une course se réserve entière, donc interdire à un item
+        # d'atteindre la largeur maximale reviendrait à interdire la course.
+        assert scheduler.MAX_RUNS_PER_ITEM <= scheduler.MAX_RUNS, \
+            "un item pourrait dépasser la capacité globale"
+        if scheduler.MAX_RUNS > graph.FANOUT_MAX_CANDIDATES:
+            assert scheduler.MAX_RUNS_PER_ITEM < scheduler.MAX_RUNS, \
+                "un item pourrait prendre toute la capacité"
         print(f"6. {coeurs} cœurs → plafond {scheduler.MAX_RUNS}, "
               f"{scheduler.MAX_RUNS_PER_ITEM} par item ✓")
 

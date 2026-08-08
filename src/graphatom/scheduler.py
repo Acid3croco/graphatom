@@ -37,7 +37,7 @@ import psycopg
 
 from . import heartbeat, kernel
 from .blocks import BLOCKS, Context
-from .graph import candidate_node, load_bundle
+from .graph import FANOUT_MAX_CANDIDATES, candidate_node, fanout_variants, load_bundle
 
 RECONNECT_MAX_S = 30.0  # plafond du backoff : une base absente n'est jamais abandonnée
 
@@ -48,14 +48,19 @@ RECONNECT_MAX_S = 30.0  # plafond du backoff : une base absente n'est jamais aba
 # ses portes — une construction et une suite de tests : la moitié des cœurs
 # laisse la machine à Postgres et au reste. Aucun chiffre magique, et la
 # configuration surcharge.
+#
+# Les deux plafonds ne descendent jamais sous la plus large course
+# publiable : une course se réserve entière (voir `_dispatch`), donc un
+# plafond plus serré que `FANOUT_MAX_CANDIDATES` ne la différerait pas — il
+# l'empêcherait pour toujours. Le plafond borne le nombre de courses
+# simultanées, jamais la largeur d'une seule.
 MAX_RUNS = int(os.environ.get("GRAPHATOM_MAX_RUNS")
-               or max(2, (os.cpu_count() or 4) // 2))
+               or max(FANOUT_MAX_CANDIDATES, (os.cpu_count() or 4) // 2))
 # …et un plafond par item, sinon un item en fan-out large prend toute la
-# capacité et affame six items sur des nœuds bon marché. Toujours
-# strictement sous le plafond global : une place reste donc toujours libre
-# pour un autre item.
+# capacité et affame six items sur des nœuds bon marché. Même plancher, et
+# pour la même raison.
 MAX_RUNS_PER_ITEM = int(os.environ.get("GRAPHATOM_MAX_RUNS_PER_ITEM")
-                        or max(1, MAX_RUNS // 2))
+                        or max(FANOUT_MAX_CANDIDATES, MAX_RUNS // 2))
 
 
 def tick(conn: psycopg.Connection) -> int:
@@ -184,30 +189,74 @@ def _en_vol_item(conn: psycopg.Connection, item_id: int) -> int:
     ).fetchone()["n"]
 
 
+def _largeur(conn: psycopg.Connection, item_id: int) -> int:
+    """Combien de runs le prochain nœud de cet item demande — 1 hors fan-out.
+
+    Lue sur la révision épinglée de l'item, donc sur le graph qu'il exécute
+    et pas sur celui du moment. Un item terminal, ou posé sur un nœud qui ne
+    se réserve pas, ne demande rien.
+    """
+    item = conn.execute(
+        "SELECT state, revision, terminal_at FROM work_item WHERE id = %s", (item_id,)
+    ).fetchone()
+    if item is None or item["terminal_at"] is not None:
+        return 0
+    spec = load_bundle(conn, item["revision"])["nodes"].get(item["state"])
+    if spec is None:
+        return 0
+    return max(1, len(fanout_variants(spec)))
+
+
 def _dispatch(conn: psycopg.Connection) -> int:
     """Réserve ce que les deux plafonds laissent passer. Le reste attend.
 
     Un run que le plafond retient n'est pas réservé du tout : aucun bail
     n'est posé, aucune tentative n'est comptée, rien n'échoue — le tick
     suivant le prendra, exactement comme la file du déploiement.
+
+    **Une course se réserve entière, ou pas du tout.** Un fan-out coupé en
+    deux par un plafond serait pire qu'un fan-out différé : `keep_n` attend
+    « tout le monde » en constatant qu'aucun run du lot ne tourne, or ce lot
+    est ce qui *existe en base*, pas ce qui *devrait* exister. Deux candidats
+    réservés sur quatre finissent, plus rien ne tourne, et la réduction
+    tranche sur une course amputée — les deux autres ne naîtront jamais. On
+    ne réserve donc les K candidats que si la place les accueille tous.
     """
     libre = MAX_RUNS - en_vol(conn)
     items = conn.execute(
         "SELECT id FROM work_item WHERE terminal_at IS NULL ORDER BY id"
     ).fetchall()
     n = 0
+    trop_larges = []
     for row in items:
         if libre <= 0:
             break
         place = min(libre, MAX_RUNS_PER_ITEM - _en_vol_item(conn, row["id"]))
-        # un nœud en fan-out se réserve candidat par candidat : on rappelle
-        # tant qu'il en reste et que la place le permet, et les blocs
-        # réservés partent concurremment
-        while place > 0 and (run := kernel.claim(conn, row["id"])) is not None:
-            n += 1
-            libre -= 1
-            place -= 1
-            threading.Thread(
-                target=_execute, args=(run["id"], row["id"]), daemon=True
-            ).start()
+        largeur = _largeur(conn, row["id"])
+        if place < largeur:
+            trop_larges.append((row["id"], largeur))
+            continue  # la course ne tient pas : elle attend, entière
+        n += _reserve(conn, row["id"], place)
+        libre = MAX_RUNS - en_vol(conn)
+
+    # Dernier recours : une course plus large que le plafond lui-même. La
+    # différer ne servirait à rien — elle serait interdite pour toujours —,
+    # donc elle passe, mais seulement quand rien d'autre ne peut avancer et
+    # que le rail est vide. Le plafond borne le nombre de courses
+    # simultanées, jamais la largeur d'une seule.
+    if trop_larges and n == 0 and en_vol(conn) == 0:
+        item_id, largeur = trop_larges[0]
+        n += _reserve(conn, item_id, largeur)
+    return n
+
+
+def _reserve(conn: psycopg.Connection, item_id: int, place: int) -> int:
+    """Réserve jusqu'à `place` runs de cet item, et lance leurs blocs."""
+    n = 0
+    while place > 0 and (run := kernel.claim(conn, item_id)) is not None:
+        n += 1
+        place -= 1
+        threading.Thread(
+            target=_execute, args=(run["id"], item_id), daemon=True
+        ).start()
     return n
