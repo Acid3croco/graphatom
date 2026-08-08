@@ -1,7 +1,7 @@
 """L'ordonnanceur : un seul processus, un tick à trois passes.
 
     0. beat    — le battement du worker, tamponné avant le travail
-    1. reap    — bails expirés → révocation, crashed, routage
+    1. reap    — bails expirés → révocation, timed_out ou crashed, routage
     2. wait    — réponses arrivées et échéances de WAIT, wall_deadline
     3. dispatch— pour chaque item actif sans run : claim → bloc → apply
 

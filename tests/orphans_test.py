@@ -4,7 +4,7 @@ Scénario, sans base ni ordonnanceur — seuls le bloc agent et la révocation
 par le faucheur sont en jeu :
 
   1. un agent factice qui laisse un sous-processus derrière lui est fauché
-     au timeout, et la tentative est classée crashed avec son autopsie
+     au timeout, et la tentative est classée timed_out avec son autopsie
   2. plus aucun processus vivant de son groupe après la tentative
   3. les traces sont nommées par nœud, passage et tentative — journal
      `agent-<nœud>-<passage>-<tentative>.log` et prompt archivé à côté
@@ -120,7 +120,7 @@ def main() -> None:
     ctx = context(workdir, FACTICE, attempt=1)
     started = time.time()
     result = blocks.act(ctx)
-    assert result["outcome"] == "crashed", result
+    assert result["outcome"] == "timed_out", result  # un dépassement, pas une panne
     assert result["timeout"] is True, result
     # négatif = signal : SIGTERM s'il part à la grâce, SIGKILL sinon
     assert result["exit_code"] in (-signal.SIGTERM, -signal.SIGKILL), result

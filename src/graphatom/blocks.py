@@ -35,6 +35,12 @@ meurt, le faucheur du suivant y trouve de quoi tuer l'orphelin.
 Une tentative crashée rend son autopsie : code de sortie, queue du log et
 flag timeout. Le post-mortem se lit dans le résultat du run, pas en
 fouillant le workspace à la main.
+
+Une tentative qui déborde de son budget n'est pas une tentative en panne :
+elle rend l'issue `timed_out`, pas `crashed`. La différence n'est pas
+cosmétique — le noyau relance une panne sur place, et escalade un
+dépassement tout de suite : relancer à l'identique rebrûlerait le même
+budget pour retomber au même endroit.
 """
 
 import json
@@ -57,11 +63,22 @@ PROMPT_NAME = "prompt.md"  # l'interface avec le cmd, archivée après la tentat
 USAGE_NAME = "usage.json"  # idem — ce que l'agent veut bien dire de sa consommation
 TAIL_LINES = 20  # queue du log rendue dans l'autopsie d'une tentative crashée
 TAIL_CHARS = 2000
+AGENT_TIMEOUT_S = 570  # budget d'une tentative d'agent, quand le nœud n'en dit rien
 
 
 def item_workspace(item_id: int) -> Path:
     """Le répertoire de travail d'un item — connu du bloc comme du faucheur."""
     return DATA_DIR / f"item-{item_id}"
+
+
+def attempt_name(run: dict) -> str:
+    """Le nom d'une tentative — nœud, passage, tentative : celui de ses traces."""
+    return f"{run['node']}-{run['cycle']}-{run['attempt']}"
+
+
+def attempt_log(workspace: Path, run: dict) -> Path:
+    """Le journal d'une tentative, dans le workspace de son item."""
+    return workspace / f"agent-{attempt_name(run)}.log"
 
 
 class Context:
@@ -88,11 +105,10 @@ def _agent(ctx: Context) -> dict:
     voir. L'archivage, lui, a lieu même si le bloc est interrompu.
     """
     workspace = ctx.workspace.resolve()
-    name = f"{ctx.run['node']}-{ctx.run['cycle']}-{ctx.run['attempt']}"
     try:
-        return _attempt(ctx, workspace, name) | _usage(workspace)
+        return _attempt(ctx, workspace) | _usage(workspace)
     finally:
-        _archive(workspace, name)
+        _archive(workspace, attempt_name(ctx.run))
 
 
 def _usage(workspace: Path) -> dict:
@@ -125,7 +141,7 @@ def _archive(workspace: Path, name: str) -> None:
             path.replace(path.with_stem(f"{path.stem}-{name}"))
 
 
-def _attempt(ctx: Context, workspace: Path, name: str) -> dict:
+def _attempt(ctx: Context, workspace: Path) -> dict:
     """Une tentative d'agent. Contrat : prompt.md → outcome.json."""
     cfg = ctx.config["agent"]
     outcomes = sorted(ctx.node.get("edges") or {})
@@ -156,7 +172,7 @@ def _attempt(ctx: Context, workspace: Path, name: str) -> dict:
         # à lui seul — ce que son ordonnanceur de test y détruit ne regarde
         # ni la production ni les autres items
         env["GRAPHATOM_DSN"] = dsn
-    log = workspace / f"agent-{name}.log"
+    log = attempt_log(workspace, ctx.run)
     pgid_file = workspace / PGID_FILE
     with log.open("w") as out:
         # session dédiée : l'agent est chef de son groupe, ses descendants aussi
@@ -166,7 +182,7 @@ def _attempt(ctx: Context, workspace: Path, name: str) -> dict:
         )
         try:
             _write_pgid(pgid_file, proc, cfg["cmd"], ctx.run["id"])
-            proc.wait(timeout=float(cfg.get("timeout_s", 570)))
+            proc.wait(timeout=float(cfg.get("timeout_s", AGENT_TIMEOUT_S)))
         except subprocess.TimeoutExpired as exc:
             _kill_group(proc)  # le bail expire : le groupe entier est révoqué
             return _autopsy(proc, log, exc, timeout=True)
@@ -186,13 +202,33 @@ def _attempt(ctx: Context, workspace: Path, name: str) -> dict:
 
 def _autopsy(proc: subprocess.Popen, log: Path, exc: BaseException,
              timeout: bool) -> dict:
-    """Le post-mortem d'une tentative crashée, dans le résultat du run.
+    """Le post-mortem d'une tentative ratée, dans le résultat du run.
 
     Le code de sortie est celui du processus agent — négatif, c'est le
     signal qui l'a tué (-9 pour le SIGKILL de la révocation).
+
+    L'issue dit laquelle des deux ratés c'était : `timed_out` quand c'est le
+    budget de la tentative qui a sauté, `crashed` sinon. Le post-mortem, lui,
+    est le même des deux côtés — le flag `timeout` le redit en clair.
     """
-    return {"outcome": "crashed", "error": f"{type(exc).__name__}: {exc}",
+    return {"outcome": "timed_out" if timeout else "crashed",
+            "error": f"{type(exc).__name__}: {exc}",
             "timeout": timeout, "exit_code": proc.returncode, "log_tail": _tail(log)}
+
+
+def lease_autopsy(item_id: int, run: dict, alive: bool) -> dict:
+    """Le post-mortem d'une tentative fauchée par son bail.
+
+    Même forme que `_autopsy`, sans code de sortie : le faucheur n'a pas de
+    handle Popen. Ce qu'il sait, lui, c'est si l'agent travaillait encore à
+    l'expiration du bail — un budget dépassé, donc `timed_out` — ou s'il
+    était déjà mort — une panne, donc `crashed`. Le journal de la tentative
+    se retrouve par le nom de ses traces.
+    """
+    return {"outcome": "timed_out" if alive else "crashed",
+            "error": "bail expiré, agent " + ("encore vivant" if alive else "déjà mort"),
+            "timeout": alive, "exit_code": None,
+            "log_tail": _tail(attempt_log(item_workspace(item_id), run))}
 
 
 def _tail(log: Path) -> str:
@@ -260,6 +296,25 @@ def _identity(pid: int) -> dict | None:
     except (OSError, IndexError):
         return None
     return {"boot": boot, "starttime": int(fields[19])}  # champ 22 de proc(5)
+
+
+def agent_alive(item_id: int, run_id: int) -> bool:
+    """L'agent de ce run travaille-t-il encore ? La lecture de `revoke_orphan`,
+    sans rien tuer.
+
+    C'est ce que le faucheur interroge pour trancher entre un dépassement de
+    budget et une panne. Les mêmes garde-fous, donc : la trace doit être
+    celle du run — une tentative suivante l'écrase — et le chef du groupe
+    toujours celui qu'on a lancé, un pid se recycle mais pas son identité.
+    Pas de trace, trace d'un autre run, identité périmée : plus personne au
+    travail.
+    """
+    try:
+        trace = json.loads((item_workspace(item_id) / PGID_FILE).read_text())
+        run, pgid, who = trace["run"], trace["pgid"], trace["identity"]
+    except (OSError, ValueError, KeyError):
+        return False
+    return run == run_id and who is not None and _identity(pgid) == who
 
 
 def revoke_orphan(item_id: int, run_id: int) -> int | None:
