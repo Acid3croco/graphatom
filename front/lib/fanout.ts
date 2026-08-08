@@ -80,7 +80,10 @@ function agentCli(cmd: string | null | undefined): string | null {
  *
  * Trois façons de perdre, et le run les porte toutes : la décision l'a
  * révoqué avant qu'il rende, son bail a expiré sur un agent encore vivant,
- * ou il a rendu une issue que le noyau refuse — les portes internes.
+ * ou il a rendu une issue que le noyau refuse — une porte interne.
+ *
+ * La raison nomme la catégorie, pas l'issue : celle-ci est déjà dans sa
+ * colonne, et la répéter ici ne dirait rien de plus.
  */
 function loss(run: Run): string | null {
   if (run.status === "running") {
@@ -95,7 +98,9 @@ function loss(run: Run): string | null {
   if (run.outcome === "timed_out") {
     return "timeout";
   }
-  return run.outcome ?? "sans issue";
+  return run.outcome && KERNEL_OUTCOMES.has(run.outcome)
+    ? "porte interne"
+    : "perdu";
 }
 
 /** La somme des usages, clé à clé — les types tels qu'ils viennent. */

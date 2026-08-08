@@ -262,13 +262,13 @@ function Candidates({ candidates }: { candidates: Candidate[] }) {
               {candidate.cli ?? ""}
             </TableCell>
             <TableCell>{candidate.run.outcome ?? ""}</TableCell>
+            {/* le vert est celui du gagnant, et de lui seul : un perdant
+                qui le porterait rendrait la lecture ambiguë */}
             <TableCell>
               {candidate.winner ? (
                 <Badge variant="active">gagnant</Badge>
               ) : candidate.loss ? (
-                <Badge variant={tone(candidate.run.status)}>
-                  {candidate.loss}
-                </Badge>
+                <Badge variant="alert">{candidate.loss}</Badge>
               ) : (
                 <Badge variant="warn">en course</Badge>
               )}
