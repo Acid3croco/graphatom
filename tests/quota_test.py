@@ -113,9 +113,10 @@ def plafond_global(conn) -> None:
     procs = [lance(100 + k, secondes=1.0, quota_n=2) for k in range(5)]
     maximum = 0
     while any(p.poll() is None for p in procs):
-        maximum = max(maximum, charge(conn))
+        actuelle = charge(conn)
+        maximum = max(maximum, actuelle)
         assert maximum <= 2, maximum
-        if maximum == 2:
+        if actuelle == 2:
             vue = web._api_load(conn)
             assert vue["builds"] == 2, vue
             assert vue["max_builds"] == quota.MAX_BUILDS, vue
