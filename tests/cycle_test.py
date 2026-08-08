@@ -208,7 +208,7 @@ def main() -> None:
     repo = depot(tmp)
     os.environ["GRAPHATOM_REPO_DIR"] = str(repo)
 
-    db.init()
+    db.init_db()  # idempotent : ne détruit rien, rattrape juste le schéma
     proc = None
     try:
         with db.connect() as conn:
@@ -227,8 +227,13 @@ def main() -> None:
                          f"après {TIMEOUT_S} s")
             if item["state"] != "close":
                 sys.exit(f"ÉCHEC : terminal sur « {item['state']} », attendu « close »")
+            # `escalations` est un reste, pas un compte : le budget d'origine
+            # intact dit qu'un cycle nominal ne paie aucune escalade
+            budget = graph.load_bundle(conn, item["revision"])["budgets"]["escalations"]
+            assert item["escalations"] == budget, item["escalations"]
             print(f"2. item terminal sur « close » en v{item['version']}, "
-                  f"passage {item['cycle']}, {item['escalations']} escalade(s) ✓")
+                  f"passage {item['cycle']}, budget d'escalade intact "
+                  f"({budget}) ✓")
 
             verifier(conn, item_id)
     finally:
@@ -242,10 +247,9 @@ def main() -> None:
 
 def verifier(conn, item_id: int) -> None:
     """Le chemin parcouru, les finalistes, et le prix du jugement à part."""
-    passage = [e["to_state"] for e in conn.execute(
-        "SELECT to_state FROM item_event WHERE item_id = %s AND to_state IS NOT NULL "
-        "ORDER BY item_version", (item_id,))]
-    chemin = ["ingest"] + passage
+    chemin = [e["to_state"] for e in conn.execute(
+        "SELECT to_state FROM event WHERE item_id = %s ORDER BY item_version",
+        (item_id,))]
     if chemin != ATTENDU:
         sys.exit(f"ÉCHEC : chemin {chemin}\n         attendu {ATTENDU}")
     print(f"3. chemin d'origine tenu, {len(chemin)} nœuds : "
@@ -271,7 +275,7 @@ def verifier(conn, item_id: int) -> None:
     # page de l'item montre, et c'est mesurable ici sur les mêmes lignes
     prix = {r["part"]: r["cout"] for r in conn.execute(
         "SELECT CASE WHEN node = 'judge' THEN 'jugement' ELSE 'candidats' END AS part, "
-        "sum((usage->>'total_cost_usd')::float) AS cout FROM node_run "
+        "sum((result->'usage'->>'total_cost_usd')::float) AS cout FROM node_run "
         "WHERE item_id = %s AND node IN ('judge', 'implement') GROUP BY 1",
         (item_id,))}
     assert prix.get("jugement") == 4.0, prix
