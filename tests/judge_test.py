@@ -34,13 +34,14 @@ import subprocess
 import sys
 import tempfile
 import threading
-import time
 import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, graph, kernel, scheduler, worktree  # noqa: E402
+
+from outils import attendre, etat, git  # noqa: E402
 
 # hermétisme : les agents d'ici sont des scripts shell, ils n'ont pas de base
 os.environ.pop("GRAPHATOM_AGENT_DSN", None)
@@ -141,12 +142,6 @@ def bundle(issues: list[str], elu: str = "B", keep: int = 2) -> dict:
 # ------------------------------------------------------------------ outillage
 
 
-def git(cwd: Path, *args: str) -> str:
-    out = subprocess.run(["git", "-C", str(cwd), *args],
-                         capture_output=True, text=True, check=True)
-    return out.stdout.strip()
-
-
 def depot(tmp: Path) -> Path:
     """Un dépôt jetable, un commit de socle. `GRAPHATOM_REPO_DIR` y est épinglé."""
     repo = tmp / "repo"
@@ -161,24 +156,9 @@ def depot(tmp: Path) -> Path:
     return repo
 
 
-def attendre(predicat, seconds: float = 60.0) -> bool:
-    """Attend qu'un fait devienne vrai — une course n'est pas synchrone."""
-    deadline = time.time() + seconds
-    while time.time() < deadline:
-        if predicat():
-            return True
-        time.sleep(0.05)
-    return predicat()
-
-
 def ancetre(repo: Path, sha: str, branche: str) -> bool:
     return subprocess.run(["git", "-C", str(repo), "merge-base",
                            "--is-ancestor", sha, branche]).returncode == 0
-
-
-def etat(conn, item_id: int) -> dict:
-    return conn.execute("SELECT * FROM work_item WHERE id = %s",
-                        (item_id,)).fetchone()
 
 
 def runs_de(conn, item_id: int, node: str | None = None) -> list[dict]:
@@ -302,7 +282,7 @@ def chosen(conn, workdir: Path, repo: Path) -> None:
 
     run_id, fil = lancer_juge(conn, item_id)
     vu = workspace / "prompt-vu.md"
-    assert attendre(lambda: vu.is_file()), "le faux modèle du juge n'a jamais démarré"
+    assert attendre(lambda: vu.is_file(), 60.0), "le faux modèle du juge n'a jamais démarré"
     pendant = photo(repo, ateliers)
     assert pendant == avant, f"le juge a écrit chez un candidat : {avant} → {pendant}"
     (workspace / "go").write_text("")  # le modèle rend son verdict
@@ -340,7 +320,7 @@ def chosen(conn, workdir: Path, repo: Path) -> None:
     assert RAISON in verdict, verdict
     assert run["result"]["elu"] == "B", run["result"]
 
-    assert attendre(lambda: git(repo, "branch", "--list", f"{branche}-c*") == ""), \
+    assert attendre(lambda: git(repo, "branch", "--list", f"{branche}-c*") == "", 60.0), \
         "les ateliers des candidats n'ont pas été rangés"
     assert ancetre(repo, commits[elu], branche), \
         f"le commit de l'élu c{elu} n'a pas rejoint {branche}"

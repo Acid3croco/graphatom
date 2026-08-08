@@ -40,13 +40,14 @@ import shutil
 import sys
 import tempfile
 import threading
-import time
 import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, graph, kernel, scheduler, web  # noqa: E402
+
+from outils import attendre, etat  # noqa: E402
 
 # hermétisme : sans instance jetable dans l'environnement, le bloc ne dérive
 # aucune base — les agents factices d'ici n'en ont pas besoin
@@ -150,16 +151,6 @@ def bundle_stub(k: int | None, keep: int | None = None) -> dict:
 # ------------------------------------------------------------------ outillage
 
 
-def attendre(predicat, seconds: float = 15.0) -> bool:
-    """Attend qu'un fait devienne vrai — une course n'est pas synchrone."""
-    deadline = time.time() + seconds
-    while time.time() < deadline:
-        if predicat():
-            return True
-        time.sleep(0.05)
-    return predicat()
-
-
 def vivant(pgid: int) -> bool:
     """Reste-t-il quelqu'un dans ce groupe de processus ?"""
     try:
@@ -167,12 +158,6 @@ def vivant(pgid: int) -> bool:
     except ProcessLookupError:
         return False
     return True
-
-
-def etat(conn, item_id: int) -> dict:
-    return conn.execute(
-        "SELECT * FROM work_item WHERE id = %s", (item_id,)
-    ).fetchone()
 
 
 def runs_de(conn, item_id: int) -> list[dict]:
@@ -253,7 +238,7 @@ def course(conn, workdir: Path) -> int:
         fil.start()
         fils.append(fil)
     traces = [workspace / f"c{k}" / blocks.PGID_FILE for k in (0, 1)]
-    assert attendre(lambda: all(t.is_file() for t in traces)), \
+    assert attendre(lambda: all(t.is_file() for t in traces), 15.0), \
         f"les candidats lents n'ont pas laissé leur trace : {traces}"
     pgids = {k: json.loads(trace.read_text())["pgid"]
              for k, trace in zip((0, 1), traces)}

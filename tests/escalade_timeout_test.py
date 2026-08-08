@@ -40,6 +40,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from graphatom import blocks, db, github_sync as gs, graph, kernel  # noqa: E402
 from graphatom.kernel import MAX_ATTEMPTS  # noqa: E402
 
+from outils import etat  # noqa: E402
+
 # hermétisme : pas d'instance jetable dans l'environnement, donc aucun bloc
 # d'ici ne dérive la base d'un item qui existe pour de vrai
 os.environ.pop("GRAPHATOM_AGENT_DSN", None)
@@ -134,12 +136,6 @@ def survivants(pgid: int, secondes: float = 3.0) -> list[int]:
     while time.time() < echeance and groupe_vivant(pgid):
         time.sleep(0.1)
     return groupe_vivant(pgid)
-
-
-def etat(conn, item_id: int) -> dict:
-    return conn.execute(
-        "SELECT * FROM work_item WHERE id = %s", (item_id,)
-    ).fetchone()
 
 
 def dernier_event(conn, item_id: int) -> dict:

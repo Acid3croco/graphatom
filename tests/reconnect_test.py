@@ -32,6 +32,8 @@ import psycopg  # noqa: E402
 
 from graphatom import blocks, db, kernel, scheduler  # noqa: E402
 
+from outils import kill_group, sh  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 # comme le crash-test : le test travaille dans un répertoire à lui, jamais
 # dans ROOT/data, qui peut être le data/ vivant d'un rail (workspaces d'items)
@@ -47,14 +49,6 @@ ENTRE_S = 2.0      # temps laissé au worker pour retravailler entre deux
 TIMEOUT_S = 150    # un run fauché en vol coûte un bail (30 s) avant d'être retenté
 
 
-def sh(*args: str) -> str:
-    out = subprocess.run(
-        ["uv", "run", "graphatom", *args],
-        cwd=ROOT, capture_output=True, text=True, check=True,
-    )
-    return out.stdout.strip()
-
-
 def scheduler_proc(journal: Path) -> subprocess.Popen:
     # comme le crash-test : le binaire du venv, dans son propre groupe
     return subprocess.Popen(
@@ -62,14 +56,6 @@ def scheduler_proc(journal: Path) -> subprocess.Popen:
         cwd=WORK, start_new_session=True,
         stdout=journal.open("w"), stderr=subprocess.STDOUT,
     )
-
-
-def kill_group(proc: subprocess.Popen, sig: int) -> None:
-    try:
-        os.killpg(os.getpgid(proc.pid), sig)
-    except ProcessLookupError:
-        pass
-    proc.wait()
 
 
 def couper(conn: psycopg.Connection) -> int:

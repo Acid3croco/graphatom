@@ -30,6 +30,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from graphatom import db, graph, kernel  # noqa: E402
 from graphatom.kernel import MAX_ATTEMPTS  # noqa: E402
 
+from outils import etat  # noqa: E402
+
 BUNDLE = {
     "name": "passage-test",
     "entry": "travail",
@@ -87,12 +89,6 @@ def brule_le_passage(conn, item_id: int, cycle: int) -> None:
         assert run["cycle"] == cycle, run["cycle"]
         assert run["attempt"] == attendu, (run["attempt"], attendu)
         kernel.apply(conn, run["id"], {"outcome": "crashed"})
-
-
-def etat(conn, item_id: int) -> dict:
-    return conn.execute(
-        "SELECT * FROM work_item WHERE id = %s", (item_id,)
-    ).fetchone()
 
 
 def avance(conn, item_id: int, outcome: str) -> dict:

@@ -28,7 +28,6 @@ Usage : uv run python tests/silence_test.py
 
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 import time
@@ -39,6 +38,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, github_sync as gs, graph, kernel  # noqa: E402
 from graphatom.kernel import MAX_ATTEMPTS  # noqa: E402
+
+from outils import etat, git  # noqa: E402
 
 # hermétisme : pas d'instance jetable dans l'environnement, donc aucun bloc
 # d'ici ne dérive la base d'un item qui existe pour de vrai
@@ -127,12 +128,6 @@ def contexte(workdir: Path, cmd: str, node: str, budget_s: float = BUDGET_S,
     )
 
 
-def git(repo: Path, *args: str) -> str:
-    out = subprocess.run(["git", "-C", str(repo), *args],
-                         capture_output=True, text=True, check=True)
-    return out.stdout.strip()
-
-
 def worktree_factice(tmp: Path) -> Path:
     """Le worktree de l'item, avec un travail en cours dedans.
 
@@ -173,12 +168,6 @@ def worktree_propre(repo: Path) -> Path:
     git(worktree, "add", "-A")
     git(worktree, "commit", "-qm", "socle")
     return worktree
-
-
-def etat(conn, item_id: int) -> dict:
-    return conn.execute(
-        "SELECT * FROM work_item WHERE id = %s", (item_id,)
-    ).fetchone()
 
 
 def dernier_event(conn, item_id: int) -> dict:
