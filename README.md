@@ -186,18 +186,22 @@ d'un autre canal n'a pas de titre : cellule vide, rien de cassé.
 curl -s localhost:8848/api/items | jq '.[0]'
 curl -s localhost:8848/api/item/1 | jq 'keys'
 curl -s localhost:8848/api/questions | jq '.token'
+curl -s localhost:8848/api/load | jq
 curl -s localhost:8848/api/graphs | jq '.[0]'
 curl -s localhost:8848/api/graph/<rév> | jq '.nodes | keys'
 curl -s -H 'Accept: application/json' \
      -d "question_id=1&option=retry&token=<jeton>" localhost:8848/answer
 ```
 
-Six lectures, pour un client qui rend les pages lui-même : `/api/items`
+Sept lectures, pour un client qui rend les pages lui-même : `/api/items`
 (la table, avec l'état, le statut et les liens issue et PR), `/api/item/<id>`
 (l'item entier : `item`, `graph`, `journal`, `runs`, `effects`, `questions`,
 `criteria`, `files`), `/api/questions` (les questions ouvertes),
 `/api/heartbeat` (les deux battements bruts, `rail` et `github-sync`, chacun
-avec son horodatage, son âge et son état périmé), `/api/graphs` (les
+avec son horodatage, son âge et son état périmé), `/api/load` (la charge de
+l'ordonnanceur : les runs en vol, et les deux plafonds qui les bornent — voir
+[la file du dispatch](#la-charge-a-un-plafond--le-dispatch-est-une-file)),
+`/api/graphs` (les
 révisions publiées : nom, date, nombre d'items qui la portent) et
 `/api/graph/<rév>` (le bundle entier de cette révision, config des nœuds et
 prompts compris). Une projection, pas un second modèle :
@@ -1201,6 +1205,63 @@ moyens :
   de télécharger des poids — c'est une option ouverte, pas un prérequis.
   **Le modèle est un paramètre de configuration : l'architecture ne doit
   dépendre d'aucun fournisseur.**
+
+### La charge a un plafond : le dispatch est une file
+
+Le fan-out multiplie la charge, et rien ne la bornait. Mesuré le 2026-08-08,
+quelques minutes après la première mise en service réelle : 7 items actifs ×
+4 candidats = 28 runs en vol, 27 processus `claude` sur une machine à 12
+cœurs, load average 22 au pic, et **Postgres tombé deux fois** dans la
+journée. Tant qu'un item n'avait qu'un run par nœud, le nombre d'items
+bornait la charge tout seul ; le fan-out a supprimé cette borne implicite
+sans la remplacer.
+
+Deux plafonds la remplacent, dans l'ordonnanceur. Tous deux dérivés du nombre
+de cœurs de la machine — aucun chiffre magique — et surchargeables :
+
+| plafond | défaut | sur 12 cœurs | surcharge |
+| --- | --- | --- | --- |
+| runs en vol, tous items confondus | `max(2, cœurs // 2)` | 6 | `GRAPHATOM_MAX_RUNS` |
+| runs en vol d'un même item | `max(1, plafond // 2)` | 3 | `GRAPHATOM_MAX_RUNS_PER_ITEM` |
+
+**Pourquoi la moitié des cœurs.** Un candidat ne coûte pas un agent qui écrit
+du texte : il coûte un agent **plus ses portes** — une construction et une
+suite de tests, qui saturent un cœur chacune pendant qu'elles tournent. Un
+run vaut donc plus qu'un cœur, et six runs sur douze cœurs laissent la
+machine à Postgres, au canal GitHub et au front. Le défaut est
+volontairement prudent : mieux vaut un rail un peu lent qu'une base qui
+tombe.
+
+**Pourquoi un plafond par item.** Sans lui, un item en fan-out à huit
+candidats occupe toute la capacité et bloque six items sur des nœuds bon
+marché. La moitié du plafond global le tient strictement sous celui-ci : il
+reste toujours de la place pour un autre item, donc la course d'un item ne
+famine jamais les autres.
+
+**Ce que le plafond retient attend — rien n'échoue.** Un run retenu n'est pas
+réservé du tout : aucune ligne `node_run`, donc aucun bail posé, aucune
+tentative consommée, aucune issue d'échec, rien à annuler. Le tick suivant le
+prend. C'est la file du déploiement, appliquée au dispatch.
+
+**La redondance des portes internes : restreinte, pas sérialisée.** Quatre
+candidats de la même issue construisent le projet et lancent la même suite
+de tests, et c'est ce qui coûte. On ne la sérialise pas et on ne la partage
+pas : une porte jouée une fois pour tous ne prouverait plus rien sur le diff
+d'un candidat en particulier, et c'est précisément ce que la course
+sélectionne. Le plafond par item la **borne** — au plus trois portes en vol
+pour une même issue sur cette machine, les candidats suivants partant aux
+ticks d'après, à mesure que leurs frères rendent. Conséquence assumée : un
+fan-out plus large que ce plafond court en vagues plutôt que tous ensemble.
+La réduction, elle, ne change pas d'un pouce — elle attend les runs de la
+tentative, et le dispatch continue de réserver les candidats manquants tant
+que l'item est sur son nœud ; si tous les candidats réservés rendaient dans
+le même tick, elle trancherait sur eux seuls, ce que des agents à l'échelle
+de la minute ne produisent pas, mais qui est dit ici plutôt que caché.
+
+**La charge se lit hors de la base.** `GET /api/load` rend les runs en vol et
+les deux plafonds effectifs — `{"running": 4, "max_runs": 6,
+"max_runs_per_item": 3}` : une saturation ne se diagnostique plus à coups de
+`ps`.
 
 ## Ce qu'on ne fera jamais
 
