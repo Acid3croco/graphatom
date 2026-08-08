@@ -81,10 +81,10 @@ ITEM = {
 }
 
 ROUTES = {
-    "/item/1": ITEM,
-    "/questions": {"token": "doublure", "questions": []},
-    "/heartbeat": {"rail": {"at": None, "ago_s": 0.0, "stale": True},
-                   "github-sync": {"at": None, "ago_s": 0.0, "stale": True}},
+    "/api/item/1": ITEM,
+    "/api/questions": {"token": "doublure", "questions": []},
+    "/api/heartbeat": {"rail": {"at": None, "ago_s": 0.0, "stale": True},
+                       "github-sync": {"at": None, "ago_s": 0.0, "stale": True}},
 }
 
 

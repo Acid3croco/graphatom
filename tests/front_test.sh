@@ -53,6 +53,17 @@ echo "3. le prix du jugement, à part de celui des candidats"
 uv run --project "$ROOT" python "$ROOT/tests/front_stub_api.py" "$API_PORT" &
 STUB=$!
 
+# La doublure d'abord, et son échec se dit ici : un port déjà pris se
+# lirait sinon comme une page qui ne rend pas, quarante secondes plus tard.
+for _ in $(seq 20); do
+    curl -sf "http://127.0.0.1:$API_PORT/api/item/1" >/dev/null 2>&1 && break
+    sleep 0.5
+done
+if ! curl -sf "http://127.0.0.1:$API_PORT/api/item/1" >/dev/null 2>&1; then
+    echo "ÉCHEC : la doublure n'écoute pas sur $API_PORT" >&2
+    exit 1
+fi
+
 # `--network host` : le serveur Next rend la page côté conteneur, c'est donc
 # lui qui appelle la doublure — sur la boucle locale de l'hôte.
 CONTENEUR=$(docker run -d --network host \
