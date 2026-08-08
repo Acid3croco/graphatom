@@ -54,6 +54,7 @@ def declaration() -> None:
     assert "CODEX_REASONING_EFFORT=high" in sol
     assert "agent-opencode.sh" in gratuit
     assert "opencode/deepseek-v4-flash-free" in gratuit
+    assert variants[2]["agent"]["silence_s"] == 300
     assert "claude " not in json.dumps(BUNDLE)
     print("1. scope et judge Sol high ; course Luna medium + Sol high + "
           "DeepSeek gratuit ; portes légères sur Luna ✓")

@@ -215,12 +215,11 @@ def _dispatch(conn: psycopg.Connection) -> int:
     suivant le prendra, exactement comme la file du déploiement.
 
     **Une course se réserve entière, ou pas du tout.** Un fan-out coupé en
-    deux par un plafond serait pire qu'un fan-out différé : `keep_n` attend
-    « tout le monde » en constatant qu'aucun run du lot ne tourne, or ce lot
-    est ce qui *existe en base*, pas ce qui *devrait* exister. Deux candidats
-    réservés sur quatre finissent, plus rien ne tourne, et la réduction
-    tranche sur une course amputée — les deux autres ne naîtront jamais. On
-    ne réserve donc les K candidats que si la place les accueille tous.
+    deux par un plafond serait pire qu'un fan-out différé : une réduction ne
+    voit que le lot qui *existe en base*, pas celui qui *devrait* exister.
+    Deux candidats réservés sur quatre pourraient donc suffire à `keep_n`,
+    puis faire avancer l'item avant que les deux autres ne naissent. On ne
+    réserve les K candidats que si la place les accueille tous.
     """
     libre = MAX_RUNS - en_vol(conn)
     items = conn.execute(
