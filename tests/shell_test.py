@@ -21,6 +21,9 @@ le test prend celle que `GRAPHATOM_DSN` désigne, sans y écrire une ligne.
   9. son pas de rapprochement traverse les quatre cas : déjà à jour, merge
      automatique, conflit (code 9, worktree laissé propre), fetch en échec,
      et deux fois de plus sur le worktree sale que le rail a vraiment
+     ; puis sa porte de construction traverse les cinq siens : absorption
+     vide sans aucune porte, contenu sain avec et sans `front/`, et les
+     deux ruptures — python, puis build front — en code 11 sans PR
  10. la frontière tient dans le bundle : un nœud mécanique ne lance aucun
      modèle, un nœud à modèle rend son `usage.json`, les trois nœuds de
      retrait sont le même shell, et aucun ne teste `.git` comme un chemin
@@ -103,6 +106,10 @@ def depot(tmp: Path) -> Path:
     git(source, "config", "user.email", "shell@test.invalid")
     git(source, "config", "user.name", "shell")
     (source / "socle.txt").write_text("le commit de départ\n")
+    # le paquet python du dépôt jetable : la porte de construction de la
+    # release compile `src/`, et un dépôt sans `src/` n'aurait rien à lui dire
+    (source / "src").mkdir()
+    (source / "src" / "socle.py").write_text("def socle():\n    return 1\n")
     git(source, "add", "-A")
     git(source, "commit", "-qm", "socle")
     git(source, "push", "-q", "origin", "main")
@@ -154,6 +161,40 @@ def sans_gh(tmp: Path) -> str:
     faux = binaires / "gh"
     faux.write_text("#!/bin/sh\nexit 1\n")
     faux.chmod(0o755)
+    return f"{binaires}:{os.environ['PATH']}"
+
+
+def faux_npm(tmp: Path, nom: str, code: int, sortie: str) -> str:
+    """Un PATH sans `gh`, où `npm` joue le build du front et rend `code`.
+
+    Le vrai `npm run build` demande `node_modules` et coûte des minutes :
+    ce qui se vérifie ici, c'est que la porte le lance et lit son code, pas
+    que Next sait construire.
+    """
+    binaires = tmp / nom
+    binaires.mkdir()
+    faux = binaires / "npm"
+    faux.write_text(f"#!/bin/sh\necho '{sortie}'\nexit {code}\n")
+    faux.chmod(0o755)
+    refus = binaires / "gh"
+    refus.write_text("#!/bin/sh\nexit 1\n")
+    refus.chmod(0o755)
+    return f"{binaires}:{os.environ['PATH']}"
+
+
+def portes_muettes(tmp: Path, nom: str) -> str:
+    """Un PATH sans `gh`, où `python3` et `npm` échouent d'entrée.
+
+    Rien d'autre que la porte de construction ne les lance : une release
+    qui traverse ce PATH n'a donc exécuté aucune porte, et le prouve mieux
+    qu'une absence de ligne dans le compte rendu.
+    """
+    binaires = tmp / nom
+    binaires.mkdir()
+    for outil in ("python3", "npm", "gh"):
+        refus = binaires / outil
+        refus.write_text(f"#!/bin/sh\necho '{outil} ne devait pas être lancé' >&2\nexit 1\n")
+        refus.chmod(0o755)
     return f"{binaires}:{os.environ['PATH']}"
 
 
@@ -372,6 +413,7 @@ def cas_release(tmp: Path, nom: str) -> tuple[Path, Path, Path]:
 def avance_main(repo: Path, fichier: str, contenu: str) -> str:
     """Un commit de plus sur `origin/main`, comme un item voisin qui merge."""
     source = repo.parent / "source"
+    (source / fichier).parent.mkdir(parents=True, exist_ok=True)
     (source / fichier).write_text(contenu)
     git(source, "add", "-A")
     git(source, "commit", "-qm", f"main avance sur {fichier}")
@@ -535,6 +577,71 @@ def main() -> None:
     assert git(worktree, "status", "--porcelain") == "M socle.txt", "le travail a bougé"
     print("9 bis. worktree sale : merge quand même si main est ailleurs, "
           "code 9 sans rien perdre sinon ✓")
+
+    # 9 ter. la porte de construction, après une absorption non vide. Deux
+    #    branches se compilaient chacune de son côté, leur merge n'a pas un
+    #    marqueur de conflit, et `main` sort cassée : git a raison sur le
+    #    texte et tort sur le sens. La porte tranche ce cas au compilateur,
+    #    en secondes, plutôt qu'à un cycle d'agents de test.
+
+    # 1. absorption vide : aucune porte n'est exécutée. Le PATH le prouve —
+    #    `python3` et `npm` y échouent, et la release passe quand même
+    repo, workspace, worktree = cas_release(tmp, "portes-a-jour")
+    assert release(repo, workspace, SUJET, {"PATH": portes_muettes(tmp, "muettes")}) == 6
+    rapport = (workspace / "release.md").read_text()
+    assert "rien d'absorbé" in rapport, rapport
+    assert "porte" not in rapport, rapport
+
+    # 2. absorption non vide et saine, hors `front/` : la porte python passe
+    #    et se nomme — et la porte front, elle, n'est pas exécutée
+    repo, workspace, worktree = cas_release(tmp, "portes-saines")
+    travaille(worktree, "travail.txt", "l'implémentation de l'item\n")
+    avance_main(repo, "src/voisin.py", "def voisin():\n    return 1\n")
+    assert release(repo, workspace, SUJET, aveugle) == 6
+    rapport = (workspace / "release.md").read_text()
+    assert "porte compilation python : passée" in rapport, rapport
+    assert "front" not in rapport, rapport  # rien d'absorbé sous front/
+
+    # 3. absorption non vide touchant `front/` : les deux portes s'exécutent
+    repo, workspace, worktree = cas_release(tmp, "portes-front")
+    travaille(worktree, "travail.txt", "l'implémentation de l'item\n")
+    avance_main(repo, "front/graph-view.tsx", "export const vue = () => null\n")
+    assert release(repo, workspace, SUJET, {"PATH": faux_npm(tmp, "npm-passe", 0, "construit")}) == 6
+    rapport = (workspace / "release.md").read_text()
+    assert "porte compilation python : passée" in rapport, rapport
+    assert "porte construction front : passée" in rapport, rapport
+
+    # 4. l'absorption casse la compilation python : code 11, la sortie du
+    #    compilateur dans `release.md`, aucune PR tentée, et le worktree
+    #    laissé sur sa fusion — c'est un état à réparer, pas à effacer
+    repo, workspace, worktree = cas_release(tmp, "portes-python-cassee")
+    travaille(worktree, "travail.txt", "l'implémentation de l'item\n")
+    avance_main(repo, "src/casse.py", "def casse(:\n    return 1\n")
+    assert release(repo, workspace, SUJET, aveugle) == 11
+    rapport = (workspace / "release.md").read_text()
+    assert "casse.py" in rapport and "SyntaxError" in rapport, rapport
+    assert "gh pr" not in rapport, "une PR tentée sur un contenu qui ne compile pas"
+    assert len(git(worktree, "rev-list", "--parents", "-n", "1", "HEAD").split()) == 3, \
+        "la fusion à réparer a été effacée"
+
+    # 5. l'absorption casse le build du front : même code, même compte rendu
+    repo, workspace, worktree = cas_release(tmp, "portes-front-cassee")
+    travaille(worktree, "travail.txt", "l'implémentation de l'item\n")
+    avance_main(repo, "front/graph-view.tsx", "export const vue = () => null\n")
+    casse = faux_npm(tmp, "npm-casse", 1, "graph-view.tsx(25,8): error TS2741")
+    assert release(repo, workspace, SUJET, {"PATH": casse}) == 11
+    rapport = (workspace / "release.md").read_text()
+    assert "TS2741" in rapport, rapport
+    assert "gh pr" not in rapport, "une PR tentée sur un front qui ne construit pas"
+
+    # 6. le README dit la release telle qu'elle est : un merge, jamais un
+    #    rebase, et la porte que ce merge traverse
+    readme = (ROOT / "README.md").read_text()
+    assert "rebase quand le rebase passe tout seul" not in readme, \
+        "le README décrit encore la release comme rebasant"
+    assert "porte de construction" in readme, "le README ne documente pas la porte"
+    print("9 ter. porte de construction : rien sur une absorption vide, python "
+          "et front sur une absorption saine, code 11 sur chaque rupture ✓")
 
     # 10. la frontière du bundle, relue à chaque tour : les nœuds mécaniques
     #    n'appellent aucun modèle, et ceux qui en appellent un rendent le
