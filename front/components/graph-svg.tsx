@@ -41,6 +41,17 @@
  * `current` est vide, aucun nœud n'est peint, et c'est `onSelect` qui rend
  * alors les nœuds cliquables pour lire leur config.
  *
+ * L'orientation par défaut est TB : de haut en bas, un graph tient dans la
+ * largeur d'un téléphone là où LR le couche sur plusieurs écrans. Ce n'est
+ * que le défaut d'une vue neuve — un choix déjà rangé revient tel quel.
+ *
+ * Le plein écran passe par l'API du navigateur quand elle est là. Safari
+ * iOS ne la donne pas sur un `<div>` : `requestFullscreen` n'y existe pas,
+ * et l'appeler à l'aveugle jetait une erreur, donc le bouton ne faisait
+ * rien. À défaut d'API — ou si elle refuse — le conteneur se met lui-même
+ * en `fixed inset-0`, ce qui donne la même vue sans rien demander à
+ * personne. Le bouton Minimize en sort, la touche Échap aussi.
+ *
  * Sur téléphone le dessin se met à la largeur du bloc, comme partout : un
  * graph de six couches y tient en entier mais en tout petit, et c'est le
  * zoom qui le rend lisible. Les boutons de la visionneuse sont donc la
@@ -123,8 +134,12 @@ export function GraphSvg({
   selected?: string | null;
   onSelect?: (name: string) => void;
 }) {
-  const [orient, setOrient] = useState<Orient>("LR");
-  const [full, setFull] = useState(false);
+  const [orient, setOrient] = useState<Orient>("TB");
+  // plein écran de l'API du navigateur, suivi par son propre événement
+  const [native, setNative] = useState(false);
+  // plein écran du repli CSS, quand l'API n'est pas là ou qu'elle refuse
+  const [css, setCss] = useState(false);
+  const full = native || css;
   // le cadrage choisi, ou `null` pour l'ajustement initial
   const [view, setView] = useState<View | null>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -213,19 +228,45 @@ export function GraphSvg({
   }, [zoomAt]);
 
   useEffect(() => {
-    const sync = () => setFull(document.fullscreenElement === box.current);
+    const sync = () => setNative(document.fullscreenElement === box.current);
     document.addEventListener("fullscreenchange", sync);
     return () => document.removeEventListener("fullscreenchange", sync);
   }, []);
 
+  // le repli n'est qu'un jeu de classes : Échap n'en sort que si on l'écoute.
+  // L'API native, elle, a déjà sa touche Échap — il n'y a rien à y ajouter.
+  useEffect(() => {
+    if (!css) {
+      return;
+    }
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setCss(false);
+      }
+    };
+    document.addEventListener("keydown", esc);
+    return () => document.removeEventListener("keydown", esc);
+  }, [css]);
+
+  /** Entrer en plein écran, ou en sortir — par l'API si elle est là. */
   function fullscreen() {
+    if (css) {
+      setCss(false);
+      return;
+    }
     if (document.fullscreenElement) {
       document.exitFullscreen();
       return;
     }
+    const el = box.current;
+    if (!el?.requestFullscreen) {
+      // Safari iOS ne met pas un `<div>` en plein écran : l'API n'y est pas
+      setCss(true);
+      return;
+    }
     // le navigateur refuse le plein écran hors geste utilisateur : c'est
-    // son droit, pas une panne du front, et il n'y a rien à en dire
-    box.current?.requestFullscreen().catch(() => undefined);
+    // son droit, pas une panne du front, et le repli prend alors la main
+    el.requestFullscreen().catch(() => setCss(true));
   }
 
   /** Un cran de zoom au bouton : centré sur le milieu du cadre. */
@@ -321,6 +362,7 @@ export function GraphSvg({
       className={cn(
         "relative rounded-md border bg-background",
         full && "flex h-full w-full items-center justify-center",
+        css && "fixed inset-0 z-50",
       )}
     >
       <div className="absolute right-2 top-2 z-10 flex gap-1">
