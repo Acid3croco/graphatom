@@ -11,6 +11,7 @@ L'idée : des portes successives dont l'exécution est certaine — du code atom
 - [`index.html`](index.html) — **le noyau** (v2, simplifié) : six pièces, sept concepts utilisateur, quatre gardes de frontière, sept tables.
 - [`cas-usage.html`](cas-usage.html) — **le cas d'usage pilote** : d'une carte Notion à la prod. Trois gestes humains, le reste est le rail. C'est ce scénario qui pilote les choix.
 - [`pourquoi.html`](pourquoi.html) — **pourquoi pas Temporal/Restate/LangGraph** : les cinq garanties qu'aucun moteur existant ne donne. Le moteur est une commodité, les portes sont le produit.
+- [`DECOUPE.md`](DECOUPE.md) — **découper un travail en N morceaux différents, et le recoller** : la forme de configuration, les agrégations retenues bloc par bloc, le sort d'un morceau en échec, et pourquoi l'invariant d'état unique tient. Conception seule — rien n'en est encore exécutable.
 - [`archive/graph-runner-original.html`](archive/graph-runner-original.html) — la dérivation complète (v1) : algèbre de capacités, particules élémentaires, forces d'interaction, les douze trous de frontière. Le raisonnement, pas la spécification.
 
 ## Le noyau en six pièces
@@ -81,6 +82,9 @@ uv run python tests/links_test.py                    # les liens du frontend ver
                                                      # dans la table, sans base
 uv run python tests/depends_test.py                  # `Depends-on: #N` : l'admission
                                                      # attend, sans base ni réseau
+uv run python tests/split_deps_test.py               # une découpe reporte les
+                                                     # dépendances de la mère sur la
+                                                     # dernière fille, puis la ferme
 uv run python tests/hermetic_test.py                 # ce qu'un agent lance ne voit
                                                      # ni la base ni le dépôt de la
                                                      # production
@@ -888,10 +892,19 @@ au worktree : il lit, il écrit, il crée des issues.
   create --label graphatom`), chacune atomique avec ses critères dans son
   corps, chaînées par `Depends-on: #N` quand l'ordre compte — deux filles
   qui touchent les mêmes fichiers se sérialisent —, et une task list
-  `- [ ] #fille` dans la mère pour l'œil. Puis il **ferme la mère** sur
-  GitHub (`gh issue close`, commentaire *Découpée en #A, #B — suivi sur les
-  filles.*) : son cycle s'arrête là, aucune pull request ne viendra la
-  fermer. La fermeture est idempotente, un rejeu du nœud ne la casse pas.
+  `- [ ] #fille` dans la mère pour l'œil. Puis il **ferme la mère** par
+  `graphatom split-close --repo … --mother … --children A B C`, qui reporte
+  d'abord les dépendances : toute issue encore en attente qui porte
+  `Depends-on: #<mère>` voit cette ligne — et elle seule — réécrite vers la
+  **dernière fille** de la chaîne, avec le commentaire qui nomme l'ancienne
+  cible et la nouvelle. Sans ce report, la fermeture de la mère satisfait
+  une dépendance sans livrer le travail attendu, et le dépendant part pour
+  rien. L'ordre fait la sûreté : tant qu'un dépendant n'est pas reporté, la
+  mère reste ouverte, donc personne n'est libéré — une réécriture
+  impossible arrête la découpe en nommant l'issue, plutôt que d'admettre
+  trop tôt en silence. Puis la mère est fermée (*Découpée en #A, #B — suivi
+  sur les filles.*) : son cycle s'arrête là, aucune pull request ne viendra
+  la fermer. Tout est idempotent, un rejeu du nœud ne casse rien.
   Outcome `split`, vers le terminal
   dédié `close_split` ; les filles suivent le pipeline normal, admises par
   le sync comme n'importe quelle issue.
@@ -1038,15 +1051,35 @@ l'issue le demande : le travail de l'item est donc encore à nu, et si main
 a bougé sur un fichier qu'il tient ouvert, git refuse le merge d'entrée —
 même sans conflit de contenu. C'est le second visage du code 9, et il coûte
 une reprise que le même pas placé après le commit s'épargnerait. Un merge, jamais un rebase : la branche est
-publique dès son premier push, son histoire ne se réécrit pas. Le prompt du
+publique dès son premier push, son histoire ne se réécrit pas.
+
+Le rapprochement supprime les conflits textuels, pas les ruptures de sens :
+un merge sans le moindre marqueur peut casser la construction. C'est arrivé
+— deux branches se compilaient chacune de son côté, l'une rendait une
+propriété obligatoire, l'autre appelait le composant sans elle, et `main`
+est sortie cassée (`graph-view.tsx(25,8) TS2741`). **Une porte de construction**
+suit donc toute absorption non vide, avant le push :
+`python3 -m compileall` sur `src/`, puis `npm run build` dans `front/` si le
+contenu absorbé y touche — la porte chère ne tourne que quand le front est
+concerné. Une porte qui lâche arrête la release en **code 11**, avec la
+sortie de la commande fautive dans `release.md` et le worktree laissé sur sa
+fusion : c'est un état à réparer, pas à effacer. Absorption vide, aucune
+porte : ce contenu-là a déjà été testé tel quel par les nœuds de test, et le
+cas fréquent ne paie rien. On ne fait jamais juger par un modèle ce qu'un
+compilateur tranche, et on ne paie pas un cycle d'agents — des minutes —
+pour ce qu'une commande déterministe décide en secondes.
+
+Le prompt du
 nœud tient en une phrase : lance le script ; sortie 0 → `done`, rien
 d'autre — le nominal coûte un aller-retour de modèle. Si le script lâche,
 l'agent a le droit d'agir, dans une frontière stricte : réparer la
 mécanique — relancer un push, recréer une PR obsolète d'un cycle passé,
-résoudre le conflit du code 9 — puis relancer le script, oui ; merger du
+résoudre le conflit du code 9, réparer la rupture d'intégration du code 11 —
+puis relancer le script, oui ; merger du
 code qu'il a modifié, jamais. D'où trois issues fermées : `done`, `conflict` (l'agent
 n'y arrive pas, l'humain reprend) et **`rebased`** — il a fallu résoudre de
-vrais conflits, donc pas de merge : l'arête renvoie la branche à
+vrais conflits, ou réparer ce que la porte de construction a arrêté, donc
+pas de merge : l'arête renvoie la branche à
 `test_backend`, parce qu'une fusion est une combinaison que personne n'a
 testée. Cette arête referme un cycle release → test → … → release :
 `release` porte donc `escalade`, et le budget d'escalades de l'item borne
@@ -1116,9 +1149,10 @@ seul **deploy** revient au clone de référence, qu'il aligne sur `origin/main`
 avant de reconstruire — c'est le merge qui part en prod, pas la branche.
 Deux items concurrents partent du même `origin/main` et divergent par leur
 branche ; s'ils touchent les mêmes fichiers, le second merge voit le conflit :
-release rebase quand le rebase passe tout seul, sort en `rebased` — retour aux
-tests — quand il a fallu résoudre à la main, et en `conflict` quand elle n'y
-arrive pas. Le retrait (worktree + branche locale) est un **nœud du
+release merge `origin/main` quand le merge passe tout seul, sort en `rebased`
+— retour aux tests — quand il a fallu résoudre à la main, et en `conflict`
+quand elle n'y arrive pas. Jamais un rebase : la branche est publique, seul
+le nom de l'issue est resté. Le retrait (worktree + branche locale) est un **nœud du
 graph** : toutes les sorties passent par `cleanup`,
 `cleanup_unresolved` ou `cleanup_split` avant leur terminal — le graph *est* la garantie de
 cleanup, le noyau n'en sait rien. Les agents demandent un worker sur

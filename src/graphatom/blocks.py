@@ -491,6 +491,16 @@ def _wait(proc: subprocess.Popen, watched: tuple, mark: tuple,
             raise subprocess.TimeoutExpired(proc.args, budget_s)
 
 
+def _agent_timeout_s(config: dict) -> float:
+    """Le couperet du process d'un nœud — dérivé du bail par le kernel.
+
+    L'import est local au corps : `kernel` importe `blocks` à son tour, et
+    les deux ne peuvent pas se charger l'un l'autre au module.
+    """
+    from .kernel import agent_timeout_s
+    return agent_timeout_s(config, AGENT_TIMEOUT_S)
+
+
 def _attempt(ctx: Context, workspace: Path) -> dict:
     """Une tentative d'agent. Contrat : prompt.md → outcome.json."""
     cfg = ctx.config["agent"]
@@ -529,7 +539,7 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
             _write_pgid(pgid_file, proc, cmd, ctx.run["id"])
             mark = _mark(*watched)  # nos traces sont écrites : la suite est de l'agent
             _wait(proc, watched, mark,
-                  float(cfg.get("timeout_s", AGENT_TIMEOUT_S)),
+                  _agent_timeout_s(ctx.config),
                   float(cfg.get("silence_s", AGENT_SILENCE_S)))
         except subprocess.TimeoutExpired as exc:
             # le relevé se prend avant la révocation : ce que le SIGTERM
