@@ -35,7 +35,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import blocks, db, graph, kernel, scheduler, web  # noqa: E402
+from graphatom import blocks, db, graph, kernel, quota, scheduler, web  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 # l'instance jetable : celle de l'agent qui nous lance, sinon la nôtre
@@ -303,9 +303,10 @@ def api_load(conn) -> None:
         except OSError:
             time.sleep(0.1)
     assert charge is not None, f"{url} n'a jamais répondu"
-    assert charge == {"running": 2, "max_runs": 3, "max_runs_per_item": 2}, charge
-    print(f"5. GET /api/load → {charge} : les runs en vol et le plafond "
-          "effectif, hors de la base ✓")
+    assert charge == {"running": 2, "max_runs": 3, "max_runs_per_item": 2,
+                      "builds": 0, "max_builds": quota.MAX_BUILDS}, charge
+    print(f"5. GET /api/load → {charge} : runs et constructions en vol, "
+          "avec leurs plafonds effectifs ✓")
 
     rendre(conn)
     for _ in range(10):
