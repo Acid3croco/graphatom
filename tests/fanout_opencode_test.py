@@ -1,8 +1,9 @@
-"""Le test du candidat gratuit d'`implement` : sa déclaration, et sa CLI absente.
+"""Le test des candidats gratuits d'`implement` : déclaration et CLI absente.
 
-La course d'`implement` compte un candidat qui ne coûte rien : sa commande
-passe par `scripts/agent-opencode.sh` sur `opencode/deepseek-v4-flash-free`,
-et le reste — le prompt, les budgets, les portes — est celui de ses frères.
+La course d'`implement` compte quatre candidats qui ne coûtent rien : leurs
+commandes passent par `scripts/agent-opencode.sh` sur
+`opencode/deepseek-v4-flash-free`, et le reste — le prompt, les budgets, les
+portes — est celui de leur frère codex.
 Ce qu'on mesure avec lui n'a de sens que s'il ne perd jamais en silence :
 une CLI absente doit se lire comme une CLI absente dans le résultat du run,
 pas comme du code qui ne compile pas.
@@ -52,24 +53,25 @@ MODELE = "opencode/deepseek-v4-flash-free"
 os.environ.pop("GRAPHATOM_AGENT_DSN", None)
 
 
-def gratuit() -> int:
-    """Le rang du candidat qui passe par l'adaptateur — il n'y en a qu'un."""
+def gratuits() -> list[int]:
+    """Les rangs des quatre candidats qui passent par l'adaptateur gratuit."""
     rangs = [k for k, v in enumerate(VARIANTES)
              if ADAPTATEUR in ((v.get("agent") or {}).get("cmd") or "")]
-    assert len(rangs) == 1, f"un seul candidat gratuit attendu, vu {rangs}"
-    return rangs[0]
+    assert len(rangs) == 4, f"quatre candidats gratuits attendus, vu {rangs}"
+    return rangs
 
 
 def bundle_gratuit() -> dict:
     """Le graph du candidat gratuit seul : sa variante, ses arêtes raccourcies.
 
-    Ses frères n'ont rien à faire ici — ils appelleraient `claude`, et ce
-    n'est pas lui qu'on éprouve. La variante, elle, est celle de l'exemple
-    mot pour mot, posée sur la config du nœud par le même recouvrement que
-    dans le rail.
+    Ses frères n'ont rien à faire ici : un candidat suffit pour éprouver
+    l'absence de la CLI. La variante est celle de l'exemple mot pour mot,
+    posée sur la config du nœud par le même recouvrement que dans le rail.
     """
     node = json.loads(json.dumps(REEL))  # une copie : le nœud réel ne bouge pas
-    node["config"]["fanout"]["variants"] = [json.loads(json.dumps(VARIANTES[gratuit()]))]
+    node["config"]["fanout"]["variants"] = [
+        json.loads(json.dumps(VARIANTES[gratuits()[0]]))
+    ]
     node["config"]["agent"]["timeout_s"] = 60  # rien à attendre : la CLI manque
     node["config"]["agent"]["silence_s"] = 60
     node["config"]["lease_s"] = 300
@@ -117,18 +119,20 @@ def declaration() -> None:
     candidats = len(graph.fanout_variants(REEL))
     assert candidats <= graph.FANOUT_MAX_CANDIDATES, candidats
 
-    cmd = VARIANTES[gratuit()]["agent"]["cmd"]
-    assert ADAPTATEUR in cmd, cmd
-    assert MODELE in cmd, cmd
-    assert "OPENCODE_DIR=\"${GRAPHATOM_WORKTREE" in cmd, \
-        f"la variante ne donne pas l'atelier du candidat au script : {cmd}"
-    assert "portes.sh" in cmd, f"la variante ne lance pas ses portes : {cmd}"
-    for mot in ("KEY", "TOKEN", "SECRET", "PASSWORD", "api_key", "Bearer"):
-        assert mot not in cmd, f"un identifiant dans la commande : {mot}"
+    for rang in gratuits():
+        cmd = VARIANTES[rang]["agent"]["cmd"]
+        assert ADAPTATEUR in cmd, cmd
+        assert MODELE in cmd, cmd
+        assert "OPENCODE_DIR=\"${GRAPHATOM_WORKTREE" in cmd, \
+            f"la variante ne donne pas l'atelier du candidat au script : {cmd}"
+        assert "portes.sh" in cmd, f"la variante ne lance pas ses portes : {cmd}"
+        for mot in ("KEY", "TOKEN", "SECRET", "PASSWORD", "api_key", "Bearer"):
+            assert mot not in cmd, f"un identifiant dans la commande : {mot}"
 
-    print(f"1. candidat « {VARIANTES[gratuit()]['label']} » : {ADAPTATEUR} sur "
-          f"{MODELE}, atelier du candidat, portes de tout le monde, aucun "
-          f"identifiant — {candidats} candidats ≤ {graph.FANOUT_MAX_CANDIDATES} ✓")
+    labels = ", ".join(VARIANTES[r]["label"] for r in gratuits())
+    print(f"1. candidats gratuits « {labels} » : {ADAPTATEUR} sur {MODELE}, "
+          f"atelier du candidat, portes de tout le monde, aucun identifiant — "
+          f"{candidats} candidats ≤ {graph.FANOUT_MAX_CANDIDATES} ✓")
 
 
 def cli_absente(conn, workdir: Path, repo: Path) -> None:
@@ -183,7 +187,7 @@ def main() -> None:
         shutil.rmtree(workdir, ignore_errors=True)
         shutil.rmtree(tmp, ignore_errors=True)
 
-    print("\ncandidat gratuit : OK — une CLI absente dit son nom, et ne se "
+    print("\ncandidats gratuits : OK — une CLI absente dit son nom, et ne se "
           "confond pas avec un échec de code")
 
 

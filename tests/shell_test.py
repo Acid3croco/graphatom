@@ -641,22 +641,26 @@ def main() -> None:
           "et front sur une absorption saine, code 11 sur chaque rupture ✓")
 
     # 10. la frontière du bundle, relue à chaque tour : les nœuds mécaniques
-    #    n'appellent aucun modèle, et ceux qui en appellent un rendent le
-    #    coût de la tentative — un merge d'amont ne doit rien reprendre
-    #    d'un côté ni de l'autre
+    #    n'appellent aucun modèle, tous les nœuds à modèle passent par codex
+    #    sans épingler de modèle, et seul le fan-out garde quatre candidats
+    #    opencode — une limite claude ne doit plus arrêter le rail
     for nom in ("worktree", "deploy", "verify_deploy",
                 "cleanup", "cleanup_unresolved", "cleanup_split"):
         cmd = BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
-        assert "claude " not in cmd, f"{nom} lance encore un modèle"
-    for nom in ("scope", "implement"):
+        assert "agent-codex.sh" not in cmd and "agent-opencode.sh" not in cmd, \
+            f"{nom} lance encore un modèle"
+    model_nodes = ("scope", "implement", "test_backend", "test_frontend",
+                   "validate", "release", "judge")
+    for nom in model_nodes:
         cmd = BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
-        assert "claude " in cmd, f"{nom} n'est plus un agent"
-        assert "usage.json" in cmd, f"{nom} ne rend pas son usage.json"
-    # depuis la bascule des nœuds légers, release et les deux tests passent
-    # par l'adaptateur codex : c'est lui qui remplit usage.json, pas le `cmd`
-    for nom in ("test_backend", "test_frontend", "release"):
-        cmd = BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
-        assert "agent-codex.sh" in cmd, f"{nom} n'est plus sur l'adaptateur codex"
+        assert "agent-codex.sh" in cmd, f"{nom} n'est pas sur codex"
+        assert "CODEX_MODEL" not in cmd, f"{nom} épingle encore un modèle codex"
+    assert "claude " not in json.dumps(BUNDLE), "le bundle dépend encore de claude"
+    variants = BUNDLE["nodes"]["implement"]["config"]["fanout"]["variants"]
+    opencode = [v for v in variants if "agent-opencode.sh" in v["agent"]["cmd"]]
+    codex = [v for v in variants if "agent-codex.sh" in v["agent"]["cmd"]]
+    assert len(opencode) == 4 and len(codex) == 1, \
+        f"course inattendue : {len(opencode)} opencode, {len(codex)} codex"
     # les trois retraits sont le même shell : seul leur prompt les distingue,
     # et une correction sur l'un doit se voir sur les trois
     retraits = {BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
@@ -669,8 +673,8 @@ def main() -> None:
     shells["scripts/release.sh"] = (ROOT / "scripts" / "release.sh").read_text()
     for nom, shell in shells.items():
         assert "/.git" not in shell, f"{nom} teste .git comme un chemin"
-    print("10. six nœuds sans modèle dont trois retraits identiques, "
-          "cinq agents qui rendent leur usage, aucun test sur .git ✓")
+    print("10. six nœuds sans modèle, sept nœuds codex par défaut, "
+          "fan-out quatre opencode + un codex, aucun test sur .git ✓")
 
     # 11. les portes de verify_deploy attendent. `docker compose up` rend la
     #    main avant que les services écoutent : un front reconstruit ouvre
