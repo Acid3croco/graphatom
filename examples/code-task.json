@@ -62,6 +62,14 @@
             {
               "label": "test d'abord",
               "strategy": "le test d'abord — écris sous `tests/` le test qui échoue pour la raison exacte de l'issue, constate-le rouge, puis n'écris de code que pour le faire passer. Chaque critère de `criteria.md` qui nomme une commande devient une assertion."
+            },
+            {
+              "label": "gratuit",
+              "strategy": "le chemin court — lis `criteria.md`, écris le code qu'il demande là où il manque, et n'ajoute rien autour. Tu cours sur un modèle gratuit : ton angle n'est pas une forme de code, c'est une mesure — si le harnais fait le travail de fiabilité, un candidat sans coût gagne parfois la course, et c'est cela qu'on regarde.",
+              "agent": {
+                "cmd": "OPENCODE_DIR=\"${GRAPHATOM_WORKTREE:-.}\" OPENCODE_TIMEOUT_S=1500 bash \"${GRAPHATOM_WORKTREE:-.}/scripts/agent-opencode.sh\" opencode/deepseek-v4-flash-free; RC=$?\n[ -f outcome.json ] || exit $RC\nbash \"${GRAPHATOM_WORKTREE:-.}/scripts/portes.sh\" || { rm -f outcome.json; RC=1; }\nexit $RC",
+                "silence_s": 900
+              }
             }
           ],
           "reduce": "first_pass"
