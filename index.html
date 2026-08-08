@@ -270,6 +270,10 @@ artifact(id, sha256, bytes, media_type)</code></pre>
     <p>Ce n'est pas un langage de workflow : le comportement vit dans les blocs, les schémas et les gestionnaires d'effets — du code. La déclaration est de la configuration au-dessus d'une interface de blocs typée. Elle reste défendable à une condition : rester étroite. Le jour où on y ajoute expressions et conditions arbitraires, un vrai programme typé aurait été supérieur.</p>
   </div>
   <div class="callout">
+    <span class="tag">Fan-out de candidats, jamais de jointure</span>
+    <p>Un item n'est jamais sur deux nœuds à la fois : un seul état, une seule révision, une seule issue de nœud, et deux prédécesseurs actifs ne se rejoignent nulle part — la jointure reste refusée pour toujours. Ce qui peut se multiplier, ce sont les <em>runs</em> d'un même nœud : des candidats concurrents, qui ne se voient jamais, dont un seul survit. La réduction produit une seule issue avant que l'item n'avance — vu du noyau, un nœud en fan-out se comporte comme un nœud ordinaire.</p>
+  </div>
+  <div class="callout">
     <span class="tag">Périmètre d'apply()</span>
     <p>L'unicité d'<code>apply()</code> porte sur les mutations d'état d'un item. La réservation d'un run et la réconciliation d'un effet sont des transactions périphériques — mais toutes aboutissent à une transition <code>apply()</code>, et aucune ne route un item par un autre chemin.</p>
   </div>

@@ -742,11 +742,94 @@ l'hôte (voir le commentaire dans `docker-compose.yml`) ; le bail par nœud
 bloc dans son propre thread — un agent de dix minutes ne bloque ni le
 faucheur ni les autres items.
 
+## Des myriades de modèles bon marché
+
+Le rail a été conçu pour un agent cher et compétent par nœud. La direction
+change : on veut pouvoir lancer **des myriades de modèles bon marché,
+potentiellement stupides**, sur la même étape, et laisser la sélection
+produire la qualité que l'intelligence individuelle ne donne pas. Rien de
+ce qui suit n'est codé à ce jour — c'est la vision à laquelle les issues
+suivantes se réfèrent, écrite dans le dépôt parce qu'un principe non écrit
+se perd.
+
+**Le renversement économique.** Quand le token ne coûte plus rien, la
+ressource rare n'est plus l'intelligence par appel : c'est la **capacité de
+vérification**. Générer vingt candidats devient gratuit ; décider lequel est
+bon devient tout le problème. L'architecture se réorganise donc autour du
+tri, pas de la génération.
+
+**L'ordre des filtres.** Le build, le lint, les tests, le diff non vide sont
+déterministes, gratuits, et éliminent la grande majorité des candidats
+faibles. **Un juge LLM ne doit jamais trancher ce qu'un compilateur
+tranche.** La doctrine « des rails et du code, pas du prompt » devient ici
+une contrainte de coût mesurable : chaque critère non mécanisable est un
+critère qui exige un modèle cher. Corollaire : si `criteria.md` était
+entièrement exécutable, aucun juge ne serait nécessaire — le premier
+candidat qui franchit toutes les portes gagne, et la course est le juge.
+
+**L'haltère : cher aux deux bouts, gratuit au milieu.**
+
+| étage | tarif | pourquoi |
+| --- | --- | --- |
+| `scope` | cher | transformer une issue en fonction de fitness exécutable devient le nœud le plus important du graph |
+| `implement` | gratuit et massif | N candidats jetables |
+| jugement | cher | seulement sur les finalistes, et seulement quand les portes n'ont pas suffi |
+
+**Le fan-out de candidats n'est pas le fan-out interdit.** Le périmètre
+négatif refuse la jointure, et ce refus reste entièrement valide. Mais il ne
+décrivait pas ce qu'on introduit ici : sa formulation est donc
+[amendée](#ce-quon-ne-fera-jamais) honnêtement, plutôt que contredite en
+silence.
+
+- l'item conserve **un seul état, une seule révision, une seule issue de
+  nœud** ; il n'est jamais sur deux nœuds à la fois et ne représente jamais
+  plusieurs prédécesseurs actifs ;
+- ce qui se multiplie, ce sont les **runs** d'un même nœud — exactement
+  comme les tentatives se multiplient déjà aujourd'hui, mais en parallèle
+  plutôt qu'en série ;
+- il n'y a **aucune jointure** : les candidats ne fusionnent jamais, un seul
+  survit et les autres sont tués et détruits ;
+- la réduction produit **une seule issue** avant que l'item n'avance : vu du
+  noyau, un nœud en fan-out se comporte comme un nœud ordinaire.
+
+Les deux ne se confondent donc jamais : *jointure de plusieurs
+prédécesseurs* — refusée pour toujours ; *candidats concurrents d'un même
+nœud, réduits à un* — la nouvelle capacité.
+
+**La diversité doit être structurelle.** N candidats du même modèle avec le
+même prompt échouent de la même façon. La diversité utile ne vient pas de
+l'échantillonnage mais de la **stratégie imposée** : « diff minimal »,
+« réécris le composant en entier », « commence par écrire le test qui
+échoue », et de la variété des modèles et des CLI. C'est ce que la
+configuration devra exprimer.
+
+**Pas de débat entre agents.** Des modèles faibles qui délibèrent convergent
+vers celui qui a parlé en dernier, pas vers le vrai : ils sont complaisants
+et partagent leurs angles morts. Ce qui remplace le raisonnement, ce n'est
+pas la discussion mais la **sélection**. Le refus « pas de conversation
+inter-agents » du périmètre négatif n'est pas affaibli par le fan-out — il
+est renforcé : les candidats ne se voient jamais.
+
+**L'état du parc, au 2026-08-08.** La vision doit rester honnête sur ses
+moyens :
+
+- la machine hôte n'a **ni `opencode`, ni `ollama`, ni runtime d'inférence
+  local, ni poids de modèle** ;
+- ce qui existe : la CLI `claude` (abonnement) et la CLI `codex`
+  (`@openai/codex`, abonnement) ;
+- le tier « bon marché » démarre donc avec des variantes
+  `claude --model haiku` et une variante `codex`, qui apporte une vraie
+  diversité de fournisseur ;
+- un modèle local réellement gratuit demanderait d'installer un runtime et
+  de télécharger des poids — c'est une option ouverte, pas un prérequis.
+  **Le modèle est un paramètre de configuration : l'architecture ne doit
+  dépendre d'aucun fournisseur.**
+
 ## Ce qu'on ne fera jamais
 
 Périmètre négatif, assumé — ces refus *sont* le design :
 
-- **Pas de fan-out ni de jointure** dans un item — le parallélisme, c'est plusieurs items. Un état unique ne représente pas plusieurs prédécesseurs actifs.
+- **Pas de jointure, ni de fan-out de chemins** dans un item — le parallélisme entre travaux, c'est plusieurs items. Un état unique ne représente pas plusieurs prédécesseurs actifs, et deux branches d'un graph ne se rejoignent jamais : la jointure est refusée pour toujours. Ce qui est permis, en revanche, c'est le **fan-out de candidats** — plusieurs runs concurrents d'un *même* nœud, réduits à une seule issue avant que l'item n'avance (voir [des myriades de modèles bon marché](#des-myriades-de-modèles-bon-marché)). L'invariant d'état unique tient parce que rien ne fusionne : l'item garde un seul état, une seule révision, une seule issue de nœud, il n'est jamais sur deux nœuds à la fois ; les candidats ne se voient jamais, un seul survit et les autres sont tués et détruits. Vu du noyau, un nœud en fan-out se comporte comme un nœud ordinaire.
 - **Pas de conversation inter-agents** — la coordination est le graph. N agents qui discutent produisent un transcript inauditable.
 - **Pas de langage de workflow** — la déclaration reste de la configuration étroite au-dessus de blocs typés. Expressions et conditions arbitraires : non.
 - **Pas de question ouverte** aux humains — toute question est fermée, avec des options et une deadline.
