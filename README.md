@@ -135,6 +135,10 @@ uv run python tests/portes_test.py                   # les portes d'un candidat
 uv run python tests/fanout_opencode_test.py          # le candidat gratuit
                                                      # d'implement : sa CLI absente
                                                      # dit son nom dans le run
+uv run python tests/passation_test.py                # la passation : chaque nœud
+                                                     # écrit ce qu'il a appris ou
+                                                     # laissé tomber, le suivant la
+                                                     # lit, bornée, sans base
 ```
 
 Les tests ne touchent jamais au `data/` du repo : chacun travaille dans un
@@ -555,7 +559,8 @@ l'item (`data/item-<N>/`), qui est aussi le répertoire courant du `cmd`.
 
 - `prompt.md`, écrit par le bloc dans le workspace avant chaque tentative :
   le `prompt` du nœud, puis le contrat rappelé en clair — le workspace, le
-  chemin d'`outcome.json`, les issues permises par les `edges` du nœud —,
+  chemin d'`outcome.json`, les issues permises par les `edges` du nœud, la
+  passation à laisser —, puis la passation du prédécesseur s'il y en a un,
   puis l'état laissé par la tentative précédente s'il y en a une.
 - son répertoire courant : le workspace, toujours. Un adaptateur n'a donc
   rien à résoudre pour trouver `prompt.md` ni où déposer sa sortie.
@@ -607,6 +612,44 @@ jq -e 'select(.usage|objects) | .usage + {total_cost_usd}' agent.json > usage.js
 rm -f agent.json
 exit $RC
 ```
+
+### La passation : ce qu'un nœud a appris, ou laissé tomber
+
+Un graph est une chaîne, mais le savoir n'y circulait pas : chaque nœud
+démarre en contexte neuf, et ce qu'il a compris en route mourait avec lui.
+Deux pertes, et la seconde est la plus chère — ce qui est redécouvert coûte
+des jetons, ce qui est **abandonné en silence** ne laisse aucune trace.
+
+Chaque nœud agent laisse donc une passation dans son workspace,
+`passation-<nœud>.md` (dans son `c<k>/` s'il est candidat d'un fan-out) :
+trois sections courtes, demandées en toutes lettres par le contrat — **Fait**,
+**Appris**, **Pas fait**. La troisième est celle qui manquait : un agent
+n'écrit son renoncement que si on la lui demande nommément.
+
+Le prompt du nœud suivant porte cette passation, l'issue du prédécesseur et
+la queue de son journal. Le prédécesseur est le run que nomme l'événement
+d'entrée dans l'état courant — celui que `kernel._route()` y a écrit :
+
+- un événement sans run — l'admission d'un nœud d'entrée, une réponse
+  humaine, une échéance de WAIT — n'a pas de prédécesseur, et **rien n'est
+  posé** : pas de bloc creux ;
+- une relance du même nœud lit sa propre tentative précédente ;
+- en fan-out, seul le run que l'événement porte est lu, jamais ses voisins :
+  l'anonymat du dossier du juge reste entier.
+
+Borné des deux côtés, parce qu'un agent noyé sous l'historique choisit mal :
+en taille (`PASSATION_CHARS`, 4 000 caractères, et la queue du journal aux
+`TAIL_LINES` habituelles) et en profondeur — le prédécesseur immédiat, jamais
+l'histoire de l'item. Le surcoût est de l'ordre de 1 500 jetons d'entrée sur
+un prompt d'agent qui en pèse plusieurs milliers, et quelques centaines de
+jetons de sortie pour l'écrire.
+
+La passation n'est pas une conversation : c'est un artefact déposé, lu par le
+suivant, et jamais un échange — le périmètre négatif reste entier. Ce n'est
+pas non plus un prétexte à re-décider : un nœud lit ce que son prédécesseur a
+compris, il ne rejuge pas son issue. Le nœud `validate`, lui, s'en sert dans
+l'autre sens : un critère qu'une passation déclare non fait ou non vérifié
+n'est pas coché, même si tout a l'air en place.
 
 ### Un adaptateur pour un candidat gratuit : `scripts/agent-opencode.sh`
 
