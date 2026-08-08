@@ -25,11 +25,12 @@ un item au budget épuisé finit donc son chemin nominal, il ne peut juste
 plus boucler.
 
 Les tentatives amortissent une panne, pas un dépassement. Une tentative
-`crashed` ou `invalid_result` a droit à sa seconde chance sur place :
-l'infra retombe, une sortie malformée se rejoue. Une tentative `timed_out`,
-non — le budget a sauté, la relancer à l'identique le rebrûlerait pour
-retomber au même endroit. Elle escalade tout de suite, quel que soit le
-compteur : c'est l'humain qui décide de rouvrir un passage, ou d'abandonner.
+`crashed`, `invalid_result` ou `stalled` a droit à sa seconde chance sur
+place : l'infra retombe, une sortie malformée se rejoue, un agent pendu
+repart. Une tentative `timed_out`, non — le budget a sauté sur un agent qui
+travaillait vraiment, la relancer à l'identique le rebrûlerait pour retomber
+au même endroit. Elle escalade tout de suite, quel que soit le compteur :
+c'est l'humain qui décide de rouvrir un passage, ou d'abandonner.
 """
 
 import datetime as dt
@@ -236,8 +237,10 @@ def _route(conn, item, bundle, run, outcome: str, kind: str) -> None:
         # pour retomber au même endroit. Escalade tout de suite, quel que
         # soit le compteur de tentatives — c'est l'humain qui tranche.
         target = on_kernel["escalate_to"]
-    elif outcome in ("crashed", "invalid_result"):
-        # défaut central : réessayer sur place, puis escalader
+    elif outcome in ("crashed", "invalid_result", "stalled"):
+        # défaut central : réessayer sur place, puis escalader. `stalled` est
+        # de cette famille — un agent pendu n'a rien produit, donc rien
+        # brûlé : la relance est la seule chose qui l'ait jamais sauvé.
         if run.get("attempt", 0) < MAX_ATTEMPTS:
             target = run["node"]
         else:

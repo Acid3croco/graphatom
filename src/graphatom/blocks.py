@@ -36,11 +36,21 @@ Une tentative crashée rend son autopsie : code de sortie, queue du log et
 flag timeout. Le post-mortem se lit dans le résultat du run, pas en
 fouillant le workspace à la main.
 
-Une tentative qui déborde de son budget n'est pas une tentative en panne :
-elle rend l'issue `timed_out`, pas `crashed`. La différence n'est pas
-cosmétique — le noyau relance une panne sur place, et escalade un
-dépassement tout de suite : relancer à l'identique rebrûlerait le même
-budget pour retomber au même endroit.
+Un agent muet ne consomme plus son budget entier. Un chien de garde relève
+trois signaux mécaniques — la taille du journal, le mtime le plus récent du
+workspace, celui du worktree — et coupe dès que les trois n'ont pas bougé
+pendant `silence_s`. Aucun modèle, aucune interprétation.
+
+Au couperet — chien de garde ou budget total, peu importe lequel est tombé —
+c'est le progrès constaté qui fait l'issue. Un agent qui avait produit
+déborde de son budget : `timed_out`, escalade directe, relancer à
+l'identique rebrûlerait le même budget pour retomber au même endroit. Un
+agent qui n'avait rien produit était pendu : `stalled`, une panne d'infra
+comme une autre, que le noyau relance sur place.
+
+Et une relance est une reprise, jamais une répétition : le prompt de la
+tentative suivante porte l'état déjà là — le `git diff` du worktree et les
+fichiers du workspace. Repartir à l'aveugle, c'est payer le trajet deux fois.
 """
 
 import json
@@ -64,11 +74,33 @@ USAGE_NAME = "usage.json"  # idem — ce que l'agent veut bien dire de sa consom
 TAIL_LINES = 20  # queue du log rendue dans l'autopsie d'une tentative crashée
 TAIL_CHARS = 2000
 AGENT_TIMEOUT_S = 570  # budget d'une tentative d'agent, quand le nœud n'en dit rien
+AGENT_SILENCE_S = 180  # silence toléré par le chien de garde, idem
+PROBE_S = 5.0  # granularité du relevé de progrès, resserrée par un silence court
+POLL_S = 0.2  # granularité de l'attente du process : ce qui borne le budget total
+PRUNED_DIRS = {".git", "node_modules", ".next", "__pycache__", ".venv"}
+GIT_CHARS = 8000  # l'état du worktree cité dans le prompt d'une reprise
+GIT_TIMEOUT_S = 20
 
 
 def item_workspace(item_id: int) -> Path:
     """Le répertoire de travail d'un item — connu du bloc comme du faucheur."""
     return DATA_DIR / f"item-{item_id}"
+
+
+def item_worktree(item_id: int) -> Path | None:
+    """L'atelier git de l'item, quand le canal lui en a préparé un.
+
+    La convention est celle du graph : `$GRAPHATOM_REPO_DIR/.worktrees/
+    rail-item-<N>`, le pendant git du workspace `data/item-<N>`. Pas de
+    dépôt dans l'environnement, ou pas de worktree sur le disque : None —
+    le progrès se mesure alors sur les deux autres signaux, et un prompt de
+    reprise le dit au lieu d'inventer un diff.
+    """
+    repo = os.environ.get("GRAPHATOM_REPO_DIR")
+    if not repo:
+        return None
+    worktree = Path(repo) / ".worktrees" / f"rail-item-{item_id}"
+    return worktree if worktree.is_dir() else None
 
 
 def attempt_name(run: dict) -> str:
@@ -141,19 +173,12 @@ def _archive(workspace: Path, name: str) -> None:
             path.replace(path.with_stem(f"{path.stem}-{name}"))
 
 
-def _attempt(ctx: Context, workspace: Path) -> dict:
-    """Une tentative d'agent. Contrat : prompt.md → outcome.json."""
-    cfg = ctx.config["agent"]
+def _prompt(ctx: Context, workspace: Path, subject: str) -> str:
+    """Le prompt de la tentative : celui du nœud, le contrat, et la reprise."""
     outcomes = sorted(ctx.node.get("edges") or {})
-    subject = ctx.conn.execute(
-        "SELECT subject_key FROM subject WHERE id = %s", (ctx.item["subject_id"],)
-    ).fetchone()["subject_key"]
-
     outcome_path = workspace / OUTCOME_NAME
-    for transient in (outcome_path, workspace / USAGE_NAME):
-        transient.unlink(missing_ok=True)  # rien de la tentative précédente
-    prompt = os.path.expandvars(
-        cfg["prompt"].replace("{subject_key}", subject)
+    return os.path.expandvars(
+        ctx.config["agent"]["prompt"].replace("{subject_key}", subject)
     ) + (
         "\n\n--- Contrat GraphAtom ---\n"
         f"Tu es le bloc « {ctx.run['node']} » d'un rail d'exécution. "
@@ -161,8 +186,154 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
         f"Avant de terminer, écris impérativement {outcome_path} : "
         f'{{"outcome": <une valeur parmi {outcomes}>, "summary": "<une phrase>"}}\n'
         "Sans ce fichier, ta tentative est classée crashed et sera retentée."
+    ) + _reprise(ctx, workspace)
+
+
+def _reprise(ctx: Context, workspace: Path) -> str:
+    """L'état laissé par la tentative précédente — jamais une répétition.
+
+    Une tentative relancée sur place hérite d'un worktree et d'un workspace
+    déjà entamés. Redémarrer à l'aveugle, c'est repayer le trajet depuis
+    zéro : le prompt porte donc le `git diff` du worktree et la liste des
+    fichiers du workspace. Rien à la première tentative — il n'y a alors
+    rien à reprendre.
+
+    La règle vaut pour toutes les relances, quelle que soit la mort de la
+    précédente : une pendaison (`stalled`) laisse peu de chose, une panne en
+    plein travail laisse beaucoup, et dans les deux cas c'est ce qui est là
+    qui compte, pas ce qui l'a tuée.
+    """
+    if ctx.run["attempt"] <= 1:
+        return ""
+    worktree = item_worktree(ctx.item["id"])
+    files = sorted(p.name for p in workspace.iterdir() if p.is_file())
+    return (
+        f"\n\n--- Reprise de la tentative {ctx.run['attempt'] - 1} ---\n"
+        f"La tentative précédente de « {ctx.run['node']} » n'est pas allée au "
+        "bout. Tu la reprends : lis l'état ci-dessous, et continue là où elle "
+        "s'est arrêtée — ne recommence pas de zéro.\n\n"
+        f"État du worktree {worktree or '(aucun)'} :\n\n"
+        f"```\n{_git_state(worktree)}\n```\n\n"
+        "Fichiers déjà écrits dans ton workspace :\n"
+        + ("\n".join(f"- {name}" for name in files) or "- (aucun)")
     )
-    (workspace / PROMPT_NAME).write_text(prompt)
+
+
+def _git_state(worktree: Path | None) -> str:
+    """`git status` et `git diff` du worktree de l'item, bornés en taille.
+
+    Le statut dit les fichiers neufs que le diff ne montre pas encore ; le
+    diff dit ce qui a changé. Un git qui rate n'est pas un échec de la
+    tentative : sa plainte part dans le prompt telle quelle.
+    """
+    if worktree is None:
+        return "aucun worktree pour cet item"
+    parts = []
+    for args in (["status", "--short"], ["diff", "HEAD"]):
+        try:
+            done = subprocess.run(["git", "-C", str(worktree), *args],
+                                  capture_output=True, text=True, timeout=GIT_TIMEOUT_S)
+            out = (done.stdout + done.stderr).strip()
+        except (OSError, subprocess.SubprocessError) as exc:
+            out = f"[git illisible : {exc}]"
+        parts.append(f"$ git {' '.join(args)}\n{out or '(rien)'}")
+    state = "\n\n".join(parts)
+    return state if len(state) <= GIT_CHARS else state[:GIT_CHARS] + "\n… (tronqué)"
+
+
+def _latest_mtime(root: Path | None) -> float:
+    """Le mtime le plus récent d'une arborescence, machinerie exclue.
+
+    `.git`, `node_modules` et les caches de build bougent sans qu'un agent y
+    soit pour rien — un index git rafraîchi par le voisin n'est pas du
+    travail. Les exclure garde le signal mécanique et honnête : ce qui reste
+    est du fichier de travail.
+    """
+    if root is None:
+        return 0.0
+    latest = 0.0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in PRUNED_DIRS]
+        for name in filenames:
+            try:
+                latest = max(latest, os.stat(Path(dirpath) / name).st_mtime)
+            except OSError:  # fichier disparu pendant la marche : il a bougé, tant pis
+                pass
+    return latest
+
+
+def _mark(log: Path, workspace: Path, worktree: Path | None) -> tuple:
+    """Les trois signaux du progrès d'un agent, en un relevé.
+
+    Taille du journal, mtime le plus récent du workspace, mtime le plus
+    récent du worktree. Deux relevés identiques, c'est un agent qui n'a rien
+    produit dans l'intervalle : ni un octet, ni un fichier touché.
+    """
+    try:
+        size = log.stat().st_size
+    except OSError:  # journal pas encore là : zéro octet, comme un journal vide
+        size = 0
+    return size, _latest_mtime(workspace), _latest_mtime(worktree)
+
+
+def _progress(mark: tuple, fresh: tuple) -> bool:
+    """L'agent a-t-il produit quoi que ce soit avant le couperet ?
+
+    Deux signaux, et un seul suffit : des octets dans le journal de la
+    tentative, ou un fichier du workspace ou du worktree touché depuis le
+    relevé de départ. Le journal se juge sur son contenu et non sur sa
+    croissance — un agent qui écrit sa première ligne avant même que le
+    relevé de départ soit pris a produit, et le compter muet le ferait
+    escalader comme une pendaison alors qu'il avait bel et bien démarré.
+    """
+    return fresh[0] > 0 or fresh[1:] != mark[1:]
+
+
+def _wait(proc: subprocess.Popen, watched: tuple, mark: tuple,
+          budget_s: float, silence_s: float) -> None:
+    """Attend l'agent jusqu'au premier des deux couperets.
+
+    Deux budgets, une seule attente. Le budget total borne la tentative ; le
+    silence toléré borne l'inactivité. Le relevé de départ est pris une fois
+    l'agent lancé — prompt, journal et trace de pgid sont déjà écrits, donc
+    tout ce qui bougera ensuite est de l'agent et de lui seul.
+
+    Rend la main quand le process meurt de sa belle mort ; lève
+    `TimeoutExpired` quand un couperet tombe, comme `proc.wait` le ferait.
+    """
+    start = time.monotonic()
+    deadline, probe_s = start + budget_s, min(PROBE_S, silence_s / 4)
+    quiet_since, next_probe = start, start + probe_s
+    while True:
+        try:
+            proc.wait(timeout=POLL_S)
+            return  # mort de sa belle mort : l'issue se lit dans outcome.json
+        except subprocess.TimeoutExpired:
+            pass
+        now = time.monotonic()
+        if now >= next_probe:
+            next_probe = now + probe_s
+            fresh = _mark(*watched)
+            if fresh != mark:
+                mark, quiet_since = fresh, now
+            elif now - quiet_since >= silence_s:
+                raise subprocess.TimeoutExpired(
+                    "chien de garde : ni un octet ni un fichier touché", silence_s)
+        if now >= deadline:
+            raise subprocess.TimeoutExpired(proc.args, budget_s)
+
+
+def _attempt(ctx: Context, workspace: Path) -> dict:
+    """Une tentative d'agent. Contrat : prompt.md → outcome.json."""
+    cfg = ctx.config["agent"]
+    subject = ctx.conn.execute(
+        "SELECT subject_key FROM subject WHERE id = %s", (ctx.item["subject_id"],)
+    ).fetchone()["subject_key"]
+
+    outcome_path = workspace / OUTCOME_NAME
+    for transient in (outcome_path, workspace / USAGE_NAME):
+        transient.unlink(missing_ok=True)  # rien de la tentative précédente
+    (workspace / PROMPT_NAME).write_text(_prompt(ctx, workspace, subject))
 
     env = os.environ | {"GRAPHATOM_WORKSPACE": str(workspace),
                         "GRAPHATOM_SUBJECT_KEY": subject}
@@ -174,6 +345,7 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
         env["GRAPHATOM_DSN"] = dsn
     log = attempt_log(workspace, ctx.run)
     pgid_file = workspace / PGID_FILE
+    watched = (log, workspace, item_worktree(ctx.item["id"]))
     with log.open("w") as out:
         # session dédiée : l'agent est chef de son groupe, ses descendants aussi
         proc = subprocess.Popen(
@@ -182,10 +354,16 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
         )
         try:
             _write_pgid(pgid_file, proc, cfg["cmd"], ctx.run["id"])
-            proc.wait(timeout=float(cfg.get("timeout_s", AGENT_TIMEOUT_S)))
+            mark = _mark(*watched)  # nos traces sont écrites : la suite est de l'agent
+            _wait(proc, watched, mark,
+                  float(cfg.get("timeout_s", AGENT_TIMEOUT_S)),
+                  float(cfg.get("silence_s", AGENT_SILENCE_S)))
         except subprocess.TimeoutExpired as exc:
+            # le relevé se prend avant la révocation : ce que le SIGTERM
+            # arrache à l'agent n'est pas du travail qu'il a fait
+            progress = _progress(mark, _mark(*watched))
             _kill_group(proc)  # le bail expire : le groupe entier est révoqué
-            return _autopsy(proc, log, exc, timeout=True)
+            return _autopsy(proc, log, exc, timeout=True, progress=progress)
         except BaseException:  # interruption du bloc : on révoque, puis on remonte
             _kill_group(proc)
             raise  # l'erreur remonte après la révocation : tentative crashed
@@ -201,17 +379,29 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
 
 
 def _autopsy(proc: subprocess.Popen, log: Path, exc: BaseException,
-             timeout: bool) -> dict:
+             timeout: bool, progress: bool = True) -> dict:
     """Le post-mortem d'une tentative ratée, dans le résultat du run.
 
     Le code de sortie est celui du processus agent — négatif, c'est le
     signal qui l'a tué (-9 pour le SIGKILL de la révocation).
 
-    L'issue dit laquelle des deux ratés c'était : `timed_out` quand c'est le
-    budget de la tentative qui a sauté, `crashed` sinon. Le post-mortem, lui,
-    est le même des deux côtés — le flag `timeout` le redit en clair.
+    L'issue dit lequel des trois ratés c'était :
+
+    - `crashed` : la tentative est allée au bout sans rendre d'issue lisible ;
+    - `timed_out` : un couperet est tombé sur un agent qui avait produit —
+      la tâche déborde vraiment de son budget ;
+    - `stalled` : un couperet est tombé sur un agent qui n'avait rien
+      produit — il était pendu, c'est de l'infra et pas de la tâche.
+
+    Le post-mortem, lui, est le même des trois côtés : `error`, `exit_code`
+    et `log_tail` y sont toujours, et le flag `timeout` redit en clair que
+    c'est un couperet qui a tranché.
     """
-    return {"outcome": "timed_out" if timeout else "crashed",
+    if not timeout:
+        outcome = "crashed"
+    else:
+        outcome = "timed_out" if progress else "stalled"
+    return {"outcome": outcome,
             "error": f"{type(exc).__name__}: {exc}",
             "timeout": timeout, "exit_code": proc.returncode, "log_tail": _tail(log)}
 

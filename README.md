@@ -88,6 +88,9 @@ uv run python tests/criteria_test.py                 # le nœud scope qui parle 
 uv run python tests/api_test.py                      # l'API JSON du canal web : les
                                                      # mêmes vues en données, sans
                                                      # base ni serveur
+uv run python tests/silence_test.py                  # le chien de garde : un agent
+                                                     # muet est coupé tôt, et le
+                                                     # progrès constaté fait l'issue
 ```
 
 Les tests ne touchent jamais au `data/` du repo : chacun travaille dans un
@@ -473,6 +476,39 @@ La question d'escalade née d'un timeout porte le budget dépassé (le
 le défaut central de `_route` qui change de branche.
 [`tests/escalade_timeout_test.py`](tests/escalade_timeout_test.py) fige la
 règle de bout en bout.
+
+**Un agent muet ne consomme plus son budget entier.** Un budget unique
+recouvrait deux morts très différentes : la tâche qui déborde vraiment, et le
+processus qui n'a jamais démarré. Un **chien de garde** sépare les deux. Il
+relève trois signaux mécaniques — la taille du journal de la tentative, le
+mtime le plus récent du workspace de l'item, celui de son worktree — et coupe
+dès que les trois n'ont pas bougé pendant `silence_s` (180 s par défaut,
+réglable par nœud à côté de `timeout_s`). Aucun modèle, aucune interprétation.
+
+Au couperet — chien de garde ou budget total, peu importe lequel est tombé —
+c'est le **progrès constaté** qui fait l'issue : des octets dans le journal,
+ou un fichier du workspace ou du worktree touché depuis le lancement.
+
+- **du progrès** → `timed_out`, escalade directe, comme ci-dessus ;
+- **aucun progrès** → `stalled` : l'agent était pendu, c'est de l'infra et
+  pas de la tâche. Le noyau relance sur place jusqu'à `MAX_ATTEMPTS`, puis
+  escalade — c'est exactement le traitement de `crashed`.
+
+Et **une relance est une reprise, jamais une répétition** : dès la deuxième
+tentative, le prompt porte l'état déjà là — le `git status` et le `git diff`
+du worktree de l'item, et la liste des fichiers de son workspace. Repartir à
+l'aveugle, c'est payer le trajet deux fois. La question d'escalade dit
+laquelle des deux morts l'a amenée : budget dépassé avec la queue du journal,
+ou pendaison que les relances n'ont pas réveillée.
+[`tests/silence_test.py`](tests/silence_test.py) fige les deux couperets, les
+deux issues et le prompt de reprise.
+
+Le `cmd` des nœuds à modèle de `code-task` diffuse pour cette raison :
+`--output-format stream-json --verbose` écrit au fil de l'eau dans le
+workspace, là où `--output-format json` ne rendait rien avant la toute fin —
+un agent parfaitement sain y serait resté muet aux yeux du chien de garde.
+Le `usage.json` et le texte final se lisent à la fin du flux, sans rien
+changer au contrat du bloc.
 
 **Ce que coûte un cycle se lit sur la même page.** Chaque transition du
 journal porte sa durée — l'écart avec la précédente, tentatives comprises —,

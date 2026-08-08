@@ -12,7 +12,8 @@ import psycopg
 
 BLOCK_KINDS = {"FETCH", "JUDGE", "ACT", "CHECK", "EFFECT", "WAIT"}
 
-KERNEL_OUTCOMES = {"crashed", "timed_out", "invalid_result", "budget_exhausted", "wall_deadline"}
+KERNEL_OUTCOMES = {"crashed", "stalled", "timed_out", "invalid_result",
+                   "budget_exhausted", "wall_deadline"}
 
 
 class GraphError(Exception):
