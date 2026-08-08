@@ -10,7 +10,7 @@
 import type { ReactNode } from "react";
 import { X } from "lucide-react";
 
-import type { BundleNode } from "@/lib/api";
+import type { BundleFanout, BundleNode, Variant } from "@/lib/api";
 import { agentModel } from "@/lib/agent-model";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,7 @@ const KNOWN = new Set([
   "options",
   "owner",
   "deadline_minutes",
+  "fanout",
 ]);
 
 /** Un champ du bundle : sa clé, telle qu'elle s'écrit, et sa valeur. */
@@ -44,6 +45,65 @@ function Block({ title, children }: { title: string; children: ReactNode }) {
       </h3>
       {children}
     </section>
+  );
+}
+
+/**
+ * Le fan-out d'un nœud : ses variantes, sa répétition, sa réduction.
+ *
+ * Une variante est un fragment de config : les clés qu'elle nomme
+ * surchargent celles du nœud, celles qu'elle tait sont héritées. On la
+ * montre donc telle qu'elle est déclarée — les scalaires en clair, un
+ * `agent` surchargé en JSON, parce que c'est bien là que se lit ce que
+ * cette variante change.
+ *
+ * Le nombre de candidats est `variantes × répétition` : c'est le seul
+ * chiffre du bloc qui ne s'y lit pas directement, et c'est celui qui dit
+ * combien de runs le nœud lancera.
+ */
+function Fanout({ fanout }: { fanout: BundleFanout }) {
+  const repeat = fanout.repeat ?? 1;
+  return (
+    <Block title="fanout">
+      <p className="flex flex-wrap gap-x-4 gap-y-1">
+        <Field name="reduce" value={fanout.reduce} />
+        <Field name="repeat" value={repeat} />
+        <Field name="variants" value={fanout.variants.length} />
+        <Field name="candidats" value={fanout.variants.length * repeat} />
+      </p>
+      <ul className="mt-1 flex flex-col gap-2">
+        {fanout.variants.map((variant, index) => (
+          <li key={index} className="flex flex-col gap-1 border-l pl-2">
+            <VariantFields variant={variant} />
+          </li>
+        ))}
+      </ul>
+    </Block>
+  );
+}
+
+/** Une variante déclarée : ses clés en clair, ses objets en JSON. */
+function VariantFields({ variant }: { variant: Variant }) {
+  const entries = Object.entries(variant);
+  const flat = entries.filter(
+    ([, value]) => typeof value !== "object" || value === null,
+  );
+  const nested = entries.filter(
+    ([, value]) => typeof value === "object" && value !== null,
+  );
+  return (
+    <>
+      <p className="flex flex-wrap gap-x-4 gap-y-1">
+        {flat.map(([key, value]) => (
+          <Field key={key} name={key} value={String(value)} />
+        ))}
+      </p>
+      {nested.length > 0 && (
+        <pre className="max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs break-words whitespace-pre-wrap">
+          {JSON.stringify(Object.fromEntries(nested), null, 2)}
+        </pre>
+      )}
+    </>
   );
 }
 
@@ -108,6 +168,8 @@ export function NodeConfig({
             </ul>
           </Block>
         )}
+
+        {config.fanout && <Fanout fanout={config.fanout} />}
 
         {config.question !== undefined && (
           <Block title="question">
