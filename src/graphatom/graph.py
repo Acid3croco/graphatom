@@ -97,6 +97,48 @@ def _validate_fanout(name: str, spec: dict) -> None:
                          f"FANOUT_MAX_CANDIDATES = {FANOUT_MAX_CANDIDATES}")
 
 
+def fanout_variants(spec: dict) -> list[dict]:
+    """Les variantes d'un nœud, une par candidat — `[]` sans fan-out.
+
+    L'énumération est déterministe et se lit à l'endroit : chaque variante
+    dans l'ordre déclaré, répétée `repeat` fois. Le candidat k tient donc sa
+    variante de `k // repeat`, et deux répétitions d'une même variante ne se
+    distinguent que par leur workspace.
+
+    Une liste vide, c'est « pas de fan-out » : le nœud garde son run unique,
+    et rien de ce qui suit ne le concerne.
+    """
+    fanout = (spec.get("config") or {}).get("fanout")
+    if not fanout:
+        return []
+    return [variant for variant in fanout["variants"]
+            for _ in range(fanout.get("repeat", 1))]
+
+
+def candidate_node(spec: dict, candidate: int) -> dict:
+    """Le nœud tel que le voit un candidat : sa variante posée sur la config.
+
+    Une variante est un fragment de config : les clés qu'elle nomme
+    surchargent celles du nœud, celles qu'elle tait sont héritées. Les objets
+    fusionnent clé à clé — une variante qui ne change que `agent.cmd` garde
+    le prompt et les budgets du nœud. Le reste du nœud, ses arêtes en tête,
+    est celui de tout le monde : un candidat ne réécrit pas le graph.
+    """
+    variant = fanout_variants(spec)[candidate]
+    return spec | {"config": _overlay(spec.get("config") or {}, variant)}
+
+
+def _overlay(base: dict, over: dict) -> dict:
+    """`over` posé sur `base` : les objets fusionnent, tout le reste remplace."""
+    merged = dict(base)
+    for key, value in over.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _overlay(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def validate(bundle: dict) -> None:
     for key in ("name", "entry", "nodes", "budgets", "on_kernel"):
         if key not in bundle:

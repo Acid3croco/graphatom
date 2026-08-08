@@ -31,15 +31,25 @@ repart. Une tentative `timed_out`, non — le budget a sauté sur un agent qui
 travaillait vraiment, la relancer à l'identique le rebrûlerait pour retomber
 au même endroit. Elle escalade tout de suite, quel que soit le compteur :
 c'est l'humain qui décide de rouvrir un passage, ou d'abandonner.
+
+Une tentative n'est pas toujours un run. Un nœud qui déclare un `fanout` en
+réserve K — ses variantes, répétées — et ils courent ensemble : même
+tentative, même barrière, un bail et un workspace chacun. La réduction les
+ramène à une seule issue avant que l'item n'avance, et c'est cette issue-là
+que `_route` traite comme celle d'un nœud ordinaire. L'item garde donc un
+seul état, une seule révision, une seule issue de nœud : rien ne fusionne,
+un candidat survit, les autres sont révoqués.
 """
 
 import datetime as dt
 import json
 
+from collections import Counter
+
 import psycopg
 
 from .blocks import agent_alive, lease_autopsy, revoke_orphan
-from .graph import KERNEL_OUTCOMES, load_bundle
+from .graph import KERNEL_OUTCOMES, GraphError, fanout_variants, load_bundle
 
 LEASE_SECONDS = 30
 MAX_ATTEMPTS = 3  # défaut central, par passage : réessayer, puis escalader
@@ -112,7 +122,14 @@ def admit(conn: psycopg.Connection, revision: str, subject_key: str,
 
 
 def claim(conn: psycopg.Connection, item_id: int) -> dict | None:
-    """Réserve un run pour l'état courant de l'item. None si rien à faire."""
+    """Réserve un run pour l'état courant de l'item. None si rien à faire.
+
+    Un nœud en fan-out ne se réserve pas d'un bloc : `claim` rend un candidat
+    à la fois, et l'ordonnanceur rappelle tant qu'il en reste. La tentative
+    est celle de tous — les K candidats la partagent, avec sa barrière —, et
+    chacun a son bail, son numéro et son workspace. Sans `fanout`, il n'y a
+    qu'un candidat, il n'a pas de numéro, et rien de tout ceci ne se voit.
+    """
     with conn.transaction():
         item = conn.execute(
             "SELECT * FROM work_item WHERE id = %s FOR UPDATE", (item_id,)
@@ -123,28 +140,44 @@ def claim(conn: psycopg.Connection, item_id: int) -> dict | None:
         node = bundle["nodes"][item["state"]]
         if node.get("terminal") or node["block"] == "WAIT":
             return None
+
+        # les tentatives se comptent sur le passage courant : celles qu'un
+        # passage précédent a brûlées restent en base, plus au décompte
+        rows = conn.execute(
+            "SELECT attempt, candidate FROM node_run "
+            "WHERE item_id = %s AND node = %s AND cycle = %s",
+            (item_id, item["state"], item["cycle"]),
+        ).fetchall()
+        attempt = max((r["attempt"] for r in rows), default=0) or 1
+        taken = {r["candidate"] or 0 for r in rows if r["attempt"] == attempt}
+        fanout = len(fanout_variants(node))
+        if len(taken) >= (fanout or 1):  # la tentative est au complet : la suivante
+            attempt, taken = attempt + 1, set()
+
+        # un run d'un autre nœud, d'un autre passage ou d'une autre tentative
+        # est encore en vol : l'item n'en mène qu'une à la fois
         running = conn.execute(
-            "SELECT id FROM node_run WHERE item_id = %s AND status = 'running'",
-            (item_id,),
+            "SELECT id FROM node_run WHERE item_id = %s AND status = 'running' "
+            "AND NOT (node = %s AND cycle = %s AND attempt = %s)",
+            (item_id, item["state"], item["cycle"], attempt),
         ).fetchone()
         if running:
             return None
 
-        # les tentatives se comptent sur le passage courant : celles qu'un
-        # passage précédent a brûlées restent en base, plus au décompte
-        attempt = conn.execute(
-            "SELECT count(*) AS n FROM node_run "
-            "WHERE item_id = %s AND node = %s AND cycle = %s",
-            (item_id, item["state"], item["cycle"]),
-        ).fetchone()["n"] + 1
-        fence = item["fence"] + 1
-        conn.execute("UPDATE work_item SET fence = %s WHERE id = %s", (fence, item_id))
+        # la barrière est celle de la tentative entière : les candidats la
+        # partagent, sinon le premier réservé serait dépassé par le suivant
+        fence = item["fence"] + (0 if taken else 1)
+        if not taken:
+            conn.execute("UPDATE work_item SET fence = %s WHERE id = %s",
+                         (fence, item_id))
+        candidate = next(k for k in range(fanout or 1) if k not in taken)
         lease_s = float((node.get("config") or {}).get("lease_s", LEASE_SECONDS))
         run = conn.execute(
-            "INSERT INTO node_run (item_id, node, cycle, attempt, status, fence, "
-            "expected_version, lease_expires_at) "
-            "VALUES (%s, %s, %s, %s, 'running', %s, %s, %s) RETURNING *",
-            (item_id, item["state"], item["cycle"], attempt, fence, item["version"],
+            "INSERT INTO node_run (item_id, node, cycle, attempt, candidate, status, "
+            "fence, expected_version, lease_expires_at) "
+            "VALUES (%s, %s, %s, %s, %s, 'running', %s, %s, %s) RETURNING *",
+            (item_id, item["state"], item["cycle"], attempt,
+             candidate if fanout else None, fence, item["version"],
              now() + dt.timedelta(seconds=lease_s)),
         ).fetchone()
         return run
@@ -154,24 +187,42 @@ def claim(conn: psycopg.Connection, item_id: int) -> dict | None:
 
 
 def apply(conn: psycopg.Connection, run_id: int, submitted: dict) -> str:
-    """L'unique transition pour un résultat de run. Retourne le statut du run."""
+    """L'unique transition pour un résultat de run. Retourne le statut du run.
+
+    L'ordre des verrous est toujours le même — l'item d'abord, ses runs
+    ensuite. La réduction classe les perdants sous le verrou de l'item ; un
+    perdant qui rendrait au même instant en prenant les verrous dans l'autre
+    sens interbloquerait la course, et K candidats la font vraiment courir.
+    """
     with conn.transaction():
+        owner = conn.execute(
+            "SELECT item_id FROM node_run WHERE id = %s", (run_id,)
+        ).fetchone()["item_id"]
+        item = conn.execute(
+            "SELECT * FROM work_item WHERE id = %s FOR UPDATE", (owner,)
+        ).fetchone()
         run = conn.execute(
             "SELECT * FROM node_run WHERE id = %s FOR UPDATE", (run_id,)
-        ).fetchone()
-        item = conn.execute(
-            "SELECT * FROM work_item WHERE id = %s FOR UPDATE", (run["item_id"],)
         ).fetchone()
 
         # rejets : chacun est une transition durable du run
         if run["status"] != "running":
+            # révoqué avant d'avoir rendu — par la réduction, ou par le
+            # faucheur : ce qu'il rapporte est classé, jamais routé. Ses
+            # jetons comptent quand même dans le prix de l'étape, mais un
+            # post-mortem déjà écrit reste celui de qui l'a écrit
+            conn.execute(
+                "UPDATE node_run SET result = %s WHERE id = %s AND result IS NULL",
+                (json.dumps(submitted), run_id),
+            )
             return run["status"]
         for status, bad in (("superseded", run["fence"] != item["fence"]),
                             ("stale", run["expected_version"] != item["version"])):
             if bad:
                 conn.execute(
-                    "UPDATE node_run SET status = %s, result = %s WHERE id = %s",
-                    (status, json.dumps(submitted), run_id),
+                    "UPDATE node_run SET status = %s, result = %s, finished_at = %s "
+                    "WHERE id = %s",
+                    (status, json.dumps(submitted), now(), run_id),
                 )
                 return status
 
@@ -182,12 +233,15 @@ def apply(conn: psycopg.Connection, run_id: int, submitted: dict) -> str:
             outcome = "invalid_result"
 
         conn.execute(
-            "UPDATE node_run SET status = 'applied', outcome = %s, result = %s "
-            "WHERE id = %s",
-            (outcome, json.dumps(submitted), run_id),
+            "UPDATE node_run SET status = 'applied', outcome = %s, result = %s, "
+            "finished_at = %s WHERE id = %s",
+            (outcome, json.dumps(submitted), now(), run_id),
         )
-        _route(conn, item, bundle, run, outcome, kind="result")
-        return "applied"
+        losers = _settle(conn, item, bundle, run, outcome, kind="result")
+    # hors transaction : la grâce du SIGTERM ne tient pas les verrous
+    for loser in losers:
+        revoke_orphan(item["id"], loser)
+    return "applied"
 
 
 def apply_item(conn: psycopg.Connection, item_id: int, outcome: str, kind: str) -> None:
@@ -201,6 +255,93 @@ def apply_item(conn: psycopg.Connection, item_id: int, outcome: str, kind: str) 
         bundle = load_bundle(conn, item["revision"])
         run = {"node": item["state"], "id": None, "attempt": 0}
         _route(conn, item, bundle, run, outcome, kind=kind)
+
+
+def _settle(conn, item, bundle, run, outcome: str, kind: str) -> list[int]:
+    """L'issue d'un run devient — ou non — celle du nœud. Rend les révoqués.
+
+    Sans fan-out, c'est direct et c'est tout : l'issue du run est celle du
+    nœud. Avec, la réduction tranche d'abord, et l'item n'avance que quand
+    elle a décidé.
+    """
+    if run["candidate"] is None:
+        _route(conn, item, bundle, run, outcome, kind=kind)
+        return []
+    return _reduce(conn, item, bundle, run, outcome, kind)
+
+
+def _reduce(conn, item, bundle, run, outcome: str, kind: str) -> list[int]:
+    """`first_pass` : le premier candidat qui réussit gagne, les autres meurent.
+
+    Un succès est une issue que le nœud a déclarée par une arête ; une issue
+    du noyau — `crashed`, `timed_out`, `stalled`, `invalid_result` — est un
+    échec. La distinction est mécanique, elle ne demande aucun modèle : le
+    nœud a nommé son vocabulaire, le noyau nomme ses ratés.
+
+    La réduction est monotone : elle décide dès qu'un candidat réussit, sans
+    attendre le plus lent — c'est la seule qui n'introduit aucune attente, et
+    c'est pour ça qu'elle vient en premier. Un échec, lui, n'emporte rien
+    tout seul : il faut que la course entière soit finie.
+
+    Tous en échec : le nœud prend l'issue la plus fréquente, et `_route` la
+    traite comme celle d'un nœud ordinaire — les arêtes d'échec et le compte
+    des tentatives ne changent pas d'un pouce.
+
+    Le prédicat s'évalue sous le verrou de l'item et ne dépend que des runs
+    terminés : un résultat qui arrive après la décision ne la change jamais.
+    """
+    reduce = bundle["nodes"][run["node"]]["config"]["fanout"]["reduce"]
+    if reduce != "first_pass":  # la publication ne laisse rien passer d'autre
+        raise GraphError(f"réduction inconnue à l'exécution : {reduce}")
+
+    if outcome not in KERNEL_OUTCOMES:  # un succès : la course s'arrête là
+        losers = _revoke_losers(conn, item, run)
+        _route(conn, item, bundle, run, outcome, kind=kind)
+        return losers
+
+    batch = conn.execute(
+        "SELECT * FROM node_run WHERE item_id = %s AND node = %s AND cycle = %s "
+        "AND attempt = %s ORDER BY finished_at, id",
+        (item["id"], run["node"], run["cycle"], run["attempt"]),
+    ).fetchall()
+    if any(r["status"] == "running" for r in batch):
+        return []  # la course continue : un candidat en échec n'emporte rien
+    perdant = _majoritaire([r for r in batch if r["outcome"]])
+    _route(conn, item, bundle, perdant, perdant["outcome"], kind=kind)
+    return []
+
+
+def _majoritaire(runs: list[dict]) -> dict:
+    """Le run dont l'issue est la plus fréquente ; à égalité, le premier terminé.
+
+    `runs` arrive trié par date de fin : le parcourir dans cet ordre, c'est
+    laisser le premier terminé trancher l'égalité, sans autre arbitrage.
+    """
+    tally = Counter(r["outcome"] for r in runs)
+    frequente = max(tally.values())
+    return next(r for r in runs if tally[r["outcome"]] == frequente)
+
+
+def _revoke_losers(conn, item, winner) -> list[int]:
+    """Révoque les candidats encore en vol. Rend leurs runs, à tuer après.
+
+    La révocation a deux moitiés, comme celle du faucheur : l'autorité en
+    base, et le processus. Ici, l'autorité — les perdants sont classés
+    sur-le-champ, et la barrière de l'item est poussée : ce qu'ils rendront
+    plus tard sera classé, jamais routé. Leurs groupes de processus, eux, se
+    tuent hors transaction : la grâce du SIGTERM ne tient pas les verrous.
+    """
+    losers = conn.execute(
+        "UPDATE node_run SET status = 'superseded', finished_at = %s "
+        "WHERE item_id = %s AND node = %s AND cycle = %s AND attempt = %s "
+        "AND status = 'running' AND id <> %s RETURNING id",
+        (now(), item["id"], winner["node"], winner["cycle"], winner["attempt"],
+         winner["id"]),
+    ).fetchall()
+    conn.execute(
+        "UPDATE work_item SET fence = fence + 1 WHERE id = %s", (item["id"],)
+    )
+    return [r["id"] for r in losers]
 
 
 def _boucle(conn, item, nodes: dict, target: str, cycle: int) -> bool:
@@ -311,26 +452,38 @@ def reap(conn: psycopg.Connection) -> int:
     ).fetchall()
     for row in expired:
         with conn.transaction():
+            # l'item d'abord, son run ensuite : l'ordre des verrous d'`apply`,
+            # sinon le faucheur et un candidat qui rend s'interbloquent
+            owner = conn.execute(
+                "SELECT item_id FROM node_run WHERE id = %s", (row["id"],)
+            ).fetchone()["item_id"]
+            item = conn.execute(
+                "SELECT * FROM work_item WHERE id = %s FOR UPDATE", (owner,)
+            ).fetchone()
             run = conn.execute(
                 "SELECT * FROM node_run WHERE id = %s FOR UPDATE", (row["id"],)
             ).fetchone()
             if run["status"] != "running":
                 continue
-            item = conn.execute(
-                "SELECT * FROM work_item WHERE id = %s FOR UPDATE", (run["item_id"],)
-            ).fetchone()
-            conn.execute(  # révocation d'autorité : un zombie ne peut plus appliquer
-                "UPDATE work_item SET fence = fence + 1 WHERE id = %s", (item["id"],)
-            )
+            if run["candidate"] is None:
+                # révocation d'autorité : un zombie ne peut plus appliquer. En
+                # fan-out, la barrière est celle de la tentative entière : un
+                # candidat fauché ne révoque pas ses frères, qui courent
+                # toujours — seule la réduction pousse la barrière.
+                conn.execute(
+                    "UPDATE work_item SET fence = fence + 1 WHERE id = %s", (item["id"],)
+                )
             # l'agent travaillait-il encore ? La réponse fait l'issue, et le
             # post-mortem se lit dans le résultat du run comme pour un bloc
             post = lease_autopsy(item["id"], run, agent_alive(item["id"], run["id"]))
             conn.execute(
-                "UPDATE node_run SET status = 'faulted', outcome = %s, result = %s "
-                "WHERE id = %s", (post["outcome"], json.dumps(post), run["id"]),
+                "UPDATE node_run SET status = 'faulted', outcome = %s, result = %s, "
+                "finished_at = %s WHERE id = %s",
+                (post["outcome"], json.dumps(post), now(), run["id"]),
             )
             bundle = load_bundle(conn, item["revision"])
-            _route(conn, item, bundle, run, post["outcome"], kind="reaped")
+            losers = _settle(conn, item, bundle, run, post["outcome"], kind="reaped")
         # hors transaction : la grâce du SIGTERM ne tient pas les verrous
-        revoke_orphan(item["id"], run["id"])
+        for orphan in (run["id"], *losers):
+            revoke_orphan(item["id"], orphan)
     return len(expired)
