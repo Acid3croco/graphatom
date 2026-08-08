@@ -65,7 +65,7 @@ class FakeConn:
     def execute(self, sql: str, params: tuple = ()):
         if "FROM question q JOIN work_item" in sql:
             return FakeCursor([self.question])
-        if "SELECT observation FROM effect" in sql:
+        if "SELECT * FROM effect" in sql:
             return FakeCursor([{"observation": None}])
         return FakeCursor([])
 
