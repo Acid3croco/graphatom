@@ -56,6 +56,11 @@ comme une autre, que le noyau relance sur place.
 Et une relance est une reprise, jamais une répétition : le prompt de la
 tentative suivante porte l'état déjà là — le `git diff` du worktree et les
 fichiers du workspace. Repartir à l'aveugle, c'est payer le trajet deux fois.
+La question n'est pas « est-ce la première tentative ? » mais « y a-t-il
+quelque chose à reprendre ? » : une tentative 1 d'un passage neuf, ouverte
+par un `retry` d'escalade, hérite du travail que le passage précédent a
+laissé, et son prompt le porte comme n'importe quelle relance. Le motif est
+nommé : un budget dépassé et une pendaison ne laissent pas la même chose.
 """
 
 import json
@@ -85,6 +90,7 @@ POLL_S = 0.2  # granularité de l'attente du process : ce qui borne le budget to
 PRUNED_DIRS = {".git", "node_modules", ".next", "__pycache__", ".venv"}
 GIT_CHARS = 8000  # l'état du worktree cité dans le prompt d'une reprise
 GIT_TIMEOUT_S = 20
+BASE_REF = "origin/main"  # la base des worktrees d'item : ce qui est commité s'y compare
 
 
 def item_workspace(item_id: int) -> Path:
@@ -228,54 +234,159 @@ def _prompt(ctx: Context, workspace: Path, subject: str) -> str:
     ) + _reprise(ctx, workspace)
 
 
-def _reprise(ctx: Context, workspace: Path) -> str:
-    """L'état laissé par la tentative précédente — jamais une répétition.
+DEATHS = {  # ce qui a tué la tentative précédente, dit en clair au repreneur
+    "timed_out": "a dépassé son budget : le couperet l'a coupée en plein travail, "
+                 "et ce qu'elle avait fait est resté là",
+    "stalled": "est restée pendue : le chien de garde l'a coupée sans qu'elle ait "
+               "produit un octet — ce qui suit vient donc d'avant elle",
+    "crashed": "s'est arrêtée sans rendre d'issue lisible, et ce qu'elle avait "
+               "fait est resté là",
+}
 
-    Une tentative relancée sur place hérite d'un worktree et d'un workspace
-    déjà entamés. Redémarrer à l'aveugle, c'est repayer le trajet depuis
-    zéro : le prompt porte donc le `git diff` du worktree et la liste des
-    fichiers du workspace. Rien à la première tentative — il n'y a alors
-    rien à reprendre.
 
-    La règle vaut pour toutes les relances, quelle que soit la mort de la
-    précédente : une pendaison (`stalled`) laisse peu de chose, une panne en
-    plein travail laisse beaucoup, et dans les deux cas c'est ce qui est là
-    qui compte, pas ce qui l'a tuée.
+def _last_attempt(ctx: Context) -> dict | None:
+    """La dernière tentative achevée de ce nœud, tous passages confondus.
+
+    Elle dit deux choses : qu'il y a bien eu quelque chose avant — un nœud
+    qui n'a jamais tourné n'a rien à reprendre —, et de quoi elle est morte,
+    ce que le prompt de la reprise nomme. La tentative en cours n'a pas
+    encore d'issue : `outcome IS NOT NULL` l'écarte sans avoir à connaître
+    son numéro.
+
+    Le passage ne filtre pas : un `retry` d'escalade ouvre un passage neuf,
+    donc une tentative 1, sur un worktree que le passage précédent a rempli.
+    C'est exactement le cas qu'une reprise doit couvrir.
     """
-    if ctx.run["attempt"] <= 1:
+    return ctx.conn.execute(
+        "SELECT cycle, attempt, outcome FROM node_run "
+        "WHERE item_id = %s AND node = %s AND outcome IS NOT NULL "
+        "ORDER BY cycle DESC, attempt DESC LIMIT 1",
+        (ctx.item["id"], ctx.run["node"]),
+    ).fetchone()
+
+
+def _work_files(workspace: Path) -> list[str]:
+    """Les fichiers du workspace qu'un agent a écrits — pas les traces du rail.
+
+    Le rail écrit lui-même le journal, le prompt et l'usage de chaque
+    tentative, puis les range sous le nom de celle-ci : ces fichiers-là
+    existent même après une tentative qui n'a rien fait. Les compter comme du
+    travail rendrait toute relance « reprise », y compris celle d'un agent
+    pendu qui n'a laissé qu'un journal vide — et une reprise inventée est
+    pire que pas de reprise du tout.
+    """
+    traces = {PGID_FILE, OUTCOME_NAME, PROMPT_NAME, USAGE_NAME}
+    return sorted(p.name for p in workspace.iterdir()
+                  if p.is_file() and p.name not in traces
+                  and not p.name.startswith(("agent-", "prompt-", "usage-")))
+
+
+def _git(worktree: Path, *args: str) -> tuple[int, str]:
+    """Une commande git dans le worktree de l'item : son code et sa sortie.
+
+    Un git qui rate n'est pas un échec de la tentative. Le code dit à
+    l'appelant s'il peut croire la sortie ; la plainte, elle, part telle
+    quelle dans le prompt plutôt que de faire tomber le bloc.
+    """
+    try:
+        done = subprocess.run(["git", "-C", str(worktree), *args],
+                              capture_output=True, text=True, timeout=GIT_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 1, f"[git illisible : {exc}]"
+    return done.returncode, (done.stdout + done.stderr).strip()
+
+
+def _committed(worktree: Path) -> str:
+    """Les commits de la branche de l'item qu'`origin/main` n'a pas encore.
+
+    Depuis qu'on demande aux agents de commiter au fil de l'eau, un worktree
+    propre n'est plus un worktree vide : le travail d'une tentative coupée
+    peut tenir entier dans ses commits. Pas d'`origin/main` sous la main — un
+    dépôt de test, un fetch jamais fait : rien, et le statut reste seul juge.
+    """
+    if _git(worktree, "rev-parse", "--verify", "--quiet", BASE_REF)[0] != 0:
+        return ""
+    code, out = _git(worktree, "log", "--oneline", f"{BASE_REF}..HEAD")
+    return out if code == 0 else ""
+
+
+def _worktree_work(worktree: Path | None) -> bool:
+    """Le worktree porte-t-il du travail à reprendre ?
+
+    Deux formes, et une seule suffit : ce qui n'est pas commité, que
+    `git status` montre du modifié comme du neuf, et ce qui l'est déjà sans
+    être fusionné. C'est le signal mécanique de l'issue, sans jugement ni
+    modèle. Pas de worktree, ou un git qui rate : faux — le workspace reste
+    alors le seul signal, et une reprise sans rien à reprendre ne se pose pas.
+    """
+    if worktree is None:
+        return False
+    code, out = _git(worktree, "status", "--short")
+    return (code == 0 and bool(out)) or bool(_committed(worktree))
+
+
+def _reprise(ctx: Context, workspace: Path) -> str:
+    """L'état laissé par une tentative antérieure — jamais une répétition.
+
+    Une tentative qui démarre derrière une autre hérite d'un worktree et d'un
+    workspace déjà entamés. Redémarrer à l'aveugle, c'est repayer le trajet
+    depuis zéro : le prompt porte donc le `git diff` du worktree et la liste
+    des fichiers du workspace.
+
+    Deux conditions, toutes deux mécaniques. Il faut une tentative antérieure
+    du même nœud — quel que soit son passage, un `retry` d'escalade en ouvre
+    un neuf sans rien effacer. Et il faut quelque chose à reprendre : du
+    travail dans le worktree, ou un fichier d'agent dans le workspace. Sans
+    l'un ni l'autre, aucun bloc — un agent qui recommence vraiment de zéro ne
+    doit pas lire un état imaginaire.
+
+    Le motif est nommé, parce qu'un état sans provenance passe pour du
+    travail étranger : un budget dépassé, une pendaison et une panne ne
+    laissent pas la même chose derrière elles.
+    """
+    previous = _last_attempt(ctx)
+    if previous is None:  # ce nœud n'a jamais tourné sur cet item
         return ""
     worktree = item_worktree(ctx.item["id"])
+    if not _work_files(workspace) and not _worktree_work(worktree):
+        return ""  # rien à reprendre : pas de reprise inventée
+    # la liste, elle, ne cache rien : les traces des tentatives passées se
+    # lisent aussi, et leur journal dit souvent où celle d'avant s'est arrêtée
     files = sorted(p.name for p in workspace.iterdir() if p.is_file())
+    death = DEATHS.get(previous["outcome"],
+                       f"a rendu « {previous['outcome']} », et ce qu'elle a "
+                       "laissé est toujours là")
     return (
-        f"\n\n--- Reprise de la tentative {ctx.run['attempt'] - 1} ---\n"
-        f"La tentative précédente de « {ctx.run['node']} » n'est pas allée au "
-        "bout. Tu la reprends : lis l'état ci-dessous, et continue là où elle "
-        "s'est arrêtée — ne recommence pas de zéro.\n\n"
+        f"\n\n--- Reprise de la tentative {previous['attempt']} du passage "
+        f"{previous['cycle']} ---\n"
+        f"La tentative précédente de « {ctx.run['node']} » {death}. Lis l'état "
+        "ci-dessous et continue là où le travail s'est arrêté — ne recommence "
+        "pas de zéro.\n\n"
         f"État du worktree {worktree or '(aucun)'} :\n\n"
         f"```\n{_git_state(worktree)}\n```\n\n"
         "Fichiers déjà écrits dans ton workspace :\n"
-        + ("\n".join(f"- {name}" for name in files) or "- (aucun)")
+        + "\n".join(f"- {name}" for name in files or ["(aucun)"])
     )
 
 
 def _git_state(worktree: Path | None) -> str:
-    """`git status` et `git diff` du worktree de l'item, bornés en taille.
+    """L'état git du worktree de l'item, borné en taille.
 
-    Le statut dit les fichiers neufs que le diff ne montre pas encore ; le
-    diff dit ce qui a changé. Un git qui rate n'est pas un échec de la
-    tentative : sa plainte part dans le prompt telle quelle.
+    Trois vues, dans l'ordre où on les lit : le statut dit les fichiers neufs
+    que le diff ne montre pas encore, le diff dit ce qui a changé, et le
+    journal face à `origin/main` dit ce que la tentative d'avant a déjà
+    commité — sans lui, un worktree commité au fil de l'eau se lirait vide.
+    Un git qui rate n'est pas un échec de la tentative : sa plainte part dans
+    le prompt telle quelle.
     """
     if worktree is None:
         return "aucun worktree pour cet item"
     parts = []
     for args in (["status", "--short"], ["diff", "HEAD"]):
-        try:
-            done = subprocess.run(["git", "-C", str(worktree), *args],
-                                  capture_output=True, text=True, timeout=GIT_TIMEOUT_S)
-            out = (done.stdout + done.stderr).strip()
-        except (OSError, subprocess.SubprocessError) as exc:
-            out = f"[git illisible : {exc}]"
-        parts.append(f"$ git {' '.join(args)}\n{out or '(rien)'}")
+        parts.append(f"$ git {' '.join(args)}\n{_git(worktree, *args)[1] or '(rien)'}")
+    commits = _committed(worktree)
+    if commits:
+        parts.append(f"$ git log --oneline {BASE_REF}..HEAD\n{commits}")
     state = "\n\n".join(parts)
     return state if len(state) <= GIT_CHARS else state[:GIT_CHARS] + "\n… (tronqué)"
 

@@ -497,14 +497,33 @@ ou un fichier du workspace ou du worktree touché depuis le lancement.
   pas de la tâche. Le noyau relance sur place jusqu'à `MAX_ATTEMPTS`, puis
   escalade — c'est exactement le traitement de `crashed`.
 
-Et **une relance est une reprise, jamais une répétition** : dès la deuxième
-tentative, le prompt porte l'état déjà là — le `git status` et le `git diff`
-du worktree de l'item, et la liste des fichiers de son workspace. Repartir à
-l'aveugle, c'est payer le trajet deux fois. La question d'escalade dit
-laquelle des deux morts l'a amenée : budget dépassé avec la queue du journal,
-ou pendaison que les relances n'ont pas réveillée.
+Et **une reprise est une reprise, jamais un recommencement**. La question
+n'est pas « est-ce la première tentative ? » mais « y a-t-il quelque chose à
+reprendre ? » : le `retry` d'un humain sur une escalade ouvre un passage
+neuf, donc une tentative 1, sur le worktree que le passage d'avant a rempli.
+Dès qu'une tentative antérieure du même nœud a laissé quelque chose, le
+prompt porte l'état déjà là — le `git status`, le `git diff` et les commits
+face à `origin/main` du worktree de l'item, et la liste des fichiers de son
+workspace. Deux signaux mécaniques, aucun modèle : du travail dans le
+worktree, ou un fichier d'agent dans le workspace. Sans l'un ni l'autre,
+aucun bloc — un agent qui recommence vraiment de zéro ne doit pas lire un
+état imaginaire. Le bloc nomme enfin la mort dont il hérite — budget dépassé,
+pendaison, panne —, parce qu'un état sans provenance se lit comme du travail
+étranger. Repartir à l'aveugle, c'est payer le trajet deux fois. La question
+d'escalade, elle, dit laquelle des deux morts l'a amenée : budget dépassé
+avec la queue du journal, ou pendaison que les relances n'ont pas réveillée.
 [`tests/silence_test.py`](tests/silence_test.py) fige les deux couperets, les
 deux issues et le prompt de reprise.
+
+**Ce qui n'est pas commité se perd au couperet.** Le prompt d'`implement`
+demande donc de commiter au fil de l'eau, morceau par morceau — c'est une
+règle du graph, pas un commentaire écrit à la main sur l'issue au troisième
+dépassement. Le budget du nœud monte du même coup à **25 min**
+(`timeout_s: 1500`, bail `lease_s: 1560`) : 840 s étaient calibrées sur une
+issue de surface, et deux changements de noyau d'affilée les ont dépassées
+pour aboutir en une seconde passe — un aller-retour par l'humain à chaque
+fois. `release` n'en est pas gênée : elle commite ce qui reste quand il reste
+quelque chose, et le corps de la PR porte `Closes #<num>` de toute façon.
 
 Le `cmd` des nœuds à modèle de `code-task` diffuse pour cette raison :
 `--output-format stream-json --verbose` écrit au fil de l'eau dans le
