@@ -91,8 +91,10 @@ uv run python tests/live_test.py                     # le marqueur de fraîcheur
                                                      # pages : stable à données
                                                      # égales, sans base
 uv run python tests/shell_test.py                    # les nœuds shell de code-task,
-                                                     # joués tels quels : sans base,
-                                                     # sans modèle, sans docker
+                                                     # joués tels quels : sans modèle,
+                                                     # sans docker — mais avec une
+                                                     # base, où `deploy` pose le
+                                                     # verrou de la file
 uv run python tests/checklist_test.py                # le nœud validate : le routage
                                                      # du graph, et la checklist citée
                                                      # dans la question de review

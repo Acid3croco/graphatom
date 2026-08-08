@@ -3,6 +3,8 @@
 Les `cmd` du graph sont joués tels quels sur un dépôt jetable — aucun
 modèle, aucun réseau, aucun docker. Ce qu'on vérifie, c'est la promesse
 qui autorise un nœud sans agent : il écrit toujours son `outcome.json`.
+Une base est nécessaire depuis que `deploy` y pose le verrou de sa file ;
+le test prend celle que `GRAPHATOM_DSN` désigne, sans y écrire une ligne.
 
   1. `worktree` crée le worktree de l'item sur `rail/issue-<num>` depuis
      `origin/main`, et le dit dans `worktree.md`
