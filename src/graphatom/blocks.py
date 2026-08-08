@@ -28,9 +28,12 @@ rail ni celle du voisin. Sa clé de sujet est dans l'environnement : le
 cleanup s'en sert pour reconnaître son propre worktree.
 
 Un candidat de fan-out, lui, a son propre workspace sous celui de l'item —
-`data/item-<N>/c<k>/`. Rien d'autre ne le distingue de son voisin, sinon la
-variante que sa config porte : c'est elle qui s'interpole dans son prompt et
-dans sa commande.
+`data/item-<N>/c<k>/` — et son propre atelier git, voir `worktree`. Rien
+d'autre ne le distingue de son voisin, sinon la variante que sa config
+porte : c'est elle qui s'interpole dans son prompt et dans sa commande.
+
+Le bloc n'a jamais à deviner où est son checkout : `GRAPHATOM_WORKTREE` le
+lui dit, celui de son candidat ou celui de son item selon ce qu'il est.
 
 L'agent tourne dans son propre groupe de processus : au timeout, c'est
 tout le groupe qui est révoqué — un descendant ne survit pas au bail.
@@ -73,6 +76,7 @@ from pathlib import Path
 import psycopg
 
 from . import db
+from .worktree import run_worktree
 
 DATA_DIR = Path("data")  # les tests le font pointer sur un répertoire temporaire
 OUTBOX_NAME = "effects_outbox.log"  # sous DATA_DIR, résolu au moment de l'effet
@@ -112,22 +116,6 @@ def run_workspace(item_id: int, run: dict) -> Path:
     return workspace if candidate is None else workspace / f"c{candidate}"
 
 
-def item_worktree(item_id: int) -> Path | None:
-    """L'atelier git de l'item, quand le canal lui en a préparé un.
-
-    La convention est celle du graph : `$GRAPHATOM_REPO_DIR/.worktrees/
-    rail-item-<N>`, le pendant git du workspace `data/item-<N>`. Pas de
-    dépôt dans l'environnement, ou pas de worktree sur le disque : None —
-    le progrès se mesure alors sur les deux autres signaux, et un prompt de
-    reprise le dit au lieu d'inventer un diff.
-    """
-    repo = os.environ.get("GRAPHATOM_REPO_DIR")
-    if not repo:
-        return None
-    worktree = Path(repo) / ".worktrees" / f"rail-item-{item_id}"
-    return worktree if worktree.is_dir() else None
-
-
 def attempt_name(run: dict) -> str:
     """Le nom d'une tentative — nœud, passage, tentative : celui de ses traces."""
     return f"{run['node']}-{run['cycle']}-{run['attempt']}"
@@ -149,6 +137,9 @@ class Context:
         self.config = node.get("config") or {}
         self.workspace = run_workspace(item["id"], run)
         self.workspace.mkdir(parents=True, exist_ok=True)
+        # l'atelier suit le bureau : celui du candidat, ouvert ici s'il ne
+        # l'est pas encore, ou celui de l'item — que le shell du graph prépare
+        self.worktree = run_worktree(item["id"], run)
 
     def simulate_work(self) -> None:
         time.sleep(float(self.config.get("duration_s", 0)))
@@ -347,7 +338,7 @@ def _reprise(ctx: Context, workspace: Path) -> str:
     previous = _last_attempt(ctx)
     if previous is None:  # ce nœud n'a jamais tourné sur cet item
         return ""
-    worktree = item_worktree(ctx.item["id"])
+    worktree = ctx.worktree  # celui du candidat, ou celui de l'item
     if not _work_files(workspace) and not _worktree_work(worktree):
         return ""  # rien à reprendre : pas de reprise inventée
     # la liste, elle, ne cache rien : les traces des tentatives passées se
@@ -487,6 +478,10 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
 
     env = os.environ | {"GRAPHATOM_WORKSPACE": str(workspace),
                         "GRAPHATOM_SUBJECT_KEY": subject}
+    if ctx.worktree is not None:
+        # le bloc ne devine pas son checkout : celui d'un candidat n'est pas
+        # celui de son item, et aucune convention de nom ne l'en déduit
+        env["GRAPHATOM_WORKTREE"] = str(ctx.worktree)
     dsn = db.agent_dsn(ctx.item["id"])
     if dsn:
         # l'agent ne voit jamais la base du rail : la sienne est jetable, et
@@ -495,7 +490,7 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
         env["GRAPHATOM_DSN"] = dsn
     log = attempt_log(workspace, ctx.run)
     pgid_file = workspace / PGID_FILE
-    watched = (log, workspace, item_worktree(ctx.item["id"]))
+    watched = (log, workspace, ctx.worktree)
     cmd = _fill(ctx, cfg["cmd"], subject)  # une variante joue sa propre commande
     with log.open("w") as out:
         # session dédiée : l'agent est chef de son groupe, ses descendants aussi
