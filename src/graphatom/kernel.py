@@ -78,7 +78,28 @@ from .blocks import agent_alive, lease_autopsy, revoke_orphan
 from .graph import KERNEL_OUTCOMES, GraphError, fanout_variants, load_bundle
 
 LEASE_SECONDS = 30
+# la marge du reaper sur le couperet de l'agent : le process est coupé
+# AVANT le bail, sinon le reaper révoquerait un agent encore vivant qui
+# continue d'écrire dans un worktree dont l'item a été repris
+AGENT_LEASE_MARGIN_S = 60
 MAX_ATTEMPTS = 3  # défaut central, par passage : réessayer, puis escalader
+
+
+def agent_timeout_s(config: dict, default: float) -> float:
+    """Le couperet du process d'un nœud, dérivé de son bail.
+
+    Un `timeout_s` encore porté par le nœud est honoré — l'exception reste
+    visible, elle n'est plus la norme. Sans lui, le couperet descend du bail
+    (`lease_s`) moins `AGENT_LEASE_MARGIN_S` ; un nœud sans bail garde
+    `default`, le 570 s historique quand rien n'est dit.
+    """
+    agent = config.get("agent") or {}
+    if "timeout_s" in agent:
+        return float(agent["timeout_s"])
+    lease = config.get("lease_s")
+    if lease is not None:
+        return float(lease) - AGENT_LEASE_MARGIN_S
+    return default
 
 # Les runs que *ce processus-ci* a réservés et qui volent encore. En mémoire,
 # donc vide au démarrage : un worker qui vient de naître ne reconnaît aucun
