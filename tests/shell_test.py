@@ -30,7 +30,7 @@ le test prend celle que `GRAPHATOM_DSN` désigne, sans y écrire une ligne.
      l'outcome disent combien de temps elle a attendu
  13. une réponse fausse — un 500, un corps sans `_next` — la fait échouer
      tout de suite, sans consommer le budget d'attente
- 14. ce budget tient dans le `timeout_s` du nœud, donc dans son bail, et le
+ 14. ce budget tient dans le couperet du nœud, donc dans son bail, et le
      README le justifie
  15. deux `deploy` lancés en même temps sur la même cible déploient l'un
      après l'autre, tous deux en succès : la concurrence est une file
@@ -63,7 +63,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import db  # noqa: E402
+from graphatom import db, kernel  # noqa: E402
+from graphatom.blocks import AGENT_TIMEOUT_S  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 BUNDLE = json.loads((ROOT / "examples" / "code-task.json").read_text())
@@ -621,12 +622,13 @@ def main() -> None:
     config = BUNDLE["nodes"]["verify_deploy"]["config"]
     cmd = config["agent"]["cmd"]
     budget = int(re.search(r"GRAPHATOM_PORTES_DELAI_S:-(\d+)", cmd).group(1))
-    assert budget < config["agent"]["timeout_s"] < config["lease_s"], config
+    couperet = kernel.agent_timeout_s(config, AGENT_TIMEOUT_S)
+    assert budget < couperet < config["lease_s"], config
     readme = (ROOT / "README.md").read_text()
     assert "GRAPHATOM_PORTES_DELAI_S" in readme, "le README ne justifie pas le budget"
     assert f"{budget} s d'attente" in readme, "le README ne dit pas le budget retenu"
-    print(f"14. budget d'attente {budget} s < timeout_s "
-          f"{config['agent']['timeout_s']} s < bail {config['lease_s']} s ✓")
+    print(f"14. budget d'attente {budget} s < couperet "
+          f"{couperet:.0f} s < bail {config['lease_s']} s ✓")
 
     # 15. la cible du deploy est unique : deux items qui l'atteignent en même
     #    temps doivent déployer l'un après l'autre. Le faux docker met 2 s à
@@ -747,15 +749,16 @@ def main() -> None:
             assert "advisory_lock" not in shell, f"{nom} se sérialise lui aussi"
     config = BUNDLE["nodes"]["deploy"]["config"]
     verrou = int(re.search(r"GRAPHATOM_VERROU_DELAI_S:-(\d+)", deploiement).group(1))
-    assert verrou < config["agent"]["timeout_s"] < config["lease_s"], config
+    couperet = kernel.agent_timeout_s(config, AGENT_TIMEOUT_S)
+    assert verrou < couperet < config["lease_s"], config
     prompt = config["agent"]["prompt"]
     for marque in ("exclusion mutuelle", "attente bornée", "pg_advisory_lock"):
         assert marque in prompt, f"le prompt de deploy ne dit pas « {marque} »"
     readme = (ROOT / "README.md").read_text()
     assert "GRAPHATOM_VERROU_DELAI_S" in readme, "le README ne justifie pas l'attente"
     assert f"{verrou} s d'attente" in readme, "le README ne dit pas le budget retenu"
-    print(f"20. seul deploy prend le verrou, attente {verrou} s < timeout_s "
-          f"{config['agent']['timeout_s']} s < bail {config['lease_s']} s ✓")
+    print(f"20. seul deploy prend le verrou, attente {verrou} s < couperet "
+          f"{couperet:.0f} s < bail {config['lease_s']} s ✓")
 
     # 21. le worker du rail n'a pas son venv dans son PATH : le `python3`
     #    ambiant y est celui du système, sans psycopg. Le nœud doit trouver

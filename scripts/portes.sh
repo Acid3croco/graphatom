@@ -79,6 +79,7 @@ tests/heartbeat_test.py
 tests/links_test.py
 tests/live_test.py
 tests/orphans_test.py
+tests/timeout_marge_test.py
 tests/timeout_test.py"
 
 dit() {  # une ligne de journal, à l'écran et dans le compte rendu
