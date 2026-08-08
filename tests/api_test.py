@@ -14,7 +14,8 @@ elles se jouent ici sur une base factice et un répertoire jetable :
   4. `/api/questions` : le jeton de `POST /answer`, jusqu'ici enfoui dans
      le HTML, et les options de chaque question ouverte
   5. `/api/heartbeat`, et tout le reste sérialisable : les horodatages
-     sortent en ISO 8601, jamais un `TypeError` au moment de répondre
+     sortent en ISO 8601, jamais un `TypeError` au moment de répondre ;
+     `/api/load`, la charge du rail — runs en vol et plafonds effectifs
   6. `/api/graphs` et `/api/graph/<rév>` : les révisions publiées avec le
      compte d'items qui les portent, et le bundle entier d'une révision —
      config des nœuds comprise —, une révision inconnue rendant None
@@ -30,7 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import blocks, web  # noqa: E402
+from graphatom import blocks, scheduler, web  # noqa: E402
 
 T0 = dt.datetime(2026, 8, 7, 10, 0, tzinfo=dt.timezone.utc)
 ISSUE = "gh:Acid3croco/graphatom#66"
@@ -103,6 +104,16 @@ class FakeConn:
             if f"FROM {name}" in sql:
                 return FakeCursor(rows)
         return FakeCursor([])
+
+
+class CountConn:
+    """La base qui compte : `/api/load` ne lit qu'un `count(*)` de runs."""
+
+    def __init__(self, running: int):
+        self.running = running
+
+    def execute(self, sql: str, params: tuple = ()):
+        return FakeCursor([{"n": self.running}])
 
 
 def item_row(item_id: int, subject_key: str, terminal: bool) -> dict:
@@ -243,6 +254,15 @@ def main() -> None:
         assert T0.isoformat() in body, "les horodatages sortent en ISO 8601"
         assert json.loads(body)["item"]["id"] == 14
         print("7. /api/heartbeat, et le payload sérialisable en ISO 8601 ✓")
+
+        # la charge du rail : les runs en vol, et les plafonds qui les bornent
+        charge = web._api_load(CountConn(4))
+        assert charge == {"running": 4, "max_runs": scheduler.MAX_RUNS,
+                          "max_runs_per_item": scheduler.MAX_RUNS_PER_ITEM}, charge
+        assert charge["max_runs_per_item"] < charge["max_runs"], \
+            "un item pourrait prendre toute la capacité"
+        print(f"7b. /api/load : {charge['running']} runs en vol pour un plafond "
+              f"de {charge['max_runs']} ({charge['max_runs_per_item']} par item) ✓")
 
         # 6. les graphs publiés : la liste des révisions, avec leurs items
         published = [
