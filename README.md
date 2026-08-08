@@ -34,6 +34,17 @@ d'un nœud d'escalade dans le passage courant est gratuite, la re-entrée
 décompte. L'histoire n'est pas réécrite — les tentatives des passages précédents
 restent dans `node_run`, et `/item/<id>` donne le passage de chaque run.
 
+**Une troisième boucle, et une seule : la file.** Un nœud peut déclarer
+`"file": true` ; il gagne alors le droit de se renvoyer sur lui-même, et
+c'est la seule boucle que la validation tolère hors escalade. Elle ne
+décompte aucun budget, parce qu'elle n'est pas un tour de reprise : le nœud
+attend une ressource unique que personne ne lui rendra plus vite, et chaque
+tour lui coûte son propre délai d'attente — la borne est le `wall_deadline`
+de l'item, qui ne se régénère pas davantage. L'exception ne porte que sur
+l'arête réflexive : une boucle plus longue qui passerait par la file reste
+refusée, et une file sans arête sur elle-même aussi. `deploy` est la seule
+à ce jour (voir « un seul déploiement à la fois »).
+
 Hors noyau, en modules : EVAL, ADMIT, dialogue durable, gouverneur de flotte.
 
 ## Lancer le squelette (milestone 1)
@@ -80,8 +91,10 @@ uv run python tests/live_test.py                     # le marqueur de fraîcheur
                                                      # pages : stable à données
                                                      # égales, sans base
 uv run python tests/shell_test.py                    # les nœuds shell de code-task,
-                                                     # joués tels quels : sans base,
-                                                     # sans modèle, sans docker
+                                                     # joués tels quels : sans modèle,
+                                                     # sans docker — mais avec une
+                                                     # base, où `deploy` pose le
+                                                     # verrou de la file
 uv run python tests/checklist_test.py                # le nœud validate : le routage
                                                      # du graph, et la checklist citée
                                                      # dans la question de review
@@ -109,6 +122,12 @@ uv run python tests/opencode_test.py                 # l'adaptateur opencode : u
                                                      # nœud réel tourne sous un
                                                      # modèle gratuit (demande
                                                      # `opencode` et le réseau)
+uv run python tests/portes_test.py                   # les portes d'un candidat
+                                                     # d'implement : un succès ne
+                                                     # compte qu'une fois prouvé
+uv run python tests/fanout_opencode_test.py          # le candidat gratuit
+                                                     # d'implement : sa CLI absente
+                                                     # dit son nom dans le run
 ```
 
 Les tests ne touchent jamais au `data/` du repo : chacun travaille dans un
@@ -406,6 +425,52 @@ portes concluent en une sonde et lui laissent le budget entier.
 `verify_deploy.md` porte, porte par porte, le temps attendu avant de
 conclure — c'est ce qui permettra de savoir si 60 s est bien réglé.
 
+### Un seul déploiement à la fois : la concurrence est une file
+
+Le rail travaille couramment à quatre ou six items en parallèle, et cela
+marche partout **sauf sur `deploy`** : tous les autres nœuds agissent chacun
+sur son atelier, `deploy` est le seul à agir sur une cible unique, la
+production. Deux `docker compose up` concurrents sur le même projet se
+disputent les noms de conteneurs, et docker refuse le second — un faux
+échec, qui escaladait chez l'humain alors que le déploiement était bon.
+
+**Le nœud prend un verrou de session postgres.** `pg_advisory_lock`, ni
+fichier ni démon : la mort de la session le libère, donc un shell tué en
+plein vol n'en laisse jamais un orphelin — un verrou qui survivrait à un
+crash serait pire que pas de verrou. La clé est la somme de contrôle du
+chemin de `GRAPHATOM_REPO_DIR` : c'est la cible qu'on sérialise, pas le
+rail, et deux rails sur deux clones ne se gênent pas. La base où il vit est
+`GRAPHATOM_VERROU_DSN`, à défaut `GRAPHATOM_AGENT_DSN` — l'instance que tous
+les items partagent ; la `GRAPHATOM_DSN` du bloc, elle, est la base jetable
+de l'item, propre à lui, donc sans effet sur le voisin. L'interprète qui
+tient la session est celui du clone de référence,
+`$GRAPHATOM_REPO_DIR/.venv/bin/python3`, avant celui du `PATH` : le worker
+est lancé par chemin absolu, son `PATH` n'a donc pas le venv, et le
+`python3` du système n'a pas psycopg — le prendre ferait taire le verrou
+sans rien dire.
+
+**Exclusion mutuelle *et* attente bornée**, les deux, parce qu'elles
+répondent à deux questions différentes : la première dit qui passe, la
+seconde combien de temps on patiente avant de rendre la main. L'exclusion
+seule laisserait le second item pendu au bail d'un déploiement qui traîne —
+le couperet le tuerait en `timed_out`, qui escalade sans compter les
+tentatives, c'est-à-dire exactement la panne qu'on veut supprimer.
+L'attente bornée seule ne sérialiserait rien. Passé
+`GRAPHATOM_VERROU_DELAI_S`, soit **300 s d'attente**, le nœud rend
+`waiting` et le graph le renvoie sur `deploy` : la file avance, personne
+n'escalade. Ces 300 s et le build tiennent ensemble dans le `timeout_s` du
+nœud, passé à 1260 s, donc dans son bail, passé à 1320 s.
+
+**Deux effets de bord du même mécanisme.** Le verrou obtenu, le shell
+compare le SHA visé à celui que portent les conteneurs — l'étiquette
+`com.graphatom.sha`, que le compose pose sur les trois services déployés :
+si un voisin a déployé le même `main` pendant l'attente, il n'y a rien à
+reconstruire et l'issue est un succès. La vérité est ainsi lue sur le
+déploiement lui-même, jamais sur un fichier tenu à côté. Et si un `up`
+interrompu a laissé un conteneur bâtard, le message `The container name …
+is already in use` nomme le coupable : le shell le retire et rejoue le
+`up`, une fois — plus d'humain dans la boucle.
+
 ## De vrais agents dans les blocs (milestone 3b)
 
 Un nœud ACT / CHECK / JUDGE peut déclarer `config.agent` — le bloc écrit
@@ -502,6 +567,12 @@ traduit ce qu'opencode rend en `outcome.json` conforme :
 Le chemin est absolu parce que le `cmd` tourne depuis le workspace de
 l'item, jamais depuis le dépôt : le clone de référence se nomme par
 `GRAPHATOM_REPO_DIR`, comme le font déjà les nœuds shell du graph.
+
+La course d'`implement` s'en sert pour son candidat gratuit, à un détail
+près : un candidat a son propre atelier, et c'est celui-là qu'il nomme —
+`GRAPHATOM_WORKTREE` pour lire le script comme pour le donner au modèle en
+`OPENCODE_DIR`. Le clone de référence est partagé par tous les items ; un
+candidat n'y écrit jamais.
 
 Le modèle se donne en argument, ou par `OPENCODE_MODEL` ; à défaut c'est
 `opencode/deepseek-v4-flash-free`, le seul dont le fonctionnement est
@@ -665,12 +736,62 @@ deux issues et le prompt de reprise.
 **Ce qui n'est pas commité se perd au couperet.** Le prompt d'`implement`
 demande donc de commiter au fil de l'eau, morceau par morceau — c'est une
 règle du graph, pas un commentaire écrit à la main sur l'issue au troisième
-dépassement. Le budget du nœud monte du même coup à **25 min**
-(`timeout_s: 1500`, bail `lease_s: 1560`) : 840 s étaient calibrées sur une
-issue de surface, et deux changements de noyau d'affilée les ont dépassées
-pour aboutir en une seconde passe — un aller-retour par l'humain à chaque
-fois. `release` n'en est pas gênée : elle commite ce qui reste quand il reste
-quelque chose, et le corps de la PR porte `Closes #<num>` de toute façon.
+dépassement. Le budget de l'agent monte du même coup à **25 min** : 840 s
+étaient calibrées sur une issue de surface, et deux changements de noyau
+d'affilée les ont dépassées pour aboutir en une seconde passe — un
+aller-retour par l'humain à chaque fois. `release` n'en est pas gênée : elle
+commite ce qui reste quand il reste quelque chose, et le corps de la PR porte
+`Closes #<num>` de toute façon.
+
+**`implement` est une course.** Le nœud déclare un `fanout` de quatre
+variantes — *minimal* (le plus petit diff qui tienne), *réécriture* (le
+composant repris en entier), *test d'abord* (le test rouge, puis le code qui
+le passe), *gratuit* (le chemin court, sur un modèle qui ne coûte rien) —
+réduit par `first_pass`. Quatre candidats implémentent la même issue en même
+temps, chacun dans son atelier et avec son angle imposé ; le premier qui rend
+`done` gagne, les autres sont révoqués en vol et leurs ateliers détruits. On
+paie quatre fois le prix d'une étape pour rendre le meilleur des quatre
+essais au lieu du seul essai d'un seul agent.
+
+**Un candidat qui ne coûte rien.** La variante *gratuit* ne change que sa
+commande : elle passe par [`scripts/agent-opencode.sh`](scripts/agent-opencode.sh)
+sur `opencode/deepseek-v4-flash-free`, et hérite du prompt, des budgets et
+des portes de tout le monde. C'est une mesure, pas une économie : si le
+harnais fait le travail de fiabilité, un modèle gratuit suffit parfois, et
+c'est la course qui le dit. Son `OPENCODE_DIR` est l'atelier du candidat —
+rien à configurer, aucun identifiant, le modèle visé est sans
+authentification.
+
+Un candidat qui perdrait en silence fausserait justement cette mesure.
+L'adaptateur sort donc en **code 3** quand `opencode` est introuvable, en
+nommant la commande manquante ; la commande du candidat s'arrête là — les
+portes ne tournent pas quand il n'y a pas d'issue à garder —, et le
+post-mortem du `node_run` porte ce message dans son `log_tail`. Une CLI
+absente se lit comme telle dans le résultat du run, pas comme du code qui ne
+compile pas : celui-là, lui, laisse un `portes.md`.
+
+**Un candidat porte ses propres portes.** Sans elles, « le premier qui
+réussit » ne voudrait dire que « le premier qui s'est déclaré fini » : on
+sélectionnerait le plus rapide à prétendre, pas le plus correct. Le `cmd` du
+candidat lance donc [`scripts/portes.sh`](scripts/portes.sh) dès que l'agent
+rend la main — le projet doit s'importer, et les tests sans base concernés
+par son diff doivent passer — et **retire son `outcome.json` quand une porte
+lâche**. Le noyau ne voit alors aucun succès : le candidat sort en `crashed`
+comme n'importe quel raté, et la course continue sans lui.
+
+Les K candidats partagent la base jetable de leur item : une porte qui la
+détruit ou la recrée les ferait tomber les uns les autres. Le script coupe
+donc `GRAPHATOM_DSN` et `GRAPHATOM_AGENT_DSN` d'entrée et épingle
+`GRAPHATOM_REPO_DIR` sur l'atelier du candidat — aucune porte ne *peut*
+toucher une base ni le clone de référence partagé, quelle que soit la
+distraction de qui éditera la liste. `tests/crash_test.py`, qui drope la base
+nommée par `GRAPHATOM_DSN`, n'y est donc pas ; `tests/shell_test.py` non plus,
+depuis que le verrou de la file du `deploy` lui en demande une. `test_backend`
+les joue après la course, une fois seul. Des jeux de portes lancés en même temps ne coûtent
+presque rien de plus qu'un seul — trois mettaient **53 s**, une seconde de
+plus qu'un seul ; le budget du nœud passe de 25 à
+**28 min** (`timeout_s: 1680`, bail `lease_s: 1740`) pour que l'agent garde
+les siennes entières.
 
 Le `cmd` des nœuds à modèle de `code-task` diffuse pour cette raison :
 `--output-format stream-json --verbose` écrit au fil de l'eau dans le
@@ -960,10 +1081,11 @@ faucheur ni les autres items.
 Le rail a été conçu pour un agent cher et compétent par nœud. La direction
 change : on veut pouvoir lancer **des myriades de modèles bon marché,
 potentiellement stupides**, sur la même étape, et laisser la sélection
-produire la qualité que l'intelligence individuelle ne donne pas. Rien de
-ce qui suit n'est codé à ce jour — c'est la vision à laquelle les issues
-suivantes se réfèrent, écrite dans le dépôt parce qu'un principe non écrit
-se perd.
+produire la qualité que l'intelligence individuelle ne donne pas. Le premier
+étage est en place — `implement` court en fan-out de quatre candidats, dont
+un sur modèle gratuit, et chacun porte ses portes déterministes ; le reste
+de ce qui suit est la vision à laquelle les issues suivantes se réfèrent,
+écrite dans le dépôt parce qu'un principe non écrit se perd.
 
 **Le renversement économique.** Quand le token ne coûte plus rien, la
 ressource rare n'est plus l'intelligence par appel : c'est la **capacité de
@@ -979,6 +1101,12 @@ une contrainte de coût mesurable : chaque critère non mécanisable est un
 critère qui exige un modèle cher. Corollaire : si `criteria.md` était
 entièrement exécutable, aucun juge ne serait nécessaire — le premier
 candidat qui franchit toutes les portes gagne, et la course est le juge.
+
+Le premier pas est fait : `implement` court en fan-out de quatre candidats —
+trois stratégies sur modèle cher, une sur modèle gratuit — et chacun porte
+ses portes déterministes ([`scripts/portes.sh`](scripts/portes.sh)). Ce qui
+manque encore, c'est l'étage de jugement des finalistes, et un `criteria.md`
+assez exécutable pour qu'il ne serve jamais.
 
 **L'haltère : cher aux deux bouts, gratuit au milieu.**
 

@@ -258,6 +258,8 @@ def validate(bundle: dict) -> None:
                 raise GraphError(f"{name}.{outcome} : issue noyau dans l'espace domaine")
             if target not in nodes:
                 raise GraphError(f"{name}.{outcome} → nœud non déclaré {target}")
+        if spec.get("file") and name not in edges.values():
+            raise GraphError(f"{name} : file sans arête sur lui-même")
         if spec["block"] == "WAIT":
             cfg = spec.get("config") or {}
             for key in ("question", "options", "owner", "deadline_minutes"):
@@ -282,10 +284,17 @@ def validate(bundle: dict) -> None:
     if unreachable:
         raise GraphError(f"nœuds inatteignables : {unreachable}")
 
-    # le sous-graph privé des arêtes d'escalade est acyclique
+    # le sous-graph privé des arêtes d'escalade est acyclique. Une file fait
+    # exception, et elle seule : un nœud qui déclare `file` a le droit de se
+    # renvoyer sur lui-même, parce qu'il attend une ressource que personne ne
+    # lui rendra plus vite — la boucle est bornée par le temps que chaque tour
+    # coûte, donc par le `wall_deadline` de l'item, et non par le budget
+    # d'escalades. L'exception ne porte que sur l'arête réflexive : une boucle
+    # plus longue qui passe par la file reste refusée.
     escalade = {n for n, spec in nodes.items() if spec.get("escalade")}
     plain: dict[str, list[str]] = {
-        n: [t for t in (spec.get("edges") or {}).values() if t not in escalade]
+        n: [t for t in (spec.get("edges") or {}).values()
+            if t not in escalade and not (spec.get("file") and t == n)]
         for n, spec in nodes.items()
         if n not in escalade
     }

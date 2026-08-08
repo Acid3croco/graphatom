@@ -17,11 +17,9 @@ une doublure :
      cite la limite
   5. un `fanout` malformé — `variants` absent ou vide, `repeat` non entier
      ou < 1, `reduce` absent — est refusé, cas par cas
-  6. un bundle sans `fanout` nulle part se valide et se publie comme avant
-  7. `keep_n` : son `n` est obligatoire, entier, et dans une borne dure que
-     le message de refus nomme
-  8. le nœud arbitre : bloc JUDGE, source déclarée qui réduit bien par
-     `keep_n`, et ses trois issues fermées — chaque manque est refusé
+  6. le même bundle privé de son `fanout` se valide et se publie comme avant,
+     et tous ceux d'`examples/` — celui de `code-task`, qui déclare la course
+     d'`implement`, compris — passent la validation
 
 Usage : uv run python tests/fanout_config_test.py
 """
@@ -168,9 +166,13 @@ def main() -> None:
     graph.validate(avec_fanout("implement", {k: v for k, v in BON.items() if k != "repeat"}))
     print("   repeat absent vaut une fois ✓")
 
-    # 6. sans fan-out, rien ne change
+    # 6. sans fan-out, rien ne change — l'exemple en déclare un sur `implement`
+    # depuis que la course y est en production : on le retire pour retrouver un
+    # bundle nu, plutôt que de faire semblant qu'il n'y en a jamais eu
     nu = bundle_nu()
-    assert "fanout" not in json.dumps(nu), "le socle nu ne déclare aucun fan-out"
+    assert nu["nodes"]["implement"]["config"].pop("fanout"), \
+        "`implement` ne déclare plus de fan-out dans l'exemple"
+    assert "fanout" not in json.dumps(nu), "aucun autre nœud n'en déclare"
     graph.validate(nu)
     assert graph.publish(FakeConn(), nu) == graph.content_hash(nu)
     for path in sorted((ROOT / "examples").glob("*.json")):
