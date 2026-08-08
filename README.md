@@ -638,11 +638,19 @@ d'entrée dans l'état courant — celui que `kernel._route()` y a écrit :
   l'anonymat du dossier du juge reste entier.
 
 Borné des deux côtés, parce qu'un agent noyé sous l'historique choisit mal :
-en taille (`PASSATION_CHARS`, 4 000 caractères, et la queue du journal aux
+en taille (`PASSATION_CHARS`, 2 500 caractères, et la queue du journal aux
 `TAIL_LINES` habituelles) et en profondeur — le prédécesseur immédiat, jamais
-l'histoire de l'item. Le surcoût est de l'ordre de 1 500 jetons d'entrée sur
-un prompt d'agent qui en pèse plusieurs milliers, et quelques centaines de
-jetons de sortie pour l'écrire.
+l'histoire de l'item.
+
+Le prix est mesuré, pas estimé. Les 809 prompts déjà rendus par le rail
+pèsent 2 750 caractères en médiane (3 990 en moyenne). La demande de
+passation en ajoute 590, toujours ; le bloc reçu en ajoute environ 2 000 sur
+une passation de taille réaliste, et 4 750 au pire — les deux bornes pleines
+en même temps. Soit un prompt médian qui passe de 2 750 à ~5 300 caractères
+dans le pire cas, ~4 300 en pratique : de l'ordre de 650 jetons d'entrée de
+plus, et quelques centaines de jetons de sortie pour écrire la passation.
+C'est pour tenir ce chiffre que la borne a été resserrée de 4 000 à 2 500 :
+trois sections courtes n'ont pas besoin de plus.
 
 La passation n'est pas une conversation : c'est un artefact déposé, lu par le
 suivant, et jamais un échange — le périmètre négatif reste entier. Ce n'est

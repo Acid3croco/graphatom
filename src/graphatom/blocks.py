@@ -108,7 +108,11 @@ POLL_S = 0.2  # granularité de l'attente du process : ce qui borne le budget to
 PRUNED_DIRS = {".git", "node_modules", ".next", "__pycache__", ".venv"}
 GIT_CHARS = 8000  # l'état du worktree cité dans le prompt d'une reprise
 GIT_TIMEOUT_S = 20
-PASSATION_CHARS = 4000  # la passation du prédécesseur citée dans le prompt
+# la passation du prédécesseur citée dans le prompt. Resserrée à la mesure :
+# les 809 prompts déjà rendus par le rail pèsent 2 750 caractères en médiane,
+# et trois sections courtes tiennent largement dans 2 500 — au-delà, ce n'est
+# plus une passation, c'est le journal que personne ne lit
+PASSATION_CHARS = 2500
 BASE_REF = "origin/main"  # la base des worktrees d'item : ce qui est commité s'y compare
 
 
