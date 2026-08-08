@@ -21,7 +21,9 @@ Le cycle de vie tient en trois moments :
 - `open_run` ouvre l'atelier du candidat, une fois, à son premier run ;
 - `promote` fait du travail du gagnant celui de l'item — un `merge
   --ff-only` sur la branche de l'item, sans conflit possible puisque tous
-  les candidats sont partis du même commit ;
+  les candidats sont partis du même commit. Il rend ce qui l'empêche quand
+  il échoue : un appelant qui ne peut pas promouvoir n'a rien à faire
+  avancer ;
 - `discard` détruit tous les ateliers de candidats, worktrees et branches
   locales. Il passe après la réduction, mais aussi sur n'importe quel chemin
   terminal atteint pendant la course : un item qui part en `wall_deadline`
@@ -133,37 +135,51 @@ def open_run(item_id: int, candidate: int) -> Path | None:
 
 
 def promote(item_id: int, candidate: int) -> str | None:
-    """Le travail du gagnant devient celui de l'item. Rend la branche promue.
+    """Le travail du gagnant devient celui de l'item. Rend l'empêchement.
 
     `merge --ff-only` sur la branche de l'item : tous les candidats sont
     partis du même commit et l'item n'a pas bougé depuis, donc l'avance est
     droite ou il n'y a rien à avancer. Refuser le merge non-ff est le
     garde-fou : mieux vaut un item resté en arrière, et dit à voix haute,
-    qu'une fusion inventée.
+    qu'une fusion inventée. Après quoi l'item n'a toujours qu'une branche —
+    la sienne, celle qu'il avait déjà.
 
-    Après quoi l'item n'a toujours qu'une branche — la sienne, celle qu'il
-    avait déjà.
+    Trois réponses, et pas deux — c'est ce que l'appelant doit pouvoir
+    distinguer pour en faire un échec de nœud ou non :
+
+    - None, la promotion est faite ;
+    - None aussi, il n'y avait rien à promouvoir : pas de dépôt, pas
+      d'atelier d'item, ou aucune branche pour ce candidat. Le rail tourne
+      alors sans git — la plupart des tests du noyau sont dans ce cas — et un
+      candidat sans branche n'a aucun commit à porter ;
+    - une phrase, sinon : ce qui empêche la promotion, dit tel quel. Le
+      travail existe, il n'a pas rejoint l'item, et l'appelant doit le
+      traiter comme un échec franc plutôt que d'avancer sur un atelier vide.
+
+    La branche du candidat est donc le témoin : elle survit à la destruction
+    de son atelier, et c'est elle qui sépare « ce candidat n'a jamais eu
+    d'atelier » de « son atelier a disparu sous nos pieds ».
     """
     root, item = repo(), item_worktree(item_id)
     path = candidate_path(item_id, candidate)
     if root is None or item is None or path is None:
-        return None
+        return None  # pas de dépôt, pas d'atelier d'item : rien à promouvoir
 
     registered = _registered(root)
     branch = registered.get(item)
     if branch is None:
-        return None
+        return None  # l'atelier de l'item n'est pas à ce dépôt : idem
     mine = candidate_branch(branch, candidate)
-    if not _mine(root, path) or registered.get(path) != mine:
-        print(f"promotion refusée : {path} n'est pas l'atelier de c{candidate} "
-              f"sur {mine}", flush=True)
-        return None
+    if not _known_branch(root, mine):
+        return None  # ce candidat n'a jamais ouvert d'atelier
 
+    if not _mine(root, path) or registered.get(path) != mine:
+        return (f"l'atelier de c{candidate} n'est plus celui du dépôt : {path} "
+                f"n'y est pas enregistré sur {mine}")
     code, out = _git(item, "merge", "--ff-only", mine)
     if code != 0:
-        print(f"promotion de {mine} sur {branch} refusée : {out}", flush=True)
-        return None
-    return mine
+        return f"merge --ff-only de {mine} sur {branch} refusé : {out}"
+    return None
 
 
 def candidate_work(item_id: int, candidate: int, limit: int) -> str | None:

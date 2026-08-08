@@ -46,6 +46,19 @@ l'item, et les ateliers de tous les candidats sont détruits. Sur *tous* les
 chemins terminaux — la réduction, mais aussi un `wall_deadline` tombé en
 pleine course. Voir `worktree`.
 
+La promotion du gagnant n'est pas un ménage d'après-coup : c'est une
+conséquence de la décision, et elle est dans la même transaction qu'elle.
+La réduction élit, promeut, et **seulement ensuite** route l'item — le tout
+sous le verrou de l'item, celui-là même que `claim` prend. Le premier run
+du nœud suivant ne peut donc pas être réservé avant que le travail du
+gagnant soit sur la branche de l'item : l'ordre est garanti, pas probable.
+C'est la même propriété que « un résultat qui arrive après la décision ne
+la change jamais » — la décision et ses conséquences forment un tout.
+
+Et quand la promotion est impossible — merge non-ff, atelier disparu, git
+en erreur —, le nœud échoue, nommément : l'item ne part pas en avant sur un
+atelier vide en croyant que tout va bien. Voir `_promouvoir` et `_faute`.
+
 Deux réductions, et elles ne coûtent pas la même chose. `first_pass` est
 monotone : le premier succès tranche, personne n'attend. `keep_n` attend
 tout le monde et laisse passer n finalistes au lieu d'un gagnant — le noyau
@@ -284,9 +297,10 @@ def apply(conn: psycopg.Connection, run_id: int, submitted: dict) -> str:
             "finished_at = %s WHERE id = %s",
             (outcome, json.dumps(submitted), now(), run_id),
         )
-        losers = _settle(conn, item, bundle, run, outcome, kind="result")
-        # `keep_n` recale les réussites au-delà de la n-ième : ce run-ci peut
-        # être l'une d'elles, et rendre « applied » mentirait à l'appelant
+        revoques, ranger = _settle(conn, item, bundle, run, outcome, kind="result")
+        # `keep_n` recale les réussites au-delà de la n-ième, et une promotion
+        # impossible faute le gagnant : ce run-ci peut être l'un des deux, et
+        # rendre « applied » mentirait à l'appelant
         statut = conn.execute(
             "SELECT status FROM node_run WHERE id = %s", (run_id,)
         ).fetchone()["status"]
@@ -297,10 +311,7 @@ def apply(conn: psycopg.Connection, run_id: int, submitted: dict) -> str:
     # redémarrage. Les trois rejets plus haut laissent leur numéro derrière
     # eux : leur run est déjà classé, le faucheur ne le reverra jamais.
     CLAIMED.discard(run_id)
-    # hors transaction : la grâce du SIGTERM ne tient pas les verrous
-    for loser in losers:
-        revoke_orphan(item["id"], loser)
-    _ateliers(conn, item, bundle, run)
+    _menage(item["id"], revoques, ranger)
     return statut
 
 
@@ -325,21 +336,55 @@ def apply_item(conn: psycopg.Connection, item_id: int, outcome: str, kind: str) 
     worktree.discard(item_id)  # hors transaction : git ne tient pas les verrous
 
 
-def _settle(conn, item, bundle, run, outcome: str, kind: str) -> list[int]:
-    """L'issue d'un run devient — ou non — celle du nœud. Rend les révoqués.
+def _settle(conn, item, bundle, run, outcome: str, kind: str) -> tuple[list[int], bool]:
+    """L'issue d'un run devient — ou non — celle du nœud. Rend le ménage d'après.
 
     Sans fan-out, c'est direct et c'est tout : l'issue du run est celle du
-    nœud. Avec, la réduction tranche d'abord, et l'item n'avance que quand
-    elle a décidé.
+    nœud, et il n'y a aucun atelier de candidat en jeu.
+
+    Avec, trois gestes dans cet ordre, et l'ordre *est* le contrat : la
+    réduction élit, la promotion porte le travail de l'élu sur la branche de
+    l'item, le routage fait avancer l'item. Le tout dans la transaction de
+    l'appelant, donc sous le verrou de l'item — celui que `claim` prend
+    aussi : le nœud suivant ne peut rien réserver avant que la promotion soit
+    faite et la transaction close.
+
+    Rend ce qui reste à faire une fois la transaction close, et rien d'autre :
+    les runs à tuer, et s'il faut ranger les ateliers. Voir `_menage`.
     """
     if run["candidate"] is None:
         _route(conn, item, bundle, run, outcome, kind=kind)
-        return []
-    return _reduce(conn, item, bundle, run, outcome, kind)
+        return [], False
+
+    fanout = bundle["nodes"][run["node"]]["config"]["fanout"]
+    verdict = _reduce(conn, item, run, outcome, fanout)
+    if verdict is None:
+        return [], False  # la course continue : personne n'a tranché
+
+    elu, issue, revoques = verdict
+    # `keep_n` n'élit pas un gagnant, elle laisse passer des finalistes : ni
+    # promotion ni rangement ici, c'est le nœud arbitre d'aval qui promeut
+    # l'élu et range le reste. Ranger ici détruirait ce qu'on fait juger.
+    if fanout["reduce"] == "keep_n":
+        _route(conn, item, bundle, elu, issue, kind=kind)
+        return revoques, False
+
+    empechement = _promouvoir(item, elu, issue)
+    if empechement is not None:
+        _faute(conn, elu, empechement)
+        _route(conn, item, bundle, elu, "crashed", kind=kind)
+        return revoques, False  # les ateliers restent : le travail est dedans
+    _route(conn, item, bundle, elu, issue, kind=kind)
+    return revoques, True
 
 
-def _reduce(conn, item, bundle, run, outcome: str, kind: str) -> list[int]:
-    """La réduction du nœud, celle que le bundle a déclarée. Rend les révoqués.
+def _reduce(conn, item, run, outcome: str, fanout: dict) -> tuple | None:
+    """La réduction du nœud, celle que le bundle a déclarée.
+
+    Rend l'issue du nœud sous la forme d'un triplet — le run qui la porte,
+    l'issue, et les candidats révoqués —, ou None tant que la course n'a rien
+    tranché. Elle élit, elle ne route pas : ce que le noyau fait de son
+    verdict est l'affaire de `_settle`.
 
     Un succès est une issue que le nœud a déclarée par une arête ; une issue
     du noyau — `crashed`, `timed_out`, `stalled`, `invalid_result` — est un
@@ -350,16 +395,15 @@ def _reduce(conn, item, bundle, run, outcome: str, kind: str) -> list[int]:
     Le prédicat s'évalue sous le verrou de l'item et ne dépend que des runs
     terminés : un résultat qui arrive après la décision ne la change jamais.
     """
-    fanout = bundle["nodes"][run["node"]]["config"]["fanout"]
     if fanout["reduce"] == "first_pass":
-        return _first_pass(conn, item, bundle, run, outcome, kind)
+        return _first_pass(conn, item, run, outcome)
     if fanout["reduce"] == "keep_n":
-        return _keep_n(conn, item, bundle, run, fanout["n"], kind)
+        return _keep_n(conn, item, run, fanout["n"])
     # la publication ne laisse rien passer d'autre
     raise GraphError(f"réduction inconnue à l'exécution : {fanout['reduce']}")
 
 
-def _first_pass(conn, item, bundle, run, outcome: str, kind: str) -> list[int]:
+def _first_pass(conn, item, run, outcome: str) -> tuple | None:
     """Le premier candidat qui réussit gagne, les autres meurent.
 
     La réduction est monotone : elle décide dès qu'un candidat réussit, sans
@@ -367,24 +411,21 @@ def _first_pass(conn, item, bundle, run, outcome: str, kind: str) -> list[int]:
     c'est pour ça qu'elle vient en premier. Un échec, lui, n'emporte rien
     tout seul : il faut que la course entière soit finie.
 
-    Tous en échec : le nœud prend l'issue la plus fréquente, et `_route` la
+    Tous en échec : le nœud prend l'issue la plus fréquente, et `_settle` la
     traite comme celle d'un nœud ordinaire — les arêtes d'échec et le compte
     des tentatives ne changent pas d'un pouce.
     """
     if outcome not in KERNEL_OUTCOMES:  # un succès : la course s'arrête là
-        losers = _revoke_losers(conn, item, run)
-        _route(conn, item, bundle, run, outcome, kind=kind)
-        return losers
+        return run, outcome, _revoke_losers(conn, item, run)
 
     batch = _batch(conn, item, run)
     if any(r["status"] == "running" for r in batch):
-        return []  # la course continue : un candidat en échec n'emporte rien
+        return None  # la course continue : un candidat en échec n'emporte rien
     perdant = _majoritaire([r for r in batch if r["outcome"]])
-    _route(conn, item, bundle, perdant, perdant["outcome"], kind=kind)
-    return []
+    return perdant, perdant["outcome"], []
 
 
-def _keep_n(conn, item, bundle, run, n: int, kind: str) -> list[int]:
+def _keep_n(conn, item, run, n: int) -> tuple | None:
     """Les n premiers candidats qui ont réussi passent en aval, ensemble.
 
     Contrairement à `first_pass`, elle **attend tout le monde** : garder les
@@ -397,7 +438,7 @@ def _keep_n(conn, item, bundle, run, n: int, kind: str) -> list[int]:
     terminées : les n premières restent `applied` — ce sont les finalistes, et
     c'est à ce statut que le nœud arbitre les reconnaîtra —, les suivantes
     sont classées `superseded`. Aucune réussite : rien de neuf, l'issue
-    majoritaire est routée exactement comme sous `first_pass`.
+    majoritaire est rendue exactement comme sous `first_pass`.
 
     L'item, lui, avance sur une seule arête : celle de l'issue majoritaire des
     finalistes. Le choix entre eux n'appartient pas au noyau — c'est tout
@@ -405,13 +446,12 @@ def _keep_n(conn, item, bundle, run, n: int, kind: str) -> list[int]:
     """
     batch = _batch(conn, item, run)
     if any(r["status"] == "running" for r in batch):
-        return []  # keep_n attend tout le monde : personne ne tranche seul
+        return None  # keep_n attend tout le monde : personne ne tranche seul
 
     reussis = [r for r in batch if r["outcome"] and r["outcome"] not in KERNEL_OUTCOMES]
     if not reussis:
         perdant = _majoritaire([r for r in batch if r["outcome"]])
-        _route(conn, item, bundle, perdant, perdant["outcome"], kind=kind)
-        return []
+        return perdant, perdant["outcome"], []
 
     recales = [r["id"] for r in reussis[n:]]
     if recales:
@@ -419,8 +459,7 @@ def _keep_n(conn, item, bundle, run, n: int, kind: str) -> list[int]:
             "UPDATE node_run SET status = 'superseded' WHERE id = ANY(%s)", (recales,)
         )
     finaliste = _majoritaire(reussis[:n])
-    _route(conn, item, bundle, finaliste, finaliste["outcome"], kind=kind)
-    return []
+    return finaliste, finaliste["outcome"], []
 
 
 def _batch(conn, item, run) -> list[dict]:
@@ -469,41 +508,64 @@ def _revoke_losers(conn, item, winner) -> list[int]:
     return [r["id"] for r in losers]
 
 
-def _ateliers(conn, item, bundle, run) -> None:
-    """La course finie : le gagnant promu, les ateliers des candidats détruits.
+def _promouvoir(item, elu, issue: str) -> str | None:
+    """Le travail de l'élu rejoint la branche de l'item. Rend l'empêchement.
 
-    Le prédicat est celui de la réduction, lu sur les mêmes lignes : tant
-    qu'un frère court, rien n'est tranché et rien ne bouge. Une fois la
-    tentative close, le travail du gagnant rejoint la branche de l'item, et
-    tous les ateliers de candidats disparaissent — celui du gagnant compris,
-    puisqu'il n'a plus rien d'unique.
+    Sous le verrou de l'item, et c'est là tout l'enjeu : `claim` prend ce
+    même verrou, donc le premier run du nœud suivant ne peut être réservé
+    qu'une fois le merge fait et la transaction close. Le prix est un `git
+    merge --ff-only` local — quelques millisecondes, plafonnées par
+    `worktree.GIT_TIMEOUT_S` — tenu sous une ligne verrouillée. Le prix de
+    l'ordre inverse était un item sur deux qui repartait sur un atelier vide.
 
-    `keep_n` fait exception, et c'est toute sa raison d'être : elle ne
-    désigne pas de gagnant, elle passe des finalistes en aval. Leurs ateliers
-    sont ce que le nœud arbitre va lire, et c'est lui qui promeut l'élu puis
-    range tout le reste. Ranger ici détruirait ce qu'on veut faire juger.
+    Une course que personne n'a gagnée ne promeut rien : le travail d'un
+    candidat en échec n'a aucune raison de devenir celui de l'item.
 
-    Un nœud sans fan-out n'a pas de candidat : rien de tout ceci ne le
-    concerne, et son atelier d'item reste celui du shell du graph.
-
-    Hors transaction, toujours : un `git merge` n'a rien à faire sous le
-    verrou d'un item.
+    Rend None quand c'est fait — ou qu'il n'y avait rien à faire, un rail
+    sans dépôt ni atelier n'ayant aucun commit à porter. Rend sinon la phrase
+    qui dit ce qui l'empêche. Voir `worktree.promote`.
     """
-    if run["candidate"] is None:
-        return
-    if bundle["nodes"][run["node"]]["config"]["fanout"]["reduce"] == "keep_n":
-        return  # les ateliers des finalistes attendent le juge
-    batch = conn.execute(
-        "SELECT candidate, status FROM node_run WHERE item_id = %s AND node = %s "
-        "AND cycle = %s AND attempt = %s",
-        (item["id"], run["node"], run["cycle"], run["attempt"]),
-    ).fetchall()
-    if any(r["status"] == "running" for r in batch):
-        return
-    gagnant = next((r["candidate"] for r in batch if r["status"] == "applied"), None)
-    if gagnant is not None:
-        worktree.promote(item["id"], gagnant)
-    worktree.discard(item["id"])
+    if issue in KERNEL_OUTCOMES:
+        return None
+    return worktree.promote(item["id"], elu["candidate"])
+
+
+def _faute(conn, elu, empechement: str) -> None:
+    """Le gagnant qu'on n'a pas pu promouvoir : un échec de nœud, nommé.
+
+    Une promotion ratée est un échec du nœud, pas un succès suivi d'une porte
+    d'aval qui se plaint d'un diff vide. Le run de l'élu est donc reclassé
+    `faulted`, son issue devient `crashed`, et son résumé dit ce qui a
+    bloqué ; ce qu'il avait rendu reste là, sous `rendu`. Le nœud se rejoue
+    alors sur place comme après n'importe quelle panne, puis escalade — et
+    les ateliers des candidats ne sont pas rangés, puisque le travail y est
+    encore.
+    """
+    rendu = conn.execute(
+        "SELECT result FROM node_run WHERE id = %s", (elu["id"],)
+    ).fetchone()["result"]
+    post = {"outcome": "crashed",
+            "summary": f"promotion du gagnant impossible — {empechement}",
+            "rendu": rendu}
+    conn.execute(
+        "UPDATE node_run SET status = 'faulted', outcome = 'crashed', result = %s, "
+        "finished_at = %s WHERE id = %s",
+        (json.dumps(post), now(), elu["id"]),
+    )
+
+
+def _menage(item_id: int, orphelins: list[int], ranger: bool) -> None:
+    """Ce qui suit la transaction : les orphelins tués, les ateliers rangés.
+
+    Hors transaction, toujours : ni la grâce d'un SIGTERM ni un `git worktree
+    remove` n'ont à tenir le verrou d'un item. Perdre ce ménage — un worker
+    tué juste après le commit — ne coûte que des ateliers en trop, jamais du
+    travail : la promotion, elle, est de l'autre côté de la barrière.
+    """
+    for orphelin in orphelins:
+        revoke_orphan(item_id, orphelin)
+    if ranger:
+        worktree.discard(item_id)
 
 
 def _boucle(conn, item, nodes: dict, target: str, cycle: int) -> bool:
@@ -655,9 +717,7 @@ def reap(conn: psycopg.Connection) -> int:
                 (post["outcome"], json.dumps(post), now(), run["id"]),
             )
             bundle = load_bundle(conn, item["revision"])
-            losers = _settle(conn, item, bundle, run, post["outcome"], kind="reaped")
-        # hors transaction : la grâce du SIGTERM ne tient pas les verrous
-        for orphan in (run["id"], *losers):
-            revoke_orphan(item["id"], orphan)
-        _ateliers(conn, item, bundle, run)
+            revoques, ranger = _settle(conn, item, bundle, run, post["outcome"],
+                                       kind="reaped")
+        _menage(item["id"], [run["id"], *revoques], ranger)
     return len(expired)
