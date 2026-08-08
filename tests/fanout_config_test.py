@@ -10,13 +10,18 @@ une doublure :
      un K sous la limite, se publie : `graph.publish` rend une révision
   2. un `fanout` sur un nœud WAIT est refusé, et le message nomme le nœud
   3. la table « type de bloc → réductions permises » est explicite, et une
-     réduction hors du jeu du bloc — un nom inconnu, ou `best_by` qui n'est
-     livrée nulle part — est refusée, message à l'appui
+     réduction hors du jeu du bloc — un nom inconnu, `best_by` qui n'est
+     livrée nulle part, ou `keep_n` sur un bloc qui n'a rien à départager —
+     est refusée, message à l'appui
   4. variantes × repeat au-delà de la limite dure est refusé, et le message
      cite la limite
   5. un `fanout` malformé — `variants` absent ou vide, `repeat` non entier
      ou < 1, `reduce` absent — est refusé, cas par cas
   6. un bundle sans `fanout` nulle part se valide et se publie comme avant
+  7. `keep_n` : son `n` est obligatoire, entier, et dans une borne dure que
+     le message de refus nomme
+  8. le nœud arbitre : bloc JUDGE, source déclarée qui réduit bien par
+     `keep_n`, et ses trois issues fermées — chaque manque est refusé
 
 Usage : uv run python tests/fanout_config_test.py
 """
@@ -53,9 +58,23 @@ class FakeConn:
         return None
 
 
-def bundle_nu() -> dict:
-    """Le bundle d'exemple, tel quel — aucun `fanout` nulle part."""
+def bundle_livre() -> dict:
+    """Le bundle d'exemple, tel qu'il est livré — `implement` en keep_n, `judge`."""
     return json.loads((ROOT / "examples" / "code-task.json").read_text())
+
+
+def bundle_nu() -> dict:
+    """Le même, ramené à l'avant fan-out : aucun `fanout`, aucun arbitre.
+
+    C'est le socle des cas malades — on y pose un `fanout` et on regarde la
+    validation refuser. Retirer le juge va avec : il n'existe que pour la
+    réduction `keep_n` d'`implement`, et sans elle il n'a plus de source.
+    """
+    bundle = bundle_livre()
+    del bundle["nodes"]["judge"]
+    del bundle["nodes"]["implement"]["config"]["fanout"]
+    bundle["nodes"]["implement"]["edges"] = {"done": "test_backend"}
+    return bundle
 
 
 def avec_fanout(node: str, fanout) -> dict:
@@ -91,19 +110,30 @@ def main() -> None:
                avec_fanout("clarify", BON), "clarify", "WAIT")
     print(f"2. fan-out sur un WAIT refusé : {e} ✓")
 
-    # 3. la table des réductions est explicite, et seule `first_pass` est livrée
+    # 3. la table des réductions est explicite, et chacune n'est permise que
+    #    là où elle a un sens : `first_pass` partout, `keep_n` sur un ACT seul
     table = graph.FANOUT_REDUCERS
     assert set(table) == graph.BLOCK_KINDS, set(table) ^ graph.BLOCK_KINDS
     assert table["WAIT"] == set(), table["WAIT"]
     livrees = set().union(*table.values())
-    assert livrees == {"first_pass"}, livrees
-    print(f"3. table bloc → réductions : {livrees} livrée, WAIT au jeu vide ✓")
+    assert livrees == {"first_pass", "keep_n"}, livrees
+    assert {k for k, v in table.items() if "keep_n" in v} == {"ACT"}, table
+    print(f"3. table bloc → réductions : {sorted(livrees)} livrées, keep_n sur ACT "
+          "seul, WAIT au jeu vide ✓")
 
-    for reduce in ("vote", "best_by", "keep_n"):
+    for reduce in ("vote", "best_by"):
         e = refuse(f"la réduction {reduce!r}",
                    avec_fanout("implement", BON | {"reduce": reduce}),
                    "implement", reduce, "ACT")
         print(f"   réduction {reduce!r} refusée : {e} ✓")
+
+    # `keep_n` là où il n'y a rien à départager : un constat, une lecture, un
+    # effet — le message nomme le bloc et les réductions qu'il permet
+    for node, kind in (("test_backend", "CHECK"), ("scope", "JUDGE")):
+        e = refuse(f"keep_n sur le {kind} `{node}`",
+                   avec_fanout(node, BON | {"reduce": "keep_n", "n": 2}),
+                   node, "keep_n", kind, "first_pass")
+        print(f"   keep_n sur un {kind} refusée : {e} ✓")
 
     # 4. la limite dure borne variantes × repeat
     limite = graph.FANOUT_MAX_CANDIDATES
@@ -140,12 +170,55 @@ def main() -> None:
 
     # 6. sans fan-out, rien ne change
     nu = bundle_nu()
-    assert "fanout" not in json.dumps(nu), "l'exemple ne déclare aucun fan-out"
+    assert "fanout" not in json.dumps(nu), "le socle nu ne déclare aucun fan-out"
     graph.validate(nu)
     assert graph.publish(FakeConn(), nu) == graph.content_hash(nu)
     for path in sorted((ROOT / "examples").glob("*.json")):
         graph.validate(json.loads(path.read_text()))
     print("6. les bundles d'examples/ se valident et se publient comme avant ✓")
+
+    # 7. le `n` de keep_n : obligatoire, entier, et dans une borne dure
+    borne = (graph.FANOUT_KEEP_MIN, graph.FANOUT_KEEP_MAX)
+    assert borne == (2, 3), borne
+    KEEP = BON | {"reduce": "keep_n"}
+    graph.validate(avec_fanout("implement", KEEP | {"n": 2}))
+    graph.validate(avec_fanout("implement", KEEP | {"n": 3}))
+    print(f"7. keep_n avec n = {borne[0]}..{borne[1]} passe ✓")
+
+    for quoi, n in (("n absent", None), ("n = 1", 1), ("n = 4", 4), ("n = 0", 0),
+                    ("n négatif", -2), ("n non entier", "2"), ("n booléen", True)):
+        fanout = KEEP if n is None else KEEP | {"n": n}
+        e = refuse(f"keep_n avec {quoi}", avec_fanout("implement", fanout),
+                   "implement", str(borne[0]), str(borne[1]))
+        print(f"   keep_n, {quoi} → {e} ✓")
+
+    # 8. le nœud arbitre : son bloc, sa source, ses trois issues
+    graph.validate(bundle_livre())
+    arbitre = bundle_livre()["nodes"]["judge"]
+    assert graph.judge_source(arbitre) == "implement", arbitre
+    assert set(graph.JUDGE_OUTCOMES) <= set(arbitre["edges"]), arbitre["edges"]
+    print("8. l'exemple livré porte son arbitre : JUDGE, source `implement`, "
+          f"issues {list(graph.JUDGE_OUTCOMES)} ✓")
+
+    malades = {
+        "arbitre sur un bloc ACT": (
+            lambda b: b["nodes"]["judge"].update(block="ACT"), ("judge", "JUDGE")),
+        "source non déclarée": (
+            lambda b: b["nodes"]["judge"]["config"].update(finalists_from="fantome"),
+            ("judge", "fantome")),
+        "source qui ne réduit pas par keep_n": (
+            lambda b: b["nodes"]["implement"]["config"]["fanout"].update(
+                reduce="first_pass"), ("judge", "implement", "keep_n")),
+        "arbitre sans arête `none`": (
+            lambda b: b["nodes"]["judge"]["edges"].pop("none"), ("judge", "none")),
+        "arbitre sans arête `sole`": (
+            lambda b: b["nodes"]["judge"]["edges"].pop("sole"), ("judge", "sole")),
+    }
+    for quoi, (casser, attendus) in malades.items():
+        bundle = bundle_livre()
+        casser(bundle)
+        e = refuse(quoi, bundle, *attendus)
+        print(f"   {quoi} → {e} ✓")
 
     print("\nfan-out : OK — la déclaration existe, et une config fautive ne se publie pas")
 
