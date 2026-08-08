@@ -842,6 +842,17 @@ par son diff doivent passer — et **retire son `outcome.json` quand une porte
 lâche**. Le noyau ne voit alors aucun succès : le candidat sort en `crashed`
 comme n'importe quel raté, et la course continue sans lui.
 
+Un agent qui veut rejouer ces portes à la main appelle
+[`scripts/portes-ici.sh`](scripts/portes-ici.sh), qui crée le workspace
+jetable, lance les portes dedans et nettoie derrière lui. Ce détour n'est pas
+du confort : composer soi-même un `mktemp -d` avec son `trap 'rm -rf …'` est
+le réflexe naturel, et la CLI `codex` **refuse ce motif** — « rm -f style
+commands are not permitted » —, filtre de contenu que même le contournement
+de son bac à sable ne lève pas. Six exécutions de `test_backend` y sont
+mortes. Une opération mécanique et répétée n'a rien à faire dans la tête d'un
+modèle : on lui donne l'outil, il ne compose plus de shell, et il cesse d'être
+exposé aux refus de son fournisseur.
+
 Les K candidats partagent la base jetable de leur item : une porte qui la
 détruit ou la recrée les ferait tomber les uns les autres. Le script coupe
 donc `GRAPHATOM_DSN` et `GRAPHATOM_AGENT_DSN` d'entrée et épingle

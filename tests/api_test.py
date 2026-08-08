@@ -259,8 +259,13 @@ def main() -> None:
         charge = web._api_load(CountConn(4))
         assert charge == {"running": 4, "max_runs": scheduler.MAX_RUNS,
                           "max_runs_per_item": scheduler.MAX_RUNS_PER_ITEM}, charge
-        assert charge["max_runs_per_item"] < charge["max_runs"], \
-            "un item pourrait prendre toute la capacité"
+        # Le plafond par item reste sous le global dès que la machine a de
+        # quoi. Sur une petite machine les deux tombent sur le plancher de
+        # `FANOUT_MAX_CANDIDATES` : une course se réserve entière, donc
+        # interdire à un item d'atteindre la largeur maximale reviendrait à
+        # interdire la course elle-même.
+        assert charge["max_runs_per_item"] <= charge["max_runs"], \
+            "un item pourrait dépasser la capacité globale"
         print(f"7b. /api/load : {charge['running']} runs en vol pour un plafond "
               f"de {charge['max_runs']} ({charge['max_runs_per_item']} par item) ✓")
 
