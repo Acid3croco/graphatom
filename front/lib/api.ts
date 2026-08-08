@@ -211,6 +211,8 @@ export type BundleFanout = {
   variants: Variant[];
   repeat?: number;
   reduce: string;
+  /** Le nombre de finalistes gardés — `keep_n` seule le déclare. */
+  n?: number;
 };
 
 export type BundleNode = {

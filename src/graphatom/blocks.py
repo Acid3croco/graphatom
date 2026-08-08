@@ -491,6 +491,16 @@ def _wait(proc: subprocess.Popen, watched: tuple, mark: tuple,
             raise subprocess.TimeoutExpired(proc.args, budget_s)
 
 
+def _agent_timeout_s(config: dict) -> float:
+    """Le couperet du process d'un nœud — dérivé du bail par le kernel.
+
+    L'import est local au corps : `kernel` importe `blocks` à son tour, et
+    les deux ne peuvent pas se charger l'un l'autre au module.
+    """
+    from .kernel import agent_timeout_s
+    return agent_timeout_s(config, AGENT_TIMEOUT_S)
+
+
 def _attempt(ctx: Context, workspace: Path) -> dict:
     """Une tentative d'agent. Contrat : prompt.md → outcome.json."""
     cfg = ctx.config["agent"]
@@ -529,7 +539,7 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
             _write_pgid(pgid_file, proc, cmd, ctx.run["id"])
             mark = _mark(*watched)  # nos traces sont écrites : la suite est de l'agent
             _wait(proc, watched, mark,
-                  float(cfg.get("timeout_s", AGENT_TIMEOUT_S)),
+                  _agent_timeout_s(ctx.config),
                   float(cfg.get("silence_s", AGENT_SILENCE_S)))
         except subprocess.TimeoutExpired as exc:
             # le relevé se prend avant la révocation : ce que le SIGTERM
@@ -847,21 +857,38 @@ def _elu(ctx: Context, workspace: Path, finalists: list[int]) -> int | None:
     return finalists[index] if 0 <= index < len(finalists) else None
 
 
-def _promote(ctx: Context, candidate: int) -> str:
+def _promote(ctx: Context, candidate: int) -> tuple[str | None, str]:
     """Le travail de l'élu devient celui de l'item, et les ateliers partent.
 
     L'ordre compte : promouvoir d'abord, ranger ensuite — l'inverse
     détruirait la branche qu'on allait fusionner. Ce que `keep_n` avait
     laissé debout pour le juge disparaît ici, gagnant compris : sa branche
     n'a plus rien d'unique une fois fusionnée.
+
+    Rend l'empêchement s'il y en a un, et le texte à mettre au verdict. Une
+    promotion impossible ne range rien : le travail est encore dans les
+    ateliers, et le nœud va échouer plutôt qu'avancer par-dessus.
     """
-    promue = worktree.promote(ctx.item["id"], candidate)
+    empechement = worktree.promote(ctx.item["id"], candidate)
+    if empechement is not None:
+        return empechement, (
+            f"Promotion refusée — {empechement}. Le travail de l'élu n'a pas "
+            "rejoint la branche de l'item ; les ateliers des finalistes restent "
+            "en place.\n")
     retirees = worktree.discard(ctx.item["id"])
-    if promue is None:
-        return ("Promotion refusée : le travail de l'élu n'a pas rejoint la branche "
-                f"de l'item. Ateliers retirés : {', '.join(retirees) or 'aucun'}.\n")
-    return (f"Travail de l'élu promu sur la branche de l'item. Ateliers des "
-            f"finalistes retirés : {', '.join(retirees) or 'aucun'}.\n")
+    return None, (f"Travail de l'élu promu sur la branche de l'item. Ateliers des "
+                  f"finalistes retirés : {', '.join(retirees) or 'aucun'}.\n")
+
+
+def _promotion_ratee(empechement: str) -> dict:
+    """L'issue d'un juge qui n'a pas pu promouvoir son élu.
+
+    Un échec franc du nœud, comme au noyau : mieux vaut rejouer le jugement
+    — puis escalader — que faire avancer l'item sur un atelier qui n'a pas
+    reçu le travail de l'élu.
+    """
+    return {"outcome": "crashed",
+            "summary": f"promotion de l'élu impossible — {empechement}"}
 
 
 def _arbitrate(ctx: Context) -> dict:
@@ -881,7 +908,9 @@ def _arbitrate(ctx: Context) -> dict:
 
     Dans les trois cas, le verdict est écrit dans le workspace. Dans les deux
     premiers, le travail de l'élu est promu sur la branche de l'item et les
-    ateliers des finalistes sont détruits.
+    ateliers des finalistes sont détruits — et si la promotion est
+    impossible, le nœud échoue franchement au lieu de laisser l'item avancer
+    sur un atelier qui n'a pas reçu le travail.
     """
     finalists = _finalists(ctx)
     if not finalists:
@@ -892,12 +921,14 @@ def _arbitrate(ctx: Context) -> dict:
                 "summary": "aucun finaliste — retour en amont sans jugement"}
 
     if len(finalists) == 1:
-        rangement = _promote(ctx, finalists[0])
+        empechement, rangement = _promote(ctx, finalists[0])
         _verdict(ctx, f"# Verdict — {ctx.run['node']}\n\n"
                       "Élu : finaliste A, et il était seul. Court-circuit mécanique : "
                       "aucun modèle n'a été appelé, aucun jeton dépensé — un juge à "
                       "qui l'on présente une option unique dit toujours oui.\n\n"
                       + rangement)
+        if empechement is not None:
+            return _promotion_ratee(empechement)
         return {"outcome": "sole",
                 "summary": "finaliste unique — traversé sans appel de modèle"}
 
@@ -912,9 +943,11 @@ def _arbitrate(ctx: Context) -> dict:
         return result | {"outcome": "invalid_result",
                          "error": "issue « chosen » sans lettre de finaliste lisible"}
     lettre = LETTRES[finalists.index(candidate)]
+    empechement, rangement = _promote(ctx, candidate)
     _verdict(ctx, f"\n\n## Verdict\n\nÉlu : finaliste {lettre} — "
-                  f"{result.get('summary') or 'sans raison rendue'}\n\n"
-                  + _promote(ctx, candidate))
+                  f"{result.get('summary') or 'sans raison rendue'}\n\n" + rangement)
+    if empechement is not None:
+        return result | _promotion_ratee(empechement)
     return result | {"elu": lettre}
 
 

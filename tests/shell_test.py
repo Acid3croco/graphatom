@@ -21,6 +21,9 @@ le test prend celle que `GRAPHATOM_DSN` désigne, sans y écrire une ligne.
   9. son pas de rapprochement traverse les quatre cas : déjà à jour, merge
      automatique, conflit (code 9, worktree laissé propre), fetch en échec,
      et deux fois de plus sur le worktree sale que le rail a vraiment
+     ; puis sa porte de construction traverse les cinq siens : absorption
+     vide sans aucune porte, contenu sain avec et sans `front/`, et les
+     deux ruptures — python, puis build front — en code 11 sans PR
  10. la frontière tient dans le bundle : un nœud mécanique ne lance aucun
      modèle, un nœud à modèle rend son `usage.json`, les trois nœuds de
      retrait sont le même shell, et aucun ne teste `.git` comme un chemin
@@ -30,7 +33,7 @@ le test prend celle que `GRAPHATOM_DSN` désigne, sans y écrire une ligne.
      l'outcome disent combien de temps elle a attendu
  13. une réponse fausse — un 500, un corps sans `_next` — la fait échouer
      tout de suite, sans consommer le budget d'attente
- 14. ce budget tient dans le `timeout_s` du nœud, donc dans son bail, et le
+ 14. ce budget tient dans le couperet du nœud, donc dans son bail, et le
      README le justifie
  15. deux `deploy` lancés en même temps sur la même cible déploient l'un
      après l'autre, tous deux en succès : la concurrence est une file
@@ -63,7 +66,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import db  # noqa: E402
+from graphatom import db, kernel  # noqa: E402
+from graphatom.blocks import AGENT_TIMEOUT_S  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 BUNDLE = json.loads((ROOT / "examples" / "code-task.json").read_text())
@@ -103,6 +107,10 @@ def depot(tmp: Path) -> Path:
     git(source, "config", "user.email", "shell@test.invalid")
     git(source, "config", "user.name", "shell")
     (source / "socle.txt").write_text("le commit de départ\n")
+    # le paquet python du dépôt jetable : la porte de construction de la
+    # release compile `src/`, et un dépôt sans `src/` n'aurait rien à lui dire
+    (source / "src").mkdir()
+    (source / "src" / "socle.py").write_text("def socle():\n    return 1\n")
     git(source, "add", "-A")
     git(source, "commit", "-qm", "socle")
     git(source, "push", "-q", "origin", "main")
@@ -154,6 +162,40 @@ def sans_gh(tmp: Path) -> str:
     faux = binaires / "gh"
     faux.write_text("#!/bin/sh\nexit 1\n")
     faux.chmod(0o755)
+    return f"{binaires}:{os.environ['PATH']}"
+
+
+def faux_npm(tmp: Path, nom: str, code: int, sortie: str) -> str:
+    """Un PATH sans `gh`, où `npm` joue le build du front et rend `code`.
+
+    Le vrai `npm run build` demande `node_modules` et coûte des minutes :
+    ce qui se vérifie ici, c'est que la porte le lance et lit son code, pas
+    que Next sait construire.
+    """
+    binaires = tmp / nom
+    binaires.mkdir()
+    faux = binaires / "npm"
+    faux.write_text(f"#!/bin/sh\necho '{sortie}'\nexit {code}\n")
+    faux.chmod(0o755)
+    refus = binaires / "gh"
+    refus.write_text("#!/bin/sh\nexit 1\n")
+    refus.chmod(0o755)
+    return f"{binaires}:{os.environ['PATH']}"
+
+
+def portes_muettes(tmp: Path, nom: str) -> str:
+    """Un PATH sans `gh`, où `python3` et `npm` échouent d'entrée.
+
+    Rien d'autre que la porte de construction ne les lance : une release
+    qui traverse ce PATH n'a donc exécuté aucune porte, et le prouve mieux
+    qu'une absence de ligne dans le compte rendu.
+    """
+    binaires = tmp / nom
+    binaires.mkdir()
+    for outil in ("python3", "npm", "gh"):
+        refus = binaires / outil
+        refus.write_text(f"#!/bin/sh\necho '{outil} ne devait pas être lancé' >&2\nexit 1\n")
+        refus.chmod(0o755)
     return f"{binaires}:{os.environ['PATH']}"
 
 
@@ -372,6 +414,7 @@ def cas_release(tmp: Path, nom: str) -> tuple[Path, Path, Path]:
 def avance_main(repo: Path, fichier: str, contenu: str) -> str:
     """Un commit de plus sur `origin/main`, comme un item voisin qui merge."""
     source = repo.parent / "source"
+    (source / fichier).parent.mkdir(parents=True, exist_ok=True)
     (source / fichier).write_text(contenu)
     git(source, "add", "-A")
     git(source, "commit", "-qm", f"main avance sur {fichier}")
@@ -536,6 +579,71 @@ def main() -> None:
     print("9 bis. worktree sale : merge quand même si main est ailleurs, "
           "code 9 sans rien perdre sinon ✓")
 
+    # 9 ter. la porte de construction, après une absorption non vide. Deux
+    #    branches se compilaient chacune de son côté, leur merge n'a pas un
+    #    marqueur de conflit, et `main` sort cassée : git a raison sur le
+    #    texte et tort sur le sens. La porte tranche ce cas au compilateur,
+    #    en secondes, plutôt qu'à un cycle d'agents de test.
+
+    # 1. absorption vide : aucune porte n'est exécutée. Le PATH le prouve —
+    #    `python3` et `npm` y échouent, et la release passe quand même
+    repo, workspace, worktree = cas_release(tmp, "construction-a-jour")
+    assert release(repo, workspace, SUJET, {"PATH": portes_muettes(tmp, "muettes")}) == 6
+    rapport = (workspace / "release.md").read_text()
+    assert "rien d'absorbé" in rapport, rapport
+    assert "porte" not in rapport, rapport
+
+    # 2. absorption non vide et saine, hors `front/` : la porte python passe
+    #    et se nomme — et la porte front, elle, n'est pas exécutée
+    repo, workspace, worktree = cas_release(tmp, "construction-saine")
+    travaille(worktree, "travail.txt", "l'implémentation de l'item\n")
+    avance_main(repo, "src/voisin.py", "def voisin():\n    return 1\n")
+    assert release(repo, workspace, SUJET, aveugle) == 6
+    rapport = (workspace / "release.md").read_text()
+    assert "porte compilation python : passée" in rapport, rapport
+    assert "front" not in rapport, rapport  # rien d'absorbé sous front/
+
+    # 3. absorption non vide touchant `front/` : les deux portes s'exécutent
+    repo, workspace, worktree = cas_release(tmp, "construction-front")
+    travaille(worktree, "travail.txt", "l'implémentation de l'item\n")
+    avance_main(repo, "front/graph-view.tsx", "export const vue = () => null\n")
+    assert release(repo, workspace, SUJET, {"PATH": faux_npm(tmp, "npm-passe", 0, "construit")}) == 6
+    rapport = (workspace / "release.md").read_text()
+    assert "porte compilation python : passée" in rapport, rapport
+    assert "porte construction front : passée" in rapport, rapport
+
+    # 4. l'absorption casse la compilation python : code 11, la sortie du
+    #    compilateur dans `release.md`, aucune PR tentée, et le worktree
+    #    laissé sur sa fusion — c'est un état à réparer, pas à effacer
+    repo, workspace, worktree = cas_release(tmp, "construction-python-cassee")
+    travaille(worktree, "travail.txt", "l'implémentation de l'item\n")
+    avance_main(repo, "src/casse.py", "def casse(:\n    return 1\n")
+    assert release(repo, workspace, SUJET, aveugle) == 11
+    rapport = (workspace / "release.md").read_text()
+    assert "casse.py" in rapport and "SyntaxError" in rapport, rapport
+    assert "gh pr" not in rapport, "une PR tentée sur un contenu qui ne compile pas"
+    assert len(git(worktree, "rev-list", "--parents", "-n", "1", "HEAD").split()) == 3, \
+        "la fusion à réparer a été effacée"
+
+    # 5. l'absorption casse le build du front : même code, même compte rendu
+    repo, workspace, worktree = cas_release(tmp, "construction-front-cassee")
+    travaille(worktree, "travail.txt", "l'implémentation de l'item\n")
+    avance_main(repo, "front/graph-view.tsx", "export const vue = () => null\n")
+    casse = faux_npm(tmp, "npm-casse", 1, "graph-view.tsx(25,8): error TS2741")
+    assert release(repo, workspace, SUJET, {"PATH": casse}) == 11
+    rapport = (workspace / "release.md").read_text()
+    assert "TS2741" in rapport, rapport
+    assert "gh pr" not in rapport, "une PR tentée sur un front qui ne construit pas"
+
+    # 6. le README dit la release telle qu'elle est : un merge, jamais un
+    #    rebase, et la porte que ce merge traverse
+    readme = (ROOT / "README.md").read_text()
+    assert "rebase quand le rebase passe tout seul" not in readme, \
+        "le README décrit encore la release comme rebasant"
+    assert "porte de construction" in readme, "le README ne documente pas la porte"
+    print("9 ter. porte de construction : rien sur une absorption vide, python "
+          "et front sur une absorption saine, code 11 sur chaque rupture ✓")
+
     # 10. la frontière du bundle, relue à chaque tour : les nœuds mécaniques
     #    n'appellent aucun modèle, et ceux qui en appellent un rendent le
     #    coût de la tentative — un merge d'amont ne doit rien reprendre
@@ -544,10 +652,15 @@ def main() -> None:
                 "cleanup", "cleanup_unresolved", "cleanup_split"):
         cmd = BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
         assert "claude " not in cmd, f"{nom} lance encore un modèle"
-    for nom in ("scope", "implement", "test_backend", "test_frontend", "release"):
+    for nom in ("scope", "implement"):
         cmd = BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
         assert "claude " in cmd, f"{nom} n'est plus un agent"
         assert "usage.json" in cmd, f"{nom} ne rend pas son usage.json"
+    # depuis la bascule des nœuds légers, release et les deux tests passent
+    # par l'adaptateur codex : c'est lui qui remplit usage.json, pas le `cmd`
+    for nom in ("test_backend", "test_frontend", "release"):
+        cmd = BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
+        assert "agent-codex.sh" in cmd, f"{nom} n'est plus sur l'adaptateur codex"
     # les trois retraits sont le même shell : seul leur prompt les distingue,
     # et une correction sur l'un doit se voir sur les trois
     retraits = {BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
@@ -621,12 +734,13 @@ def main() -> None:
     config = BUNDLE["nodes"]["verify_deploy"]["config"]
     cmd = config["agent"]["cmd"]
     budget = int(re.search(r"GRAPHATOM_PORTES_DELAI_S:-(\d+)", cmd).group(1))
-    assert budget < config["agent"]["timeout_s"] < config["lease_s"], config
+    couperet = kernel.agent_timeout_s(config, AGENT_TIMEOUT_S)
+    assert budget < couperet < config["lease_s"], config
     readme = (ROOT / "README.md").read_text()
     assert "GRAPHATOM_PORTES_DELAI_S" in readme, "le README ne justifie pas le budget"
     assert f"{budget} s d'attente" in readme, "le README ne dit pas le budget retenu"
-    print(f"14. budget d'attente {budget} s < timeout_s "
-          f"{config['agent']['timeout_s']} s < bail {config['lease_s']} s ✓")
+    print(f"14. budget d'attente {budget} s < couperet "
+          f"{couperet:.0f} s < bail {config['lease_s']} s ✓")
 
     # 15. la cible du deploy est unique : deux items qui l'atteignent en même
     #    temps doivent déployer l'un après l'autre. Le faux docker met 2 s à
@@ -747,15 +861,16 @@ def main() -> None:
             assert "advisory_lock" not in shell, f"{nom} se sérialise lui aussi"
     config = BUNDLE["nodes"]["deploy"]["config"]
     verrou = int(re.search(r"GRAPHATOM_VERROU_DELAI_S:-(\d+)", deploiement).group(1))
-    assert verrou < config["agent"]["timeout_s"] < config["lease_s"], config
+    couperet = kernel.agent_timeout_s(config, AGENT_TIMEOUT_S)
+    assert verrou < couperet < config["lease_s"], config
     prompt = config["agent"]["prompt"]
     for marque in ("exclusion mutuelle", "attente bornée", "pg_advisory_lock"):
         assert marque in prompt, f"le prompt de deploy ne dit pas « {marque} »"
     readme = (ROOT / "README.md").read_text()
     assert "GRAPHATOM_VERROU_DELAI_S" in readme, "le README ne justifie pas l'attente"
     assert f"{verrou} s d'attente" in readme, "le README ne dit pas le budget retenu"
-    print(f"20. seul deploy prend le verrou, attente {verrou} s < timeout_s "
-          f"{config['agent']['timeout_s']} s < bail {config['lease_s']} s ✓")
+    print(f"20. seul deploy prend le verrou, attente {verrou} s < couperet "
+          f"{couperet:.0f} s < bail {config['lease_s']} s ✓")
 
     # 21. le worker du rail n'a pas son venv dans son PATH : le `python3`
     #    ambiant y est celui du système, sans psycopg. Le nœud doit trouver

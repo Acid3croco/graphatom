@@ -1,6 +1,6 @@
 """Le test des portes déterministes d'un candidat d'`implement`.
 
-`implement` est une course : quatre candidats concurrents, et `first_pass`
+`implement` est une course : cinq candidats concurrents, et `first_pass`
 promeut le premier qui rend une issue de succès. Sans porte, ce serait le
 premier à *prétendre* — on sélectionnerait le plus rapide à se déclarer
 fini, pas le plus correct. Le `cmd` du nœud lance donc `scripts/portes.sh`
@@ -8,8 +8,8 @@ après l'agent, et retire son `outcome.json` quand une porte lâche.
 
 Les portes sont celles de tout le monde, le modèle n'y change rien : trois
 candidats appellent `claude`, le quatrième passe par l'adaptateur
-`scripts/agent-opencode.sh` sur un modèle gratuit, et le même jeu de portes
-tranche les quatre.
+`scripts/agent-opencode.sh` sur un modèle gratuit, le cinquième par
+`scripts/agent-codex.sh`, et le même jeu de portes tranche les cinq.
 
 Le `cmd` joué ici est celui d'`examples/code-task.json`, tel quel : seule la
 ligne d'appel du modèle — `claude` pour les trois stratégies, l'adaptateur
@@ -74,8 +74,10 @@ INUTILE = shutil.ignore_patterns(".git", ".venv", "node_modules", ".next",
 #   c2 — un test rendu illisible : c'est la porte de la suite qui doit tomber
 #   c3 — le candidat gratuit, un module du paquet rendu illisible lui aussi :
 #        sa commande passe par l'adaptateur opencode, ses portes non
+#   c4 — le candidat codex, sain comme c0 : la diversité de fournisseur ne
+#        change rien aux portes, c'est ce qu'on regarde
 #
-# Les quatre se déclarent finis : c'est aux portes de les départager.
+# Les cinq se déclarent finis : c'est aux portes de les départager.
 FAUX_AGENT = """WS=$(pwd)
 K=$(basename "$WS"); K=${K#c}
 printf '%s\\n' '{"type":"result","result":"agent factice",\
@@ -87,6 +89,8 @@ case "$K" in
   1) printf '\\ndef casse(:\\n' >> "$GRAPHATOM_WORKTREE/src/graphatom/channel.py" ;;
   2) printf '\\ndef casse(:\\n' >> "$GRAPHATOM_WORKTREE/tests/validate_test.py" ;;
   3) printf '\\ndef casse(:\\n' >> "$GRAPHATOM_WORKTREE/src/graphatom/heartbeat.py" ;;
+  4) printf '\\nUne ligne de documentation, et rien de plus.\\n' \
+>> "$GRAPHATOM_WORKTREE/README.md" ;;
 esac
 git -C "$GRAPHATOM_WORKTREE" add -A
 git -C "$GRAPHATOM_WORKTREE" commit -qm "candidat $K"
@@ -95,9 +99,9 @@ printf '{"outcome": "done", "summary": "candidat %s : je me déclare fini"}' "$K
 RC=0"""
 
 # La ligne d'appel du modèle, dans le `cmd` d'un candidat : `claude` pour les
-# trois stratégies, l'adaptateur opencode pour la variante gratuite. C'est
-# elle, et elle seule, que l'agent factice remplace.
-APPEL = re.compile(r"^(?:claude |OPENCODE_\w+=).*$", re.M)
+# trois stratégies, l'adaptateur opencode pour la variante gratuite, codex
+# pour la cinquième. C'est elle, et elle seule, que l'agent factice remplace.
+APPEL = re.compile(r"^(?:claude |OPENCODE_\w+=|CODEX_\w+=).*$", re.M)
 
 
 def cmd_teste(cmd: str) -> str:

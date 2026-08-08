@@ -52,10 +52,25 @@ def main() -> None:
     sp.add_argument("--graph", required=True, help="bundle JSON publié au démarrage")
     sp.add_argument("--poll", type=float, default=15.0)
 
+    sp = sub.add_parser(
+        "split-close",
+        help="fin de découpe : reporter les dépendances de la mère sur la "
+             "dernière fille, puis fermer la mère")
+    sp.add_argument("--repo", required=True, help="owner/repo")
+    sp.add_argument("--mother", type=int, required=True, help="l'issue découpée")
+    sp.add_argument("--children", type=int, nargs="+", required=True,
+                    help="les filles dans l'ordre de la chaîne — la dernière "
+                         "reprend les dépendances de la mère")
+
     args = p.parse_args()
 
     if args.cmd == "init-db":
-        changes = db.init_db(drop=args.drop)
+        try:
+            changes = db.init_db(drop=args.drop)
+        except RuntimeError as err:
+            # migration bloquée par un verrou : échouer vite en nommant le
+            # bloqueur, plutôt que de faire s'empiler les lectures derrière
+            sys.exit(str(err))
         print("base initialisée")
         # le journal du déploiement dit ce que la migration a changé : sans
         # cette ligne, un worker qui se reconnecte sur un plan périmé au même
@@ -84,6 +99,13 @@ def main() -> None:
     if args.cmd == "github-sync":
         from . import github_sync
         github_sync.sync_forever(args.repo, args.graph, poll_s=args.poll)
+        return
+    if args.cmd == "split-close":
+        # la découpe n'a rien à dire à la base : elle n'écrit que sur GitHub,
+        # et le nœud `scope` qui l'appelle n'a qu'une base jetable
+        from . import github_sync
+        github_sync.split_close(github_sync.from_env(args.repo),
+                                args.mother, args.children)
         return
 
     with db.connect() as conn:

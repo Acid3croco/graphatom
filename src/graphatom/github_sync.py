@@ -1,7 +1,7 @@
 """Le canal GitHub — module hors noyau, par polling.
 
 GitHub est l'interface humaine et la cible des effets ; Postgres reste
-l'unique autorité d'exécution. Ce module fait sept choses, et refuse
+l'unique autorité d'exécution. Ce module fait huit choses, et refuse
 tout le reste :
 
   1. admission  — une issue ouverte portant le label `graphatom` devient
@@ -41,6 +41,11 @@ tout le reste :
                   terminal sans condition — l'issue peut être déjà fermée ;
                   `rail:stalled` s'y ajoute quand le worker ne bat plus
   7. rapports   — un item terminal reçoit son commentaire de clôture
+  8. découpe    — hors tick, appelée par le nœud `scope` qui découpe
+                  (`graphatom split-close`) : les issues qui attendaient la
+                  mère sont reposées sur la dernière fille, puis seulement
+                  la mère est fermée. Sans ce report, une fermeture qui ne
+                  livre aucun travail libérerait ses dépendants pour rien
 
 Aucun parsing de langage naturel. Aucune lecture de GitHub comme état
 d'item. Chaque prise de parole du rail est un effet : clé logique,
@@ -69,6 +74,9 @@ BLOCKED = f"{RAIL}blocked"  # pas un état d'item : une admission différée se 
 STALLED = f"{RAIL}stalled"  # pas un état d'item non plus : le worker ne bat plus
 STALLED_COLOR = "d73a4a"    # le rouge de l'alarme, seule exception à la couleur unie
 DEPENDS = "Depends-on:"     # la grammaire fermée des dépendances, dans le corps
+ADMITTED = "-admitted"      # la fin de la clé de l'accusé : la marque, sur l'issue,
+                            # qu'un item existe déjà pour elle — la découpe s'y fie
+                            # pour ne pas réécrire une issue déjà partie
 CHECKLIST = "validate.md"   # la checklist du nœud validate, dans le workspace de l'item
 CHECKLIST_LINES = 40        # ce qu'on en cite : de quoi tenir sans noyer la question
 CHECKLIST_TITLE = "**Critères de succès, cochés par `validate`**"
@@ -133,6 +141,16 @@ class GitHub:
         # éditer ne notifie personne : c'est ce qui rend la trajectoire vivante gratuite
         self._call("PATCH", f"/repos/{self.repo}/issues/comments/{comment_id}",
                    {"body": body})
+
+    def edit_issue(self, number: int, body: str) -> None:
+        # la seule écriture du rail dans un corps d'issue : la ligne
+        # `Depends-on:` que la découpe reporte — le reste est à l'humain
+        self._call("PATCH", f"/repos/{self.repo}/issues/{number}", {"body": body})
+
+    def close_issue(self, number: int) -> None:
+        # fermer une issue déjà fermée est sans effet : le rejeu est gratuit
+        self._call("PATCH", f"/repos/{self.repo}/issues/{number}",
+                   {"state": "closed"})
 
     def issue_labels(self, number: int) -> list[str]:
         # vise l'issue par son numéro : ouverte ou fermée, l'API répond pareil
@@ -282,6 +300,85 @@ def _pending_deps(gh: GitHub, issue: dict, name: str, states: dict[int, str | No
     return waiting
 
 
+def _reparent(body: str, mother: int, child: int) -> str:
+    """Le corps, avec les seules lignes `Depends-on: #mère` visant la fille.
+
+    Rien d'autre n'est touché — pas même une ligne `Depends-on:` vers une
+    autre issue, ni le `#mère` qui traînerait dans la prose : le corps
+    appartient à l'humain, cette ligne seule appartient au rail.
+    """
+    lines = [f"{DEPENDS} #{child}"
+             if line.strip().startswith(DEPENDS)
+             and line.strip()[len(DEPENDS):].strip() == f"#{mother}"
+             else line
+             for line in (body or "").splitlines()]
+    return "\n".join(lines) + ("\n" if (body or "").endswith("\n") else "")
+
+
+def _admitted(gh: GitHub, number: int) -> bool:
+    """Le rail a-t-il déjà pris cette issue en charge ?
+
+    L'accusé posté sur l'issue est la trace durable de l'admission — le
+    label `rail:<état>`, lui, s'en va au terminal. La découpe s'en sert pour
+    ne réécrire que ce qui attend encore.
+    """
+    return any(f"{ADMITTED} -->" in c["body"] for c in gh.comments(number))
+
+
+def _dependents(gh: GitHub, mother: int) -> list[dict]:
+    """Les issues encore en attente qui déclarent dépendre de la mère.
+
+    Ouvertes — `labeled_issues` ne rend que celles-là — et pas encore
+    admises : une issue déjà partie n'est pas rattrapée par une découpe.
+    """
+    return [issue for issue in gh.labeled_issues()
+            if f"#{mother}" in _depends_on(issue["body"])
+            and not _admitted(gh, issue["number"])]
+
+
+def _refs(numbers: list[int]) -> str:
+    return ", ".join(f"#{n}" for n in numbers)
+
+
+def split_close(gh: GitHub, mother: int, children: list[int]) -> None:
+    """La fin d'une découpe : les dépendances reportées, puis la mère fermée.
+
+    La fermeture de la mère satisfait toute dépendance qui la visait — mais
+    la découpe ne livre aucun travail, elle le déplace. Les dépendants sont
+    donc reposés sur la **dernière fille** de la chaîne : les filles étant
+    chaînées entre elles par `Depends-on`, sa fermeture à elle dit que le
+    travail de la mère est intégralement livré.
+
+    L'ordre fait la sûreté : tant qu'un dépendant n'est pas reporté, la mère
+    reste ouverte, donc personne n'est libéré. Une découpe interrompue à
+    mi-chemin est visiblement incomplète, jamais silencieusement prématurée
+    — d'où le `SystemExit` qui nomme l'issue non réécrite.
+
+    Rejouable : un dépendant déjà reporté ne porte plus la mère, il n'est
+    donc plus candidat, et fermer une issue fermée est sans effet.
+    """
+    last, said = children[-1], set()
+    for issue in _dependents(gh, mother):
+        number = issue["number"]
+        try:
+            gh.edit_issue(number, _reparent(issue["body"], mother, last))
+            _say_once(gh, number, f"reparent-{mother}",
+                      f"**Reprise de dépendance** — `{DEPENDS} #{mother}` devient "
+                      f"`{DEPENDS} #{last}`.\n\n"
+                      f"#{mother} a été découpée en {_refs(children)} ; sa "
+                      f"fermeture ne livre plus le travail attendu. La dernière "
+                      f"fille, #{last}, le livre : cette issue attend maintenant "
+                      f"celle-là.", said)
+        except OSError as exc:
+            raise SystemExit(
+                f"#{number} non réécrite ({exc}) — découpe interrompue, "
+                f"#{mother} reste ouverte")
+        print(f"#{number} ← {DEPENDS} #{last} (était #{mother})", flush=True)
+    gh.post_comment(mother, f"Découpée en {_refs(children)} — suivi sur les filles.")
+    gh.close_issue(mother)
+    print(f"#{mother} fermée — découpée en {_refs(children)}", flush=True)
+
+
 def _remember_title(conn: Connection, name: str, subject_key: str,
                     title: str) -> None:
     """Range le titre de l'issue sur le sujet, quand il a bougé.
@@ -350,7 +447,7 @@ def _gh_items(conn: Connection, gh: GitHub, where: str = "") -> list[dict]:
 def _ack_key(item: dict) -> str:
     # la clé porte le graph et la génération : chaque occurrence a droit à
     # son accusé, une ré-admission n'est pas un doublon
-    return f"{item['graph']}-g{item['generation']}-admitted"
+    return f"{item['graph']}-g{item['generation']}{ADMITTED}"
 
 
 def _ack_body(item: dict) -> str:
@@ -442,14 +539,14 @@ def _publish_criteria(conn: Connection, gh: GitHub) -> None:
 
 
 def _budget_s(conn: Connection, run: dict) -> float:
-    """Le budget d'une tentative sur ce nœud — son `timeout_s`, ou le défaut.
+    """Le couperet d'une tentative sur ce nœud — le bail moins la marge.
 
     Le run porte la révision de son item : le budget lu est celui du graph
     sous lequel la tentative a tourné, pas celui d'une révision plus récente.
+    La dérivation est celle du kernel, la même que le bloc qui exécute.
     """
     node = graph.load_bundle(conn, run["revision"])["nodes"][run["node"]]
-    agent = (node.get("config") or {}).get("agent") or {}
-    return float(agent.get("timeout_s", AGENT_TIMEOUT_S))
+    return kernel.agent_timeout_s(node.get("config") or {}, AGENT_TIMEOUT_S)
 
 
 def _death_report(conn: Connection, item_id: int, node: str) -> str:
@@ -735,13 +832,18 @@ def tick(conn: Connection, gh: GitHub, revision: str, allowed: set[str],
         print(f"github injoignable : {exc} — on réessaie", flush=True)
 
 
-def sync_forever(repo: str, bundle_path: str, poll_s: float = 15.0) -> None:
+def from_env(repo: str) -> GitHub:
+    """Le client du jeton d'environnement — le seul endroit qui le lit."""
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
         raise SystemExit("GITHUB_TOKEN manquant")
+    return GitHub(repo, token)
+
+
+def sync_forever(repo: str, bundle_path: str, poll_s: float = 15.0) -> None:
     allowed = set(filter(None, os.environ.get(
         "GRAPHATOM_ANSWERERS", repo.split("/")[0]).split(",")))
-    gh = GitHub(repo, token)
+    gh = from_env(repo)
     drawn: dict[int, int] = {}   # item → version de trajectoire déjà peinte
     said: set[tuple[int, str]] = set()  # actes de parole d'avant l'admission, déjà dits
 

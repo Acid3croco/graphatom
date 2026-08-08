@@ -67,7 +67,8 @@ pyproject.toml"
 # dehors crash, migration, escalade_timeout, passage, fanout, fanout_worktree,
 # reconnect, opencode, silence, hermetic, plafond — qui compte les runs en vol
 # de toute la base, donc ne se mesure que seul —, shell — qui demande une base
-# depuis que `deploy` y pose le verrou de sa file — et fanout_opencode.
+# depuis que `deploy` y pose le verrou de sa file —, verrou — qui crée la sienne
+# pour y tenir des verrous et y faire mourir des sessions — et fanout_opencode.
 # `test_backend` les joue après la course, une fois seul.
 TESTS="tests/validate_test.py
 tests/fanout_config_test.py
@@ -76,10 +77,12 @@ tests/api_test.py
 tests/checklist_test.py
 tests/criteria_test.py
 tests/depends_test.py
+tests/split_deps_test.py
 tests/heartbeat_test.py
 tests/links_test.py
 tests/live_test.py
 tests/orphans_test.py
+tests/timeout_marge_test.py
 tests/timeout_test.py"
 
 dit() {  # une ligne de journal, à l'écran et dans le compte rendu
