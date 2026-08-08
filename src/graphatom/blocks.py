@@ -718,10 +718,11 @@ def write_failure_trace(item_id: int, run: dict, outcome: str) -> Path | None:
     """Remplace la trace stable quand un run rend une issue d'échec.
 
     Agent, adaptateur de fournisseur et script shell ont tous le même contrat
-    de bloc. Le rail connaît donc les quatre données sans aide de la commande :
-    le nœud et l'issue du run, le journal de sa tentative et le dernier compte
-    rendu Markdown écrit pendant cette tentative. Journal et rapport sont
-    bornés par `TAIL_LINES`/`TAIL_CHARS` et `REPORT_CHARS`.
+    de bloc. Le rail connaît donc le nœud et l'issue du run, le journal de sa
+    tentative et le dernier compte rendu Markdown écrit pendant cette
+    tentative. Pour `starved`, il garde aussi le fournisseur et sa raison.
+    Journal et rapport sont bornés par `TAIL_LINES`/`TAIL_CHARS` et
+    `REPORT_CHARS`.
 
     Une réussite ne touche rien. Un item neuf ne reçoit ainsi aucune trace, et
     une réussite ultérieure conserve bien le dernier échec observé. Chaque
@@ -738,6 +739,12 @@ def write_failure_trace(item_id: int, run: dict, outcome: str) -> Path | None:
         "log_tail": _tail(attempt_log(workspace, run)),
         "report": _attempt_report(workspace, run),
     }
+    result = run.get("result") or {}
+    if outcome == "starved":
+        for name in ("provider", "reason"):
+            value = result.get(name)
+            if isinstance(value, str) and value.strip():
+                trace[name] = value
     temporary = path.with_suffix(f"{path.suffix}.tmp")
     temporary.write_text(json.dumps(trace, ensure_ascii=False, indent=2) + "\n")
     temporary.replace(path)

@@ -87,6 +87,9 @@ function loss(run: Run): string | null {
   if (run.outcome === "timed_out") {
     return "timeout";
   }
+  if (run.outcome === "starved") {
+    return "fournisseur";
+  }
   return run.outcome && KERNEL_OUTCOMES.has(run.outcome)
     ? "porte interne"
     : "perdu";

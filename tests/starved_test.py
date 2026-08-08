@@ -14,6 +14,7 @@ Usage : uv run python tests/starved_test.py
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -87,6 +88,8 @@ def contrat_du_bloc(workdir: Path) -> None:
            "> starved.json; exit 9")
     starved = blocks.act(contexte(workdir, cmd, 2))
     assert starved == {"outcome": "starved", "provider": "codex", "reason": reason}, starved
+    reprise = blocks._death({"outcome": "starved", "result": starved})
+    assert "codex" in reprise and reason in reprise, reprise
     print("2. starved.json valide sans outcome.json → starved, raison intacte ✓")
 
     invalide = blocks.act(contexte(
@@ -106,7 +109,9 @@ def contrat_du_bloc(workdir: Path) -> None:
 def faux_cli(path: Path, sortie: str, stderr: bool = False) -> None:
     """Une CLI qui rejoue une sortie enregistrée, puis sort en erreur."""
     cible = " >&2" if stderr else ""
-    path.write_text(f"#!/bin/sh\nprintf '%s\\n' '{sortie}'{cible}\nexit 1\n")
+    path.write_text(
+        f"#!/bin/sh\nprintf '%s\\n' {shlex.quote(sortie)}{cible}\nexit 1\n"
+    )
     path.chmod(0o755)
 
 

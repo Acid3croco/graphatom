@@ -297,6 +297,10 @@ def apply(conn: psycopg.Connection, run_id: int, submitted: dict) -> str:
             "finished_at = %s WHERE id = %s",
             (outcome, json.dumps(submitted), now(), run_id),
         )
+        # Le routage écrit la trace d'échec dans cette même transaction. Le
+        # run relu avant la mise à jour ne porte pas encore son résultat : on
+        # lui donne donc le rendu exact que la base vient d'enregistrer.
+        run = {**run, "outcome": outcome, "result": submitted}
         revoques, ranger = _settle(conn, item, bundle, run, outcome, kind="result")
         # `keep_n` recale les réussites au-delà de la n-ième, et une promotion
         # impossible faute le gagnant : ce run-ci peut être l'un des deux, et
