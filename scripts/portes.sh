@@ -51,11 +51,12 @@ WT="${GRAPHATOM_WORKTREE:-}"
 WS="${GRAPHATOM_WORKSPACE:-$PWD}"
 MD=""            # portes.md, connu dès que le workspace l'est
 
-# Les onze modules du paquet : une erreur de syntaxe n'importe où dans
+# Les douze modules du paquet : une erreur de syntaxe n'importe où dans
 # `src/` tombe ici, avant même qu'un test soit choisi.
 MODULES="import graphatom.blocks, graphatom.channel, graphatom.cli, \
 graphatom.db, graphatom.github_sync, graphatom.graph, graphatom.heartbeat, \
-graphatom.kernel, graphatom.scheduler, graphatom.web, graphatom.worktree"
+graphatom.kernel, graphatom.quota, graphatom.scheduler, graphatom.web, \
+graphatom.worktree"
 
 # Ce qui rend la suite concernée : le diff du candidat touche du code, un
 # bundle, le schéma ou la déclaration du projet. Un diff qui n'a que de la
@@ -120,6 +121,9 @@ MD="$WS/portes.md"
 : > "$MD"
 dit "portes du candidat — atelier $WT"
 
+# Le quota vit sur la base commune. On conserve son adresse avant de couper
+# les deux DSN que les tests ne doivent jamais voir.
+export GRAPHATOM_QUOTA_DSN="${GRAPHATOM_QUOTA_DSN:-${GRAPHATOM_AGENT_DSN:-${GRAPHATOM_DSN:-}}}"
 unset GRAPHATOM_DSN GRAPHATOM_AGENT_DSN
 export GRAPHATOM_REPO_DIR="$WT"
 cd "$WT" || echoue "atelier" 2
@@ -142,7 +146,8 @@ fi
 
 for TEST in $TESTS; do
     DEBUT=$SECONDS
-    lance uv run python "$TEST" || echoue "$TEST" 3
+    lance uv run graphatom build-quota -- uv run python "$TEST" \
+        || echoue "$TEST" 3
     dit "porte « $TEST » passée en $((SECONDS - DEBUT)) s"
 done
 

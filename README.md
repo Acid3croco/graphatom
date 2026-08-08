@@ -139,6 +139,9 @@ uv run python tests/plafond_test.py                  # les deux plafonds du disp
                                                      # la charge est bornée, et ce
                                                      # que le plafond retient attend
                                                      # sans bail ni tentative
+uv run python tests/quota_test.py                    # le quota des opérations lourdes :
+                                                     # N places globales, bail préservé,
+                                                     # session morte et équité par item
 ```
 
 Les tests ne touchent jamais au `data/` du repo : chacun travaille dans un
@@ -210,7 +213,7 @@ Sept lectures, pour un client qui rend les pages lui-même : `/api/items`
 `criteria`, `files`), `/api/questions` (les questions ouvertes),
 `/api/heartbeat` (les deux battements bruts, `rail` et `github-sync`, chacun
 avec son horodatage, son âge et son état périmé), `/api/load` (la charge de
-l'ordonnanceur : les runs en vol, et les deux plafonds qui les bornent — voir
+l'ordonnanceur : runs et constructions en vol, avec leurs plafonds — voir
 [la file du dispatch](#la-charge-a-un-plafond--le-dispatch-est-une-file)),
 `/api/graphs` (les
 révisions publiées : nom, date, nombre d'items qui la portent) et
@@ -1393,10 +1396,39 @@ largeur d'une course : celle-ci passe quand même, entière, mais seulement
 quand plus rien d'autre ne peut avancer et que le rail est vide — sinon elle
 attendrait indéfiniment derrière des items plus étroits.
 
-**La charge se lit hors de la base.** `GET /api/load` rend les runs en vol et
-les deux plafonds effectifs — `{"running": 4, "max_runs": 8,
-"max_runs_per_item": 8}` sur cette machine à 12 cœurs : une saturation ne se
-diagnostique plus à coups de `ps`.
+### Les opérations lourdes ont leur propre quota
+
+Le plafond des runs ne suffit pas : un agent qui écrit du texte et un build
+Next ne demandent pas la même machine. Les chemins normaux qui installent,
+construisent ou lancent une suite de portes passent donc par
+`graphatom build-quota -- <commande>` : `scripts/portes.sh`,
+`scripts/front-env.sh` et les constructions de rapprochement de
+`scripts/release.sh`. La réflexion du modèle reste hors quota.
+
+Le quota vaut `max(1, cœurs // 6)`, soit **2 sur 12 cœurs**. Une construction
+Next utilise déjà plusieurs cœurs. `GRAPHATOM_MAX_BUILDS` surcharge cette
+valeur. Un item garde au plus `max(1, quota - 1)` places : dès que le quota
+vaut au moins deux, une course ne peut pas prendre toute la capacité et un
+autre item peut avancer.
+
+Chaque place est un `pg_advisory_lock` de session sur la base commune du
+rail. Il n'y a ni démon ni fichier de verrou. Une fin normale, un échec, une
+révocation ou la mort de la session ferment la connexion et rendent la
+place. Le fournisseur surveille aussi la session pendant la commande : si
+PostgreSQL la termine, il arrête la famille de processus lourde au lieu de
+la laisser travailler hors quota.
+
+**L'attente ne coûte pas un run.** Le preneur renouvelle
+`lease_expires_at` avec le bail entier et pose un marqueur dans le
+workspace. Le chien de garde suspend ses deux couperets tant que ce marqueur
+existe. Il n'y a donc ni nouvelle tentative, ni bail consommé, ni échec dû à
+l'attente. Les verrous de session ne survivent pas à leur détenteur ; il
+n'existe pas de place orpheline qui pourrait bloquer la file sans limite.
+
+**La charge se lit hors de la base.** `GET /api/load` rend les runs, les
+constructions et leurs plafonds effectifs — `{"running": 4, "max_runs": 8,
+"max_runs_per_item": 8, "builds": 2, "max_builds": 2}`. Une saturation ne
+se diagnostique plus à coups de `ps`.
 
 ## Ce qu'on ne fera jamais
 

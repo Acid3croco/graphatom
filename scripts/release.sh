@@ -132,7 +132,7 @@ if [ -n "$ABSORBE" ]; then
     # worktree qu'elle vérifie, et le commit qui suit n'a rien de neuf à voir
     PYC=$(mktemp -d)
     export PYTHONPYCACHEPREFIX="$PYC"
-    lance python3 -m compileall -q "$WT/src"
+    lance uv run graphatom build-quota -- python3 -m compileall -q "$WT/src"
     PORTE=$?
     unset PYTHONPYCACHEPREFIX
     rm -rf "$PYC"
@@ -141,7 +141,7 @@ if [ -n "$ABSORBE" ]; then
     # le front ne se construit que si l'absorption l'a touché : c'est la
     # porte chère, et un merge qui n'apporte que du Python ne la mérite pas
     if printf '%s\n' "$ABSORBE" | grep -q '^front/'; then
-        lance npm --prefix "$WT/front" run build \
+        lance uv run graphatom build-quota -- npm --prefix "$WT/front" run build \
             || echoue "porte construction front sur le contenu absorbé" 11
         dit "porte construction front : passée"
     fi
