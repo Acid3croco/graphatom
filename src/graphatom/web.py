@@ -442,6 +442,17 @@ def _usage(run: dict) -> dict:
     return usage if isinstance(usage, dict) else {}
 
 
+def _candidate(run: dict) -> str:
+    """Le candidat de fan-out d'un run, accolé à sa tentative. Vide sans fan-out.
+
+    K candidats partagent une tentative : sans leur numéro, la table des runs
+    montrerait K lignes identiques. Le total de l'item, lui, les additionne
+    tous — c'est le prix réel de l'étape, pas celui du seul gagnant.
+    """
+    candidate = run.get("candidate")
+    return "" if candidate is None else f" · <small>c{candidate}</small>"
+
+
 def _totals(runs: list[dict]) -> dict[str, float]:
     """Le total par type de token de l'item.
 
@@ -574,7 +585,7 @@ def _item_page(conn, item_id: int, beat: dt.datetime | None) -> str | None:
             ["run", "nœud", "passage", "tentative", "statut", "issue", "fence",
              "bail", "durée", "tokens", "résultat"],
             [f"<tr><td>{r['id']}</td><td>{_e(r['node'])}</td><td>{r['cycle']}</td>"
-             f"<td>{r['attempt']}</td>"
+             f"<td>{r['attempt']}{_candidate(r)}</td>"
              f"<td><span class='badge {_e(r['status'])}'>{_e(r['status'])}</span></td>"
              f"<td>{_e(r['outcome'] or '')}</td><td>{r['fence']}</td>"
              f"<td>{r['lease_expires_at']:%H:%M:%S}</td>"
@@ -787,7 +798,8 @@ def _api_item(conn, item_id: int) -> dict | None:
                      "outcome": e["outcome"], "run_id": e["run_id"],
                      "duration_s": spans.get(e["item_version"])} for e in events],
         "runs": [{"id": r["id"], "node": r["node"], "cycle": r["cycle"],
-                  "attempt": r["attempt"], "status": r["status"],
+                  "attempt": r["attempt"], "candidate": r.get("candidate"),
+                  "status": r["status"],
                   "outcome": r["outcome"], "fence": r["fence"],
                   "lease_expires_at": r["lease_expires_at"],
                   "duration_s": run_span.get(r["id"]),

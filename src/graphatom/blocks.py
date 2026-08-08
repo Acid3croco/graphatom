@@ -27,6 +27,11 @@ jetable de son item — une par item, créée à la volée —, jamais celle du
 rail ni celle du voisin. Sa clé de sujet est dans l'environnement : le
 cleanup s'en sert pour reconnaître son propre worktree.
 
+Un candidat de fan-out, lui, a son propre workspace sous celui de l'item —
+`data/item-<N>/c<k>/`. Rien d'autre ne le distingue de son voisin, sinon la
+variante que sa config porte : c'est elle qui s'interpole dans son prompt et
+dans sa commande.
+
 L'agent tourne dans son propre groupe de processus : au timeout, c'est
 tout le groupe qui est révoqué — un descendant ne survit pas au bail.
 Le pgid est aussi persisté dans le workspace : si c'est le worker qui
@@ -87,6 +92,20 @@ def item_workspace(item_id: int) -> Path:
     return DATA_DIR / f"item-{item_id}"
 
 
+def run_workspace(item_id: int, run: dict) -> Path:
+    """Le répertoire de travail d'un run : celui de l'item, ou celui du candidat.
+
+    Un candidat de fan-out a le sien à l'intérieur, `data/item-<N>/c<k>/` :
+    sans ça, les journaux, les fichiers d'issue et les traces de pgid des K
+    candidats s'écraseraient, et une révocation viserait le mauvais groupe de
+    processus. Un run sans fan-out n'a pas de numéro de candidat, et son
+    workspace reste celui de l'item — exactement comme avant.
+    """
+    workspace = item_workspace(item_id)
+    candidate = run.get("candidate")
+    return workspace if candidate is None else workspace / f"c{candidate}"
+
+
 def item_worktree(item_id: int) -> Path | None:
     """L'atelier git de l'item, quand le canal lui en a préparé un.
 
@@ -122,7 +141,7 @@ class Context:
         self.node = node
         self.bundle = bundle
         self.config = node.get("config") or {}
-        self.workspace = item_workspace(item["id"])
+        self.workspace = run_workspace(item["id"], run)
         self.workspace.mkdir(parents=True, exist_ok=True)
 
     def simulate_work(self) -> None:
@@ -173,12 +192,32 @@ def _archive(workspace: Path, name: str) -> None:
             path.replace(path.with_stem(f"{path.stem}-{name}"))
 
 
+VARIANT_TOKENS = ("label", "strategy")  # ce qu'une variante de fan-out interpole
+
+
+def _fill(ctx: Context, text: str, subject: str) -> str:
+    """Interpole le sujet et la variante du candidat — dans un prompt, ou une commande.
+
+    `{subject_key}` est là depuis toujours. `{label}` et `{strategy}` viennent
+    de la variante, que la matérialisation a posée dans la config du nœud :
+    c'est ce qui donne à N candidats des angles différents plutôt que N fois
+    la même erreur. Un jeton dont la config ne dit rien reste littéral — un
+    nœud sans fan-out ne voit donc aucune différence.
+    """
+    text = text.replace("{subject_key}", subject)
+    for token in VARIANT_TOKENS:
+        value = ctx.config.get(token)
+        if value is not None:
+            text = text.replace("{" + token + "}", str(value))
+    return text
+
+
 def _prompt(ctx: Context, workspace: Path, subject: str) -> str:
     """Le prompt de la tentative : celui du nœud, le contrat, et la reprise."""
     outcomes = sorted(ctx.node.get("edges") or {})
     outcome_path = workspace / OUTCOME_NAME
     return os.path.expandvars(
-        ctx.config["agent"]["prompt"].replace("{subject_key}", subject)
+        _fill(ctx, ctx.config["agent"]["prompt"], subject)
     ) + (
         "\n\n--- Contrat GraphAtom ---\n"
         f"Tu es le bloc « {ctx.run['node']} » d'un rail d'exécution. "
@@ -346,14 +385,15 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
     log = attempt_log(workspace, ctx.run)
     pgid_file = workspace / PGID_FILE
     watched = (log, workspace, item_worktree(ctx.item["id"]))
+    cmd = _fill(ctx, cfg["cmd"], subject)  # une variante joue sa propre commande
     with log.open("w") as out:
         # session dédiée : l'agent est chef de son groupe, ses descendants aussi
         proc = subprocess.Popen(
-            cfg["cmd"], shell=True, cwd=workspace, env=env, start_new_session=True,
+            cmd, shell=True, cwd=workspace, env=env, start_new_session=True,
             stdout=out, stderr=subprocess.STDOUT,
         )
         try:
-            _write_pgid(pgid_file, proc, cfg["cmd"], ctx.run["id"])
+            _write_pgid(pgid_file, proc, cmd, ctx.run["id"])
             mark = _mark(*watched)  # nos traces sont écrites : la suite est de l'agent
             _wait(proc, watched, mark,
                   float(cfg.get("timeout_s", AGENT_TIMEOUT_S)),
@@ -418,7 +458,7 @@ def lease_autopsy(item_id: int, run: dict, alive: bool) -> dict:
     return {"outcome": "timed_out" if alive else "crashed",
             "error": "bail expiré, agent " + ("encore vivant" if alive else "déjà mort"),
             "timeout": alive, "exit_code": None,
-            "log_tail": _tail(attempt_log(item_workspace(item_id), run))}
+            "log_tail": _tail(attempt_log(run_workspace(item_id, run), run))}
 
 
 def _tail(log: Path) -> str:
@@ -488,6 +528,26 @@ def _identity(pid: int) -> dict | None:
     return {"boot": boot, "starttime": int(fields[19])}  # champ 22 de proc(5)
 
 
+def _trace(item_id: int, run_id: int) -> tuple[Path, dict] | None:
+    """La trace de pgid de ce run, et où elle est. None si elle n'y est pas.
+
+    Le workspace de l'item porte la sienne, et chaque candidat de fan-out la
+    sienne dans son sous-répertoire : le faucheur n'a qu'un numéro de run, il
+    les regarde donc toutes et suit celle qui le nomme. Une trace illisible
+    ou amputée n'en est pas une — elle ne fait tomber personne.
+    """
+    workspace = item_workspace(item_id)
+    for path in (workspace / PGID_FILE, *sorted(workspace.glob(f"c*/{PGID_FILE}"))):
+        try:
+            trace = json.loads(path.read_text())
+            run, _, _ = trace["run"], trace["pgid"], trace["identity"]
+        except (OSError, ValueError, KeyError):
+            continue
+        if run == run_id:
+            return path, trace
+    return None
+
+
 def agent_alive(item_id: int, run_id: int) -> bool:
     """L'agent de ce run travaille-t-il encore ? La lecture de `revoke_orphan`,
     sans rien tuer.
@@ -499,12 +559,12 @@ def agent_alive(item_id: int, run_id: int) -> bool:
     Pas de trace, trace d'un autre run, identité périmée : plus personne au
     travail.
     """
-    try:
-        trace = json.loads((item_workspace(item_id) / PGID_FILE).read_text())
-        run, pgid, who = trace["run"], trace["pgid"], trace["identity"]
-    except (OSError, ValueError, KeyError):
+    found = _trace(item_id, run_id)
+    if found is None:
         return False
-    return run == run_id and who is not None and _identity(pgid) == who
+    trace = found[1]
+    who = trace["identity"]
+    return who is not None and _identity(trace["pgid"]) == who
 
 
 def revoke_orphan(item_id: int, run_id: int) -> int | None:
@@ -515,18 +575,16 @@ def revoke_orphan(item_id: int, run_id: int) -> int | None:
     l'orphelin continue d'écrire dans le checkout et le workspace.
 
     Trois garde-fous, parce que tuer un innocent est pire qu'un orphelin :
-    la trace doit être celle du run fauché (une tentative suivante l'écrase),
-    le chef du groupe doit toujours être celui qu'on a lancé — un pid se
-    recycle, pas une identité — et le faucheur ne se fauche jamais lui-même.
+    la trace doit être celle du run fauché (une tentative suivante l'écrase,
+    et un candidat voisin a la sienne), le chef du groupe doit toujours être
+    celui qu'on a lancé — un pid se recycle, pas une identité — et le
+    faucheur ne se fauche jamais lui-même.
     """
-    path = item_workspace(item_id) / PGID_FILE
-    try:
-        trace = json.loads(path.read_text())
-        run, pgid, who = trace["run"], trace["pgid"], trace["identity"]
-    except (OSError, ValueError, KeyError):  # pas d'agent en vol, ou trace illisible
+    found = _trace(item_id, run_id)
+    if found is None:  # pas d'agent en vol, trace illisible, ou trace d'un autre run
         return None
-    if run != run_id:  # trace d'une tentative plus fraîche : pas la nôtre
-        return None
+    path, trace = found
+    pgid, who = trace["pgid"], trace["identity"]
     path.unlink(missing_ok=True)  # une trace ne sert qu'à une révocation
 
     if who is None or _identity(pgid) != who:
