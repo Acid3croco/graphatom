@@ -34,6 +34,17 @@ d'un nœud d'escalade dans le passage courant est gratuite, la re-entrée
 décompte. L'histoire n'est pas réécrite — les tentatives des passages précédents
 restent dans `node_run`, et `/item/<id>` donne le passage de chaque run.
 
+**Une troisième boucle, et une seule : la file.** Un nœud peut déclarer
+`"file": true` ; il gagne alors le droit de se renvoyer sur lui-même, et
+c'est la seule boucle que la validation tolère hors escalade. Elle ne
+décompte aucun budget, parce qu'elle n'est pas un tour de reprise : le nœud
+attend une ressource unique que personne ne lui rendra plus vite, et chaque
+tour lui coûte son propre délai d'attente — la borne est le `wall_deadline`
+de l'item, qui ne se régénère pas davantage. L'exception ne porte que sur
+l'arête réflexive : une boucle plus longue qui passerait par la file reste
+refusée, et une file sans arête sur elle-même aussi. `deploy` est la seule
+à ce jour (voir « un seul déploiement à la fois »).
+
 Hors noyau, en modules : EVAL, ADMIT, dialogue durable, gouverneur de flotte.
 
 ## Lancer le squelette (milestone 1)
@@ -80,8 +91,10 @@ uv run python tests/live_test.py                     # le marqueur de fraîcheur
                                                      # pages : stable à données
                                                      # égales, sans base
 uv run python tests/shell_test.py                    # les nœuds shell de code-task,
-                                                     # joués tels quels : sans base,
-                                                     # sans modèle, sans docker
+                                                     # joués tels quels : sans modèle,
+                                                     # sans docker — mais avec une
+                                                     # base, où `deploy` pose le
+                                                     # verrou de la file
 uv run python tests/checklist_test.py                # le nœud validate : le routage
                                                      # du graph, et la checklist citée
                                                      # dans la question de review
@@ -400,6 +413,52 @@ rien au cas qui a motivé la mesure : quand seul le front traîne, les autres
 portes concluent en une sonde et lui laissent le budget entier.
 `verify_deploy.md` porte, porte par porte, le temps attendu avant de
 conclure — c'est ce qui permettra de savoir si 60 s est bien réglé.
+
+### Un seul déploiement à la fois : la concurrence est une file
+
+Le rail travaille couramment à quatre ou six items en parallèle, et cela
+marche partout **sauf sur `deploy`** : tous les autres nœuds agissent chacun
+sur son atelier, `deploy` est le seul à agir sur une cible unique, la
+production. Deux `docker compose up` concurrents sur le même projet se
+disputent les noms de conteneurs, et docker refuse le second — un faux
+échec, qui escaladait chez l'humain alors que le déploiement était bon.
+
+**Le nœud prend un verrou de session postgres.** `pg_advisory_lock`, ni
+fichier ni démon : la mort de la session le libère, donc un shell tué en
+plein vol n'en laisse jamais un orphelin — un verrou qui survivrait à un
+crash serait pire que pas de verrou. La clé est la somme de contrôle du
+chemin de `GRAPHATOM_REPO_DIR` : c'est la cible qu'on sérialise, pas le
+rail, et deux rails sur deux clones ne se gênent pas. La base où il vit est
+`GRAPHATOM_VERROU_DSN`, à défaut `GRAPHATOM_AGENT_DSN` — l'instance que tous
+les items partagent ; la `GRAPHATOM_DSN` du bloc, elle, est la base jetable
+de l'item, propre à lui, donc sans effet sur le voisin. L'interprète qui
+tient la session est celui du clone de référence,
+`$GRAPHATOM_REPO_DIR/.venv/bin/python3`, avant celui du `PATH` : le worker
+est lancé par chemin absolu, son `PATH` n'a donc pas le venv, et le
+`python3` du système n'a pas psycopg — le prendre ferait taire le verrou
+sans rien dire.
+
+**Exclusion mutuelle *et* attente bornée**, les deux, parce qu'elles
+répondent à deux questions différentes : la première dit qui passe, la
+seconde combien de temps on patiente avant de rendre la main. L'exclusion
+seule laisserait le second item pendu au bail d'un déploiement qui traîne —
+le couperet le tuerait en `timed_out`, qui escalade sans compter les
+tentatives, c'est-à-dire exactement la panne qu'on veut supprimer.
+L'attente bornée seule ne sérialiserait rien. Passé
+`GRAPHATOM_VERROU_DELAI_S`, soit **300 s d'attente**, le nœud rend
+`waiting` et le graph le renvoie sur `deploy` : la file avance, personne
+n'escalade. Ces 300 s et le build tiennent ensemble dans le `timeout_s` du
+nœud, passé à 1260 s, donc dans son bail, passé à 1320 s.
+
+**Deux effets de bord du même mécanisme.** Le verrou obtenu, le shell
+compare le SHA visé à celui que portent les conteneurs — l'étiquette
+`com.graphatom.sha`, que le compose pose sur les trois services déployés :
+si un voisin a déployé le même `main` pendant l'attente, il n'y a rien à
+reconstruire et l'issue est un succès. La vérité est ainsi lue sur le
+déploiement lui-même, jamais sur un fichier tenu à côté. Et si un `up`
+interrompu a laissé un conteneur bâtard, le message `The container name …
+is already in use` nomme le coupable : le shell le retire et rejoue le
+`up`, une fois — plus d'humain dans la boucle.
 
 ## De vrais agents dans les blocs (milestone 3b)
 
