@@ -77,19 +77,28 @@
           "variants": [
             {
               "label": "minimal",
-              "strategy": "le diff minimal — touche le moins de lignes possible, au plus près de l'existant, sans abstraction nouvelle ni réorganisation. Tu ajoutes ce qui manque là où il manque, et rien d'autre."
+              "strategy": "le diff minimal — touche le moins de lignes possible, au plus près de l'existant, sans abstraction nouvelle ni réorganisation. Tu ajoutes ce qui manque là où il manque, et rien d'autre.",
+              "agent": {
+                "cmd": "OPENCODE_DIR=\"${GRAPHATOM_WORKTREE:-.}\" OPENCODE_TIMEOUT_S=1500 bash \"${GRAPHATOM_WORKTREE:-.}/scripts/agent-opencode.sh\" opencode/deepseek-v4-flash-free; RC=$?\n[ -f outcome.json ] || exit $RC\nbash \"${GRAPHATOM_WORKTREE:-.}/scripts/portes.sh\" || { rm -f outcome.json; RC=1; }\nexit $RC"
+              }
             },
             {
               "label": "réécriture",
-              "strategy": "la réécriture — reprends en entier le composant que l'issue concerne (le module, la fonction ou le nœud), sans garder la forme d'avant, pourvu que sa frontière et ses appelants ne bougent pas. Quand c'est la forme actuelle qui coince, c'est ton angle qui le montre."
+              "strategy": "la réécriture — reprends en entier le composant que l'issue concerne (le module, la fonction ou le nœud), sans garder la forme d'avant, pourvu que sa frontière et ses appelants ne bougent pas. Quand c'est la forme actuelle qui coince, c'est ton angle qui le montre.",
+              "agent": {
+                "cmd": "OPENCODE_DIR=\"${GRAPHATOM_WORKTREE:-.}\" OPENCODE_TIMEOUT_S=1500 bash \"${GRAPHATOM_WORKTREE:-.}/scripts/agent-opencode.sh\" opencode/deepseek-v4-flash-free; RC=$?\n[ -f outcome.json ] || exit $RC\nbash \"${GRAPHATOM_WORKTREE:-.}/scripts/portes.sh\" || { rm -f outcome.json; RC=1; }\nexit $RC"
+              }
             },
             {
               "label": "test d'abord",
-              "strategy": "le test d'abord — écris sous `tests/` le test qui échoue pour la raison exacte de l'issue, constate-le rouge, puis n'écris de code que pour le faire passer. Chaque critère de `criteria.md` qui nomme une commande devient une assertion."
+              "strategy": "le test d'abord — écris sous `tests/` le test qui échoue pour la raison exacte de l'issue, constate-le rouge, puis n'écris de code que pour le faire passer. Chaque critère de `criteria.md` qui nomme une commande devient une assertion.",
+              "agent": {
+                "cmd": "OPENCODE_DIR=\"${GRAPHATOM_WORKTREE:-.}\" OPENCODE_TIMEOUT_S=1500 bash \"${GRAPHATOM_WORKTREE:-.}/scripts/agent-opencode.sh\" opencode/deepseek-v4-flash-free; RC=$?\n[ -f outcome.json ] || exit $RC\nbash \"${GRAPHATOM_WORKTREE:-.}/scripts/portes.sh\" || { rm -f outcome.json; RC=1; }\nexit $RC"
+              }
             },
             {
-              "label": "gratuit",
-              "strategy": "le chemin court — lis `criteria.md`, écris le code qu'il demande là où il manque, et n'ajoute rien autour. Tu cours sur un modèle gratuit : ton angle n'est pas une forme de code, c'est une mesure — si le harnais fait le travail de fiabilité, un candidat sans coût gagne parfois la course, et c'est cela qu'on regarde.",
+              "label": "libre",
+              "strategy": "aucune contrainte de forme — fais au plus simple et au plus direct, comme tu le ferais seul",
               "agent": {
                 "cmd": "OPENCODE_DIR=\"${GRAPHATOM_WORKTREE:-.}\" OPENCODE_TIMEOUT_S=1500 bash \"${GRAPHATOM_WORKTREE:-.}/scripts/agent-opencode.sh\" opencode/deepseek-v4-flash-free; RC=$?\n[ -f outcome.json ] || exit $RC\nbash \"${GRAPHATOM_WORKTREE:-.}/scripts/portes.sh\" || { rm -f outcome.json; RC=1; }\nexit $RC",
                 "silence_s": 900
