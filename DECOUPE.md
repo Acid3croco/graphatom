@@ -327,15 +327,20 @@ donc deux états simultanés d'un même item, donc un état qui n'est plus un
 verrou de l'item, décidé sur des runs terminés : « un résultat qui arrive
 après la décision ne la change jamais ».
 
-**La phrase à amender, dite honnêtement.** Le README l'écrit à deux endroits,
-dans « des myriades de modèles bon marché » comme dans le périmètre négatif :
-« les candidats ne fusionnent jamais, un seul travail finit sur la branche de
-l'item et les autres sont détruits ». Sous `concat`, c'est faux : N travaux
-finissent sur la branche de l'item. Cette phrase était la **preuve** employée
-pour les candidats, pas l'invariant lui-même — et une preuve qui ne s'applique
-plus se remplace, elle ne se contourne pas en silence. Elle est donc à
-reprendre ainsi, dans le même esprit que l'amendement qu'a déjà reçu le
-fan-out :
+**La phrase à amender, dite honnêtement.** Le README la porte à deux endroits,
+dans des termes voisins mais non identiques. Sous « des myriades de modèles bon
+marché » : « il n'y a **aucune jointure** : les candidats ne fusionnent jamais,
+un seul travail finit sur la branche de l'item et les autres sont détruits ».
+Dans le périmètre négatif : « L'invariant d'état unique tient parce que rien ne
+fusionne : […] les candidats ne se voient jamais, un seul travail finit sur la
+branche de l'item et les autres sont détruits ». Sous `concat`, ce qui devient
+faux est le même des deux côtés — N travaux finissent sur la branche de l'item,
+et aucun n'est détruit ; « les candidats ne se voient jamais », en revanche,
+reste vrai, un morceau ignorant ses frères comme un candidat aujourd'hui. Ces
+formulations étaient la **preuve** employée pour les candidats, pas l'invariant
+lui-même — et une preuve qui ne s'applique plus se remplace, elle ne se
+contourne pas en silence. Les deux sont donc à reprendre ainsi, dans le même
+esprit que l'amendement qu'a déjà reçu le fan-out :
 
 > Les runs d'un nœud sont réduits à une issue unique avant que l'item
 > n'avance. Sous une **sélection** (`first_pass`, `keep_n`), un seul travail
@@ -378,7 +383,7 @@ travail du juge ; sous une agrégation, il ferait celui de git.
 | `kernel.py` — `_ateliers` | le cas `concat` : fusionner les branches des morceaux dans l'ordre déclaré au lieu de promouvoir un gagnant, puis `discard` comme aujourd'hui. |
 | `worktree.py` — une fonction à côté de `promote` | la preuve de disjonction (`git diff --name-only`, périmètres déclarés, intersections) et les fusions successives. Le refus se dit à voix haute et laisse la branche de l'item intacte, comme le fait déjà `promote`. |
 | `tests/` | un test sans base sur la validation de `pieces` — dans la lignée de `fanout_config_test.py` —, et un test de la preuve de disjonction sur un dépôt jetable. |
-| `README.md` | la phrase « les candidats ne fusionnent jamais… », amendée mot pour mot comme en section 4, à ses deux endroits — « des myriades de modèles bon marché » et le périmètre négatif. |
+| `README.md` | les deux formulations relevées en section 4 — « les candidats ne fusionnent jamais… » sous « des myriades de modèles bon marché », et « l'invariant d'état unique tient parce que rien ne fusionne… » dans le périmètre négatif — amendées comme il y est écrit. |
 
 ### Ce qui ne change pas
 
