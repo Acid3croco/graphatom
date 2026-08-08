@@ -1000,15 +1000,35 @@ l'issue le demande : le travail de l'item est donc encore à nu, et si main
 a bougé sur un fichier qu'il tient ouvert, git refuse le merge d'entrée —
 même sans conflit de contenu. C'est le second visage du code 9, et il coûte
 une reprise que le même pas placé après le commit s'épargnerait. Un merge, jamais un rebase : la branche est
-publique dès son premier push, son histoire ne se réécrit pas. Le prompt du
+publique dès son premier push, son histoire ne se réécrit pas.
+
+Le rapprochement supprime les conflits textuels, pas les ruptures de sens :
+un merge sans le moindre marqueur peut casser la construction. C'est arrivé
+— deux branches se compilaient chacune de son côté, l'une rendait une
+propriété obligatoire, l'autre appelait le composant sans elle, et `main`
+est sortie cassée (`graph-view.tsx(25,8) TS2741`). **Une porte de construction**
+suit donc toute absorption non vide, avant le push :
+`python3 -m compileall` sur `src/`, puis `npm run build` dans `front/` si le
+contenu absorbé y touche — la porte chère ne tourne que quand le front est
+concerné. Une porte qui lâche arrête la release en **code 11**, avec la
+sortie de la commande fautive dans `release.md` et le worktree laissé sur sa
+fusion : c'est un état à réparer, pas à effacer. Absorption vide, aucune
+porte : ce contenu-là a déjà été testé tel quel par les nœuds de test, et le
+cas fréquent ne paie rien. On ne fait jamais juger par un modèle ce qu'un
+compilateur tranche, et on ne paie pas un cycle d'agents — des minutes —
+pour ce qu'une commande déterministe décide en secondes.
+
+Le prompt du
 nœud tient en une phrase : lance le script ; sortie 0 → `done`, rien
 d'autre — le nominal coûte un aller-retour de modèle. Si le script lâche,
 l'agent a le droit d'agir, dans une frontière stricte : réparer la
 mécanique — relancer un push, recréer une PR obsolète d'un cycle passé,
-résoudre le conflit du code 9 — puis relancer le script, oui ; merger du
+résoudre le conflit du code 9, réparer la rupture d'intégration du code 11 —
+puis relancer le script, oui ; merger du
 code qu'il a modifié, jamais. D'où trois issues fermées : `done`, `conflict` (l'agent
 n'y arrive pas, l'humain reprend) et **`rebased`** — il a fallu résoudre de
-vrais conflits, donc pas de merge : l'arête renvoie la branche à
+vrais conflits, ou réparer ce que la porte de construction a arrêté, donc
+pas de merge : l'arête renvoie la branche à
 `test_backend`, parce qu'une fusion est une combinaison que personne n'a
 testée. Cette arête referme un cycle release → test → … → release :
 `release` porte donc `escalade`, et le budget d'escalades de l'item borne
@@ -1078,9 +1098,10 @@ seul **deploy** revient au clone de référence, qu'il aligne sur `origin/main`
 avant de reconstruire — c'est le merge qui part en prod, pas la branche.
 Deux items concurrents partent du même `origin/main` et divergent par leur
 branche ; s'ils touchent les mêmes fichiers, le second merge voit le conflit :
-release rebase quand le rebase passe tout seul, sort en `rebased` — retour aux
-tests — quand il a fallu résoudre à la main, et en `conflict` quand elle n'y
-arrive pas. Le retrait (worktree + branche locale) est un **nœud du
+release merge `origin/main` quand le merge passe tout seul, sort en `rebased`
+— retour aux tests — quand il a fallu résoudre à la main, et en `conflict`
+quand elle n'y arrive pas. Jamais un rebase : la branche est publique, seul
+le nom de l'issue est resté. Le retrait (worktree + branche locale) est un **nœud du
 graph** : toutes les sorties passent par `cleanup`,
 `cleanup_unresolved` ou `cleanup_split` avant leur terminal — le graph *est* la garantie de
 cleanup, le noyau n'en sait rien. Les agents demandent un worker sur
