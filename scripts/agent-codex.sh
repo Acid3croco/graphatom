@@ -53,6 +53,7 @@ BORNE="${CODEX_TIMEOUT_S:-300}"
 CX="${CODEX_BIN:-codex}"
 DIR="${CODEX_DIR:-${GRAPHATOM_WORKTREE:-$PWD}}"
 LOG="codex.jsonl"   # le flux d'événements de codex, dans le workspace
+ERRORS="codex-errors.log"  # stderr séparé : rejoué dans le journal ensuite
 
 [ -f prompt.md ] || {
     echo "agent-codex: pas de prompt.md dans $PWD — rien à donner au modèle" >&2
@@ -80,6 +81,34 @@ usage() {  # la consommation, telle que codex la rapporte : personne ne l'interp
     [ -s usage.json ] || rm -f usage.json  # pas de quoi le remplir : rien du tout
 }
 
+messages() {  # toutes les chaînes du fournisseur, JSON ou stderr brut
+    jq -r '.. | strings' "$LOG" 2>/dev/null
+    cat "$ERRORS" 2>/dev/null
+}
+
+starvation() {  # motifs fermés de codex : crédits, quota, authentification
+    [ -f outcome.json ] && return
+    for MOTIF in \
+        "You've hit your usage limit" \
+        "You have 0 weighted tokens left" \
+        "Quota exceeded" \
+        "quota has been exhausted" \
+        "Authentication failed" \
+        "authentication failed" \
+        "Missing bearer or basic authentication" \
+        "ChatGPT account auth token could not be refreshed" \
+        "Unauthorized" \
+        "API key is invalid"
+    do
+        REASON=$(messages | grep -F "$MOTIF" | head -1)
+        [ -n "$REASON" ] || continue
+        jq -n --arg provider "codex" --arg reason "$REASON" \
+            '{provider: $provider, reason: $reason}' > starved.json
+        echo "agent-codex: fournisseur affamé — $REASON" >&2
+        return
+    done
+}
+
 echo "agent-codex: modèle ${MODELE:-défaut de la session} — répertoire $DIR — borne ${BORNE} s"
 # `--dangerously-bypass-approvals-and-sandbox` n'est pas un détail : sans
 # lui, codex attend une approbation humaine avant d'écrire un fichier, et
@@ -89,14 +118,16 @@ echo "agent-codex: modèle ${MODELE:-défaut de la session} — répertoire $DIR
 if [ -n "$MODELE" ]; then
     timeout -k 5 "$BORNE" \
         "$CX" exec --json --dangerously-bypass-approvals-and-sandbox \
-        -m "$MODELE" -C "$DIR" "$(cat prompt.md)" < /dev/null > "$LOG"
+        -m "$MODELE" -C "$DIR" "$(cat prompt.md)" < /dev/null \
+        > "$LOG" 2> "$ERRORS"
 else
     timeout -k 5 "$BORNE" \
         "$CX" exec --json --dangerously-bypass-approvals-and-sandbox \
-        -C "$DIR" "$(cat prompt.md)" < /dev/null > "$LOG"
+        -C "$DIR" "$(cat prompt.md)" < /dev/null > "$LOG" 2> "$ERRORS"
 fi
 RC=$?
 
+cat "$ERRORS" >&2
 jq -rse 'map(select(.type=="item.completed" and .item.type=="agent_message") | .item.text)[]' \
     "$LOG" 2>/dev/null   # le texte du modèle part dans le journal de la tentative
 usage
@@ -108,6 +139,8 @@ if [ "$DIR" != "$PWD" ]; then
     [ -f "$DIR/outcome.json" ] && mv "$DIR/outcome.json" outcome.json 2>/dev/null
     [ -f "$DIR/usage.json" ] && mv "$DIR/usage.json" usage.json 2>/dev/null
 fi
+
+starvation
 
 case $RC in 124 | 137)
     echo "agent-codex: le modèle « ${MODELE:-défaut de la session} » n'a rien" >&2
