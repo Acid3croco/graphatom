@@ -1,9 +1,9 @@
 """Le test des candidats gratuits d'`implement` : déclaration et CLI absente.
 
-La course d'`implement` compte quatre candidats qui ne coûtent rien : leurs
-commandes passent par `scripts/agent-opencode.sh` sur
+La course d'`implement` compte un candidat qui ne coûte rien : sa commande
+passe par `scripts/agent-opencode.sh` sur
 `opencode/deepseek-v4-flash-free`, et le reste — le prompt, les budgets, les
-portes — est celui de leur frère codex.
+portes — est celui de ses deux frères codex.
 Ce qu'on mesure avec lui n'a de sens que s'il ne perd jamais en silence :
 une CLI absente doit se lire comme une CLI absente dans le résultat du run,
 pas comme du code qui ne compile pas.
@@ -54,10 +54,10 @@ os.environ.pop("GRAPHATOM_AGENT_DSN", None)
 
 
 def gratuits() -> list[int]:
-    """Les rangs des quatre candidats qui passent par l'adaptateur gratuit."""
+    """Le rang du candidat qui passe par l'adaptateur gratuit."""
     rangs = [k for k, v in enumerate(VARIANTES)
              if ADAPTATEUR in ((v.get("agent") or {}).get("cmd") or "")]
-    assert len(rangs) == 4, f"quatre candidats gratuits attendus, vu {rangs}"
+    assert len(rangs) == 1, f"un candidat gratuit attendu, vu {rangs}"
     return rangs
 
 

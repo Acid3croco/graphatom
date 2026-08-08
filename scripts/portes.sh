@@ -88,6 +88,7 @@ tests/heartbeat_test.py
 tests/links_test.py
 tests/live_test.py
 tests/failure_trace_test.py
+tests/codex_routing_test.py
 tests/orphans_test.py
 tests/timeout_marge_test.py
 tests/timeout_test.py"
