@@ -128,6 +128,10 @@ uv run python tests/portes_test.py                   # les portes d'un candidat
 uv run python tests/fanout_opencode_test.py          # le candidat gratuit
                                                      # d'implement : sa CLI absente
                                                      # dit son nom dans le run
+uv run python tests/plafond_test.py                  # les deux plafonds du dispatch :
+                                                     # la charge est bornée, et ce
+                                                     # que le plafond retient attend
+                                                     # sans bail ni tentative
 ```
 
 Les tests ne touchent jamais au `data/` du repo : chacun travaille dans un
@@ -790,7 +794,9 @@ donc `GRAPHATOM_DSN` et `GRAPHATOM_AGENT_DSN` d'entrée et épingle
 toucher une base ni le clone de référence partagé, quelle que soit la
 distraction de qui éditera la liste. `tests/crash_test.py`, qui drope la base
 nommée par `GRAPHATOM_DSN`, n'y est donc pas ; `tests/shell_test.py` non plus,
-depuis que le verrou de la file du `deploy` lui en demande une. `test_backend`
+depuis que le verrou de la file du `deploy` lui en demande une, ni
+`tests/plafond_test.py`, qui compte les runs en vol de toute la base et ne se
+mesure donc que seul. `test_backend`
 les joue après la course, une fois seul. Des jeux de portes lancés en même temps ne coûtent
 presque rien de plus qu'un seul — trois mettaient **53 s**, une seconde de
 plus qu'un seul ; le budget du nœud passe de 25 à
