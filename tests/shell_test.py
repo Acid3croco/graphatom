@@ -652,11 +652,11 @@ def main() -> None:
         cmd = BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
         assert "claude " in cmd, f"{nom} n'est plus un agent"
         assert "usage.json" in cmd, f"{nom} ne rend pas son usage.json"
-    # depuis la bascule des nœuds légers, release et les deux tests passent
-    # par l'adaptateur codex : c'est lui qui remplit usage.json, pas le `cmd`
+    # Les nœuds légers passent par l'adaptateur opencode : c'est lui qui
+    # remplit usage.json, pas le `cmd`.
     for nom in ("test_backend", "test_frontend", "release"):
         cmd = BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
-        assert "agent-codex.sh" in cmd, f"{nom} n'est plus sur l'adaptateur codex"
+        assert "agent-opencode.sh" in cmd, f"{nom} n'est plus sur l'adaptateur opencode"
     # les trois retraits sont le même shell : seul leur prompt les distingue,
     # et une correction sur l'un doit se voir sur les trois
     retraits = {BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
