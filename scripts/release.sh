@@ -14,6 +14,12 @@
 #   6  PR ni retrouvée ni créée
 #   7  merge refusé
 #   8  merge lancé, jamais observé
+#   9  rapprochement d'origin/main impossible sans jugement
+#  10  fetch en échec, ou origin/main illisible — main serait lu périmé
+#
+# Les codes 2 à 8 gardent leur sens : le pas de rapprochement est arrivé
+# après eux, il prend donc les deux codes libres qui suivent, pas la place
+# qu'il occupe dans la course.
 #
 # Le compte rendu s'écrit pas à pas dans `release.md` du workspace ; les
 # trois clés que le web lit vont dans `release.json`. Le script n'écrit
@@ -71,7 +77,36 @@ TETE=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>&1)
 if [ "$TETE" != "$BR" ]; then echoue "worktree $WT sur $TETE au lieu de $BR" 3; fi
 cd "$WT" || echoue "worktree $WT inaccessible" 3  # `gh` lit le dépôt sous ses pieds
 
-# 2. le commit — titre de l'issue, ligne vide, `Closes #<num>`
+# 2. le rapprochement d'`origin/main`, dans le worktree de l'item. Un merge,
+#    et rien qui réécrive l'histoire : la branche est publique dès son
+#    premier push. Le cas fréquent — main n'a pas bougé, ou a bougé ailleurs
+#    — se résout tout seul ; le conflit textuel, lui, demande un jugement, et
+#    le script le rend à l'agent plutôt que de le trancher.
+lance git -C "$WT" fetch origin \
+    || echoue "fetch d'origin : main serait lu périmé, la release s'arrête ici" 10
+AMONT=$(git -C "$WT" rev-parse --short origin/main 2>&1) \
+    || echoue "origin/main introuvable après le fetch : $AMONT" 10
+if git -C "$WT" merge-base --is-ancestor origin/main HEAD; then
+    dit "rapprochement : déjà à jour avec origin/main ($AMONT)"
+elif lance git -C "$WT" merge origin/main --no-edit; then
+    FUSION=$(git -C "$WT" rev-parse --short HEAD)
+    dit "rapprochement : merge automatique d'origin/main ($AMONT) — commit $FUSION"
+else
+    CONFLITS=$(git -C "$WT" diff --name-only --diff-filter=U)
+    if [ -n "$CONFLITS" ]; then
+        dit "fichiers en conflit avec origin/main ($AMONT) :"
+        dit "$CONFLITS"
+        lance git -C "$WT" merge --abort || dit "merge --abort refusé — worktree à relire"
+    else
+        # git a refusé d'entrée : rien à annuler, et la liste qu'il vient
+        # d'écrire est celle des fichiers qu'il n'a pas voulu écraser
+        dit "merge refusé d'entrée : du travail non commité sur des fichiers bougés"
+        dit "par origin/main ($AMONT) — la liste est juste au-dessus"
+    fi
+    echoue "rapprochement d'origin/main ($AMONT) impossible sans jugement" 9
+fi
+
+# 3. le commit — titre de l'issue, ligne vide, `Closes #<num>`
 if [ -n "$(git -C "$WT" status --porcelain)" ]; then
     TITRE=$(gh issue view "$NUM" --repo "$DEPOT" --json title -q .title) \
         || echoue "titre de l'issue #$NUM introuvable" 4
@@ -82,10 +117,10 @@ else
     dit "rien à committer — HEAD reste $(git -C "$WT" rev-parse --short HEAD)"
 fi
 
-# 3. le push
+# 4. le push
 lance git -C "$WT" push -u origin "$BR" || echoue "push de $BR" 5
 
-# 4. la PR : celle qui est ouverte, sinon une neuve. Un nom de branche se
+# 5. la PR : celle qui est ouverte, sinon une neuve. Un nom de branche se
 #    réutilise d'un cycle à l'autre, et `gh pr view <branche>` rend alors
 #    volontiers la PR mergée du cycle précédent — c'est `gh pr list`, filtré
 #    sur la tête et sur l'état, qui ne rend que celle qui compte.
@@ -102,7 +137,7 @@ fi
 URL=$(gh pr view "$PR" --repo "$DEPOT" --json url -q .url)
 dit "PR #$PR — $URL"
 
-# 5. le merge, puis sa surveillance jusqu'au SHA. `gh pr view` n'a pas de
+# 6. le merge, puis sa surveillance jusqu'au SHA. `gh pr view` n'a pas de
 #    champ `merged` : c'est `state` qui dit MERGED, et `mergeCommit` le SHA.
 lance gh pr merge "$PR" --repo "$DEPOT" --merge || echoue "merge de la PR #$PR" 7
 SHA=""
@@ -119,9 +154,9 @@ while [ "$essai" -lt "$ATTENTES" ]; do
 done
 if [ -z "$SHA" ]; then echoue "merge de la PR #$PR jamais observé en deux minutes" 8; fi
 
-# 6. les trois clés que le frontend lit — rien de libre dedans
+# 7. les trois clés que le frontend lit — rien de libre dedans
 printf '{"pr_number": %s, "pr_url": "%s", "merge_sha": "%s"}\n' "$PR" "$URL" "$SHA" \
     > "$WS/release.json"
 dit "PR #$PR mergée — commit de merge $SHA"
-dit "script suffisant : les six pas sont passés sans intervention."
+dit "script suffisant : les sept pas sont passés sans intervention."
 exit 0

@@ -16,7 +16,10 @@ qui autorise un nœud sans agent : il écrit toujours son `outcome.json`.
   7. `deploy` passe aussi quand ce worktree n'a pas `main` : la branche est
      tenue par le checkout principal, et la tête détachée ne la dispute pas
   8. `scripts/release.sh` nomme le pas qui a lâché et sort sur son code
-  9. la frontière tient dans le bundle : un nœud mécanique ne lance aucun
+  9. son pas de rapprochement traverse les quatre cas : déjà à jour, merge
+     automatique, conflit (code 9, worktree laissé propre), fetch en échec,
+     et deux fois de plus sur le worktree sale que le rail a vraiment
+ 10. la frontière tient dans le bundle : un nœud mécanique ne lance aucun
      modèle, un nœud à modèle rend son `usage.json`, les trois nœuds de
      retrait sont le même shell, et aucun ne teste `.git` comme un chemin
 
@@ -122,15 +125,61 @@ def joue(node: str, repo: Path, workspace: Path, subject: str = SUJET,
     return json.loads((workspace / "outcome.json").read_text())
 
 
-def release(repo: Path, workspace: Path, subject: str) -> int:
+def release(repo: Path, workspace: Path, subject: str,
+            plus: dict | None = None) -> int:
     """`scripts/release.sh` du worktree, lancé comme le ferait l'agent."""
     out = subprocess.run(
         [str(ROOT / "scripts" / "release.sh")], capture_output=True, text=True,
         env=os.environ | {"GRAPHATOM_REPO_DIR": str(repo),
                           "GRAPHATOM_WORKSPACE": str(workspace),
-                          "GRAPHATOM_SUBJECT_KEY": subject},
+                          "GRAPHATOM_SUBJECT_KEY": subject} | (plus or {}),
     )
     return out.returncode
+
+
+def cas_release(tmp: Path, nom: str) -> tuple[Path, Path, Path]:
+    """Un dépôt jetable neuf, son workspace, et le worktree de l'item dedans.
+
+    Chaque cas de rapprochement fait avancer `main` à sa façon : ils ne
+    peuvent pas se partager un `origin`.
+    """
+    base = tmp / nom
+    base.mkdir()
+    repo = depot(base)
+    git(repo, "config", "user.email", "shell@test.invalid")
+    git(repo, "config", "user.name", "shell")
+    workspace = base / "item-42"
+    workspace.mkdir()
+    assert joue("worktree", repo, workspace)["outcome"] == "done"
+    return repo, workspace, repo / ".worktrees" / "rail-item-42"
+
+
+def avance_main(repo: Path, fichier: str, contenu: str) -> str:
+    """Un commit de plus sur `origin/main`, comme un item voisin qui merge."""
+    source = repo.parent / "source"
+    (source / fichier).write_text(contenu)
+    git(source, "add", "-A")
+    git(source, "commit", "-qm", f"main avance sur {fichier}")
+    git(source, "push", "-q", "origin", "main")
+    return git(source, "rev-parse", "--short", "HEAD")
+
+
+def travaille(worktree: Path, fichier: str, contenu: str) -> None:
+    """Un commit sur la branche de l'item, pour qu'elle diverge vraiment.
+
+    Sans lui le rapprochement serait un simple avance-rapide, et le commit
+    de merge que le cas 3 attend n'existerait pas.
+    """
+    (worktree / fichier).write_text(contenu)
+    git(worktree, "add", "-A")
+    git(worktree, "commit", "-qm", f"l'item touche {fichier}")
+
+
+def merge_en_cours(worktree: Path) -> bool:
+    """Vrai si un merge est resté ouvert dans le worktree."""
+    vu = subprocess.run(["git", "-C", str(worktree), "rev-parse", "-q",
+                         "--verify", "MERGE_HEAD"], capture_output=True)
+    return vu.returncode == 0
 
 
 def main() -> None:
@@ -208,7 +257,71 @@ def main() -> None:
     assert "code 3" in (workspace / "release.md").read_text()
     print("8. release.sh : code 2 sur le sujet, code 3 sur le worktree ✓")
 
-    # 9. la frontière du bundle, relue à chaque tour : les nœuds mécaniques
+    # 9. le pas de rapprochement, ses quatre cas. Sans `gh`, la release va
+    #    toujours jusqu'au pas de la PR (code 6) : le rapprochement a donc
+    #    laissé passer, et aucun appel n'atteint GitHub.
+    aveugle = {"PATH": sans_gh(tmp)}
+
+    repo, workspace, worktree = cas_release(tmp, "a-jour")
+    tete = git(worktree, "rev-parse", "HEAD")
+    assert release(repo, workspace, SUJET, aveugle) == 6
+    rapport = (workspace / "release.md").read_text()
+    assert "déjà à jour" in rapport, rapport
+    assert git(worktree, "rev-parse", "HEAD") == tete, "le worktree a bougé"
+
+    repo, workspace, worktree = cas_release(tmp, "disjoint")
+    travaille(worktree, "travail.txt", "l'implémentation de l'item\n")
+    amont = avance_main(repo, "voisin.txt", "un autre item est passé par là\n")
+    assert release(repo, workspace, SUJET, aveugle) == 6
+    rapport = (workspace / "release.md").read_text()
+    assert amont in rapport, rapport  # le SHA d'origin/main absorbé
+    assert len(git(worktree, "rev-list", "--parents", "-n", "1", "HEAD").split()) == 3, \
+        "HEAD n'est pas un commit de merge"
+    git(worktree, "merge-base", "--is-ancestor", "origin/main", "HEAD")
+
+    repo, workspace, worktree = cas_release(tmp, "conflit")
+    travaille(worktree, "socle.txt", "la version de l'item\n")
+    avance_main(repo, "socle.txt", "la version de main\n")
+    assert release(repo, workspace, SUJET, aveugle) == 9
+    rapport = (workspace / "release.md").read_text()
+    assert "socle.txt" in rapport, rapport
+    assert not merge_en_cours(worktree), "le merge est resté ouvert"
+    assert git(worktree, "status", "--porcelain") == "", "worktree laissé sale"
+    assert "<<<<<<<" not in (worktree / "socle.txt").read_text()
+
+    repo, workspace, worktree = cas_release(tmp, "sans-reseau")
+    git(repo, "remote", "set-url", "origin", str(tmp / "origin-qui-n-existe-pas.git"))
+    assert release(repo, workspace, SUJET, aveugle) == 10
+    rapport = (workspace / "release.md").read_text()
+    assert "fetch" in rapport, rapport
+    assert "gh pr" not in rapport, "une PR tentée sur une vision périmée de main"
+    print("9. release.sh : déjà à jour, merge automatique, conflit en code 9 "
+          "worktree propre, fetch en échec en code 10 ✓")
+
+    # 9 bis. le worktree sale, la forme que le rail a vraiment : le
+    #    rapprochement passe avant le commit, donc l'implémentation est encore
+    #    à nu. Main ailleurs, le merge passe quand même ; main sur un fichier
+    #    que l'item a ouvert, git refuse d'entrée — code 9, worktree intact
+    repo, workspace, worktree = cas_release(tmp, "sale-ailleurs")
+    (worktree / "socle.txt").write_text("le travail de l'item, pas encore commité\n")
+    avance_main(repo, "voisin.txt", "main a bougé ailleurs\n")
+    assert release(repo, workspace, SUJET, aveugle) == 4  # le pas du commit, sans `gh`
+    rapport = (workspace / "release.md").read_text()
+    assert "merge automatique" in rapport, rapport
+    assert git(worktree, "status", "--porcelain") == "M socle.txt", "le travail a bougé"
+
+    repo, workspace, worktree = cas_release(tmp, "sale-meme-fichier")
+    (worktree / "socle.txt").write_text("le travail de l'item, pas encore commité\n")
+    avance_main(repo, "socle.txt", "main a bougé au même endroit\n")
+    assert release(repo, workspace, SUJET, aveugle) == 9
+    rapport = (workspace / "release.md").read_text()
+    assert "refusé d'entrée" in rapport, rapport
+    assert not merge_en_cours(worktree), "le merge est resté ouvert"
+    assert git(worktree, "status", "--porcelain") == "M socle.txt", "le travail a bougé"
+    print("9 bis. worktree sale : merge quand même si main est ailleurs, "
+          "code 9 sans rien perdre sinon ✓")
+
+    # 10. la frontière du bundle, relue à chaque tour : les nœuds mécaniques
     #    n'appellent aucun modèle, et ceux qui en appellent un rendent le
     #    coût de la tentative — un merge d'amont ne doit rien reprendre
     #    d'un côté ni de l'autre
@@ -232,7 +345,7 @@ def main() -> None:
     shells["scripts/release.sh"] = (ROOT / "scripts" / "release.sh").read_text()
     for nom, shell in shells.items():
         assert "/.git" not in shell, f"{nom} teste .git comme un chemin"
-    print("9. six nœuds sans modèle dont trois retraits identiques, "
+    print("10. six nœuds sans modèle dont trois retraits identiques, "
           "cinq agents qui rendent leur usage, aucun test sur .git ✓")
 
     shutil.rmtree(tmp, ignore_errors=True)

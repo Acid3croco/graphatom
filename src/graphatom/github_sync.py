@@ -28,9 +28,14 @@ tout le reste :
                   qui est demandé et ce qui est coché, pas seulement
                   « on garde ? ». Une escalade née d'un timeout dit en plus
                   quel budget a sauté et sur quoi l'agent en était
-  5. réponses   — un commentaire `/answer <id> <option>` d'un auteur
-                  autorisé, postérieur à l'armement de la question,
-                  enregistre la réponse ; l'ordonnanceur route
+  5. réponses   — un commentaire dont la *première ligne* est
+                  `/answer <id> <option>`, d'un auteur autorisé et
+                  postérieur à l'armement de la question, enregistre la
+                  réponse ; l'ordonnanceur route. La prose qui suit la
+                  première ligne est libre. Une commande qui vise cette
+                  question mais tombe à côté de la grammaire reçoit le
+                  mode d'emploi sur l'issue — seule une commande qui vise
+                  une autre question est ignorée sans bruit
   6. état       — un label `rail:<état>` projette l'état de l'item actif,
                   repeint à chaque tick sur les issues ouvertes, retiré au
                   terminal sans condition — l'issue peut être déjà fermée ;
@@ -511,7 +516,33 @@ def _publish_questions(conn: Connection, gh: GitHub) -> None:
                f"q{q['id']}", _question_body(conn, q, web))
 
 
+def _mode_emploi(q: dict, author: str) -> str:
+    """Le reproche du canal : la commande n'est pas prise, et voici la forme."""
+    options = " / ".join(f"`{o}`" for o in q["options"])
+    return (f"@{author} : commande non prise. La première ligne doit être "
+            f"exactement `/answer {q['id']} <option>` — trois mots, rien de plus ; "
+            f"une explication peut suivre après un saut de ligne.\n"
+            f"Options : {options}")
+
+
 def _collect_answers(conn: Connection, gh: GitHub, allowed: set[str]) -> None:
+    """Les réponses humaines, lues sur la première ligne — et les ratés, dits.
+
+    La commande tient sur la première ligne ; ce qui suit un saut de ligne
+    est de la prose humaine et n'invalide rien. Décider *et* dire pourquoi
+    est le geste naturel : il n'y a pas de raison de l'interdire.
+
+    Deux malformations, deux traitements. Une commande qui vise une *autre*
+    question est ignorée sans bruit — la boucle balaie toutes les questions
+    ouvertes × tous les commentaires, et chaque commande en vise une seule.
+    Une commande qui vise *cette* question, ou qui ne vise aucun id lisible,
+    reçoit le mode d'emploi : une erreur ne passe jamais en silence. La clé
+    logique `reply-<commentaire>` fait que le reproche n'est dit qu'une fois.
+
+    La grammaire, elle, ne bouge pas : trois mots, pas de tolérance
+    orthographique, pas de synonyme d'option — on éclaire l'erreur, on ne
+    devine pas l'intention.
+    """
     for q in _gh_questions(conn, gh):
         number = _issue_number(q["subject_key"])
         for c in gh.comments(number):
@@ -522,14 +553,19 @@ def _collect_answers(conn: Connection, gh: GitHub, allowed: set[str]) -> None:
             if q["armed_at"] and posted < q["armed_at"]:
                 continue  # commande d'une vie antérieure — jamais rejouée
             author = c["user"]["login"]
-            parts = body.split()
+            parts = body.partition("\n")[0].split()
             if author not in allowed:
                 _speak(conn, gh, number, q["item_id"], f"reply-{c['id']}",
                        f"@{author} : seuls {', '.join(sorted(allowed))} "
                        "peuvent répondre aux questions du rail.")
                 continue
-            if len(parts) != 3 or not parts[1].isdigit() or int(parts[1]) != q["id"]:
-                continue  # commande pour une autre question, ou malformée : ignorer
+            vise = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+            if vise is not None and vise != q["id"]:
+                continue  # commande pour une autre question : silence légitime
+            if vise is None or len(parts) != 3:
+                _speak(conn, gh, number, q["item_id"], f"reply-{c['id']}",
+                       _mode_emploi(q, author))
+                continue
             err = channel.record_answer(conn, q["id"], parts[2], by=author)
             if err:
                 _speak(conn, gh, number, q["item_id"], f"reply-{c['id']}",
