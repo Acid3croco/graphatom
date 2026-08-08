@@ -11,6 +11,7 @@ L'idée : des portes successives dont l'exécution est certaine — du code atom
 - [`index.html`](index.html) — **le noyau** (v2, simplifié) : six pièces, sept concepts utilisateur, quatre gardes de frontière, sept tables.
 - [`cas-usage.html`](cas-usage.html) — **le cas d'usage pilote** : d'une carte Notion à la prod. Trois gestes humains, le reste est le rail. C'est ce scénario qui pilote les choix.
 - [`pourquoi.html`](pourquoi.html) — **pourquoi pas Temporal/Restate/LangGraph** : les cinq garanties qu'aucun moteur existant ne donne. Le moteur est une commodité, les portes sont le produit.
+- [`DECOUPE.md`](DECOUPE.md) — **découper un travail en N morceaux différents, et le recoller** : la forme de configuration, les agrégations retenues bloc par bloc, le sort d'un morceau en échec, et pourquoi l'invariant d'état unique tient. Conception seule — rien n'en est encore exécutable.
 - [`archive/graph-runner-original.html`](archive/graph-runner-original.html) — la dérivation complète (v1) : algèbre de capacités, particules élémentaires, forces d'interaction, les douze trous de frontière. Le raisonnement, pas la spécification.
 
 ## Le noyau en six pièces
