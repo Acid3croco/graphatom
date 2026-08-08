@@ -14,6 +14,7 @@ Les mêmes vues se lisent en JSON, pour un client qui rend la page lui-même :
                      critères, fichiers du workspace
     /api/questions   les questions ouvertes, et le jeton de `POST /answer`
     /api/heartbeat   les deux battements bruts : le worker, et le canal GitHub
+    /api/load        la charge : runs en vol, et les plafonds qui la bornent
     /api/graphs      les révisions publiées : nom, date, items qui la portent
     /api/graph/<rév> le bundle entier de cette révision, config comprise
 
@@ -64,7 +65,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote
 
-from . import channel, db, heartbeat
+from . import channel, db, heartbeat, scheduler
 from .blocks import item_workspace
 from .graph import candidate_node, fanout_variants, judge_source, load_bundle
 
@@ -928,6 +929,19 @@ def _api_heartbeat(rail: dt.datetime | None, sync: dt.datetime | None) -> dict:
     return {heartbeat.RAIL: _api_beat(rail), heartbeat.GITHUB_SYNC: _api_beat(sync)}
 
 
+def _api_load(conn) -> dict:
+    """La charge du rail : les runs en vol, et les plafonds qui les bornent.
+
+    Une saturation invisible se diagnostique à coups de `ps` : les deux
+    valeurs se lisent donc ici, hors de la base. `running` au niveau de
+    `max_runs`, c'est un rail qui n'est pas bloqué mais plein — les runs
+    réservables attendent leur tour.
+    """
+    return {"running": scheduler.en_vol(conn),
+            "max_runs": scheduler.MAX_RUNS,
+            "max_runs_per_item": scheduler.MAX_RUNS_PER_ITEM}
+
+
 # --------------------------------------------------------------------- notify
 
 
@@ -1000,6 +1014,8 @@ def serve(port: int = 8848, by: str = "web", notify_cmd: str | None = None,
                         return self._json(200, _api_heartbeat(
                             heartbeat.last(conn, heartbeat.RAIL),
                             heartbeat.last(conn, heartbeat.GITHUB_SYNC)))
+                    if path == "/api/load":
+                        return self._json(200, _api_load(conn))
                     if path == "/api/graphs":
                         return self._json(200, _api_graphs(conn))
                     if path.startswith("/api/item/") and path[10:].isdigit():

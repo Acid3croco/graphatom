@@ -10,6 +10,11 @@ pas de timer. Il ne compte pas comme du travail — un rail au repos bat
 quand même. Ce que le worker ne peut plus dire quand il meurt, son silence
 le dit à sa place : voir `heartbeat`.
 
+Deux plafonds bornent le dispatch, `MAX_RUNS` et `MAX_RUNS_PER_ITEM` : ce
+qu'ils retiennent n'échoue pas, il attend le tick suivant — la charge est
+une file, comme celle du déploiement. La charge en vol et les plafonds se
+lisent hors de la base sur `/api/load`.
+
 Chaque bloc s'exécute dans son propre thread avec sa propre connexion :
 un agent qui travaille dix minutes ne bloque ni le faucheur ni les
 autres items. claim() garantit qu'un item n'a qu'une tentative à la
@@ -24,6 +29,7 @@ connexion — le rail se déploie lui-même, donc il migre son propre schéma
 sous son propre worker : voir `run_forever`.
 """
 
+import os
 import threading
 import time
 
@@ -34,6 +40,22 @@ from .blocks import BLOCKS, Context
 from .graph import candidate_node, load_bundle
 
 RECONNECT_MAX_S = 30.0  # plafond du backoff : une base absente n'est jamais abandonnée
+
+# Le plafond de runs en vol, tous items confondus. Le fan-out multiplie la
+# charge : tant qu'un item n'avait qu'un run par nœud, le nombre d'items la
+# bornait tout seul, et le fan-out a supprimé cette borne implicite. Un
+# candidat ne coûte pas un agent qui écrit du texte, il coûte un agent *plus*
+# ses portes — une construction et une suite de tests : la moitié des cœurs
+# laisse la machine à Postgres et au reste. Aucun chiffre magique, et la
+# configuration surcharge.
+MAX_RUNS = int(os.environ.get("GRAPHATOM_MAX_RUNS")
+               or max(2, (os.cpu_count() or 4) // 2))
+# …et un plafond par item, sinon un item en fan-out large prend toute la
+# capacité et affame six items sur des nœuds bon marché. Toujours
+# strictement sous le plafond global : une place reste donc toujours libre
+# pour un autre item.
+MAX_RUNS_PER_ITEM = int(os.environ.get("GRAPHATOM_MAX_RUNS_PER_ITEM")
+                        or max(1, MAX_RUNS // 2))
 
 
 def tick(conn: psycopg.Connection) -> int:
@@ -147,16 +169,44 @@ def _execute(run_id: int, item_id: int) -> None:
         kernel.apply(conn, run_id, result)
 
 
+def en_vol(conn: psycopg.Connection) -> int:
+    """Les runs qui volent, tous items confondus — la charge du rail."""
+    return conn.execute(
+        "SELECT count(*) AS n FROM node_run WHERE status = 'running'"
+    ).fetchone()["n"]
+
+
+def _en_vol_item(conn: psycopg.Connection, item_id: int) -> int:
+    """Les runs en vol de cet item — ses candidats, quand il est en fan-out."""
+    return conn.execute(
+        "SELECT count(*) AS n FROM node_run WHERE item_id = %s AND status = 'running'",
+        (item_id,),
+    ).fetchone()["n"]
+
+
 def _dispatch(conn: psycopg.Connection) -> int:
+    """Réserve ce que les deux plafonds laissent passer. Le reste attend.
+
+    Un run que le plafond retient n'est pas réservé du tout : aucun bail
+    n'est posé, aucune tentative n'est comptée, rien n'échoue — le tick
+    suivant le prendra, exactement comme la file du déploiement.
+    """
+    libre = MAX_RUNS - en_vol(conn)
     items = conn.execute(
         "SELECT id FROM work_item WHERE terminal_at IS NULL ORDER BY id"
     ).fetchall()
     n = 0
     for row in items:
+        if libre <= 0:
+            break
+        place = min(libre, MAX_RUNS_PER_ITEM - _en_vol_item(conn, row["id"]))
         # un nœud en fan-out se réserve candidat par candidat : on rappelle
-        # tant qu'il en reste, et les K blocs partent concurremment
-        while (run := kernel.claim(conn, row["id"])) is not None:
+        # tant qu'il en reste et que la place le permet, et les blocs
+        # réservés partent concurremment
+        while place > 0 and (run := kernel.claim(conn, row["id"])) is not None:
             n += 1
+            libre -= 1
+            place -= 1
             threading.Thread(
                 target=_execute, args=(run["id"], row["id"]), daemon=True
             ).start()
