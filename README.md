@@ -34,6 +34,17 @@ d'un nœud d'escalade dans le passage courant est gratuite, la re-entrée
 décompte. L'histoire n'est pas réécrite — les tentatives des passages précédents
 restent dans `node_run`, et `/item/<id>` donne le passage de chaque run.
 
+**Une troisième boucle, et une seule : la file.** Un nœud peut déclarer
+`"file": true` ; il gagne alors le droit de se renvoyer sur lui-même, et
+c'est la seule boucle que la validation tolère hors escalade. Elle ne
+décompte aucun budget, parce qu'elle n'est pas un tour de reprise : le nœud
+attend une ressource unique que personne ne lui rendra plus vite, et chaque
+tour lui coûte son propre délai d'attente — la borne est le `wall_deadline`
+de l'item, qui ne se régénère pas davantage. L'exception ne porte que sur
+l'arête réflexive : une boucle plus longue qui passerait par la file reste
+refusée, et une file sans arête sur elle-même aussi. `deploy` est la seule
+à ce jour (voir « un seul déploiement à la fois »).
+
 Hors noyau, en modules : EVAL, ADMIT, dialogue durable, gouverneur de flotte.
 
 ## Lancer le squelette (milestone 1)

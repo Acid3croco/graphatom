@@ -124,6 +124,7 @@
     },
     "deploy": {
       "block": "ACT",
+      "file": true,
       "config": {
         "lease_s": 1320,
         "agent": {

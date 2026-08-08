@@ -6,6 +6,9 @@ Scénario, sans base ni ordonnanceur — la validation est pure :
   2. un bundle avec une clé `on_kernel` parasite visant un nœud fantôme
      est refusé, avec un message qui nomme la clé
   3. `web._layers()` ne lève pas de KeyError sur un bundle validé
+  4. la file : l'arête réflexive d'un nœud `file` est la seule boucle
+     tolérée hors escalade — le drapeau sans arête est refusé, la boucle
+     longue qui passe par la file aussi
 
 Usage : uv run python tests/validate_test.py
 """
@@ -57,6 +60,32 @@ def main() -> None:
         layers = web._layers(bundle)
         assert sorted(n for layer in layers for n in layer) == sorted(bundle["nodes"]), name
     print("3. _layers() couvre exactement les nœuds déclarés ✓")
+
+    # 4. la file tolère son arête réflexive, et rien d'autre. Le drapeau qui
+    #    ne boucle sur rien ment sur le nœud ; la boucle longue, elle, reste
+    #    une boucle que le budget d'escalades devrait borner
+    bundle = json.loads(json.dumps(bundles["code-task.json"]))
+    assert bundle["nodes"]["deploy"]["file"], "deploy n'est plus une file"
+    bundle["nodes"]["deploy"]["edges"].pop("waiting")
+    try:
+        graph.validate(bundle)
+    except graph.GraphError as e:
+        assert "file sans arête" in str(e), str(e)
+        print(f"4. file sans arête réflexive refusée : {e} ✓")
+    else:
+        sys.exit("ÉCHEC : un nœud `file` qui ne boucle sur rien a passé la validation")
+
+    bundle = json.loads(json.dumps(bundles["code-task.json"]))
+    # l'arête réflexive reste ; c'est la boucle deploy → verify_deploy → deploy
+    # que la file ne doit pas dédouaner
+    bundle["nodes"]["verify_deploy"]["edges"]["fail"] = "deploy"
+    try:
+        graph.validate(bundle)
+    except graph.GraphError as e:
+        assert "cycle hors escalade" in str(e), str(e)
+        print(f"   boucle longue par la file refusée : {e} ✓")
+    else:
+        sys.exit("ÉCHEC : une boucle non réflexive par une file a passé la validation")
 
     print("\nvalidation : OK — une cible on_kernel fantôme ne se publie plus")
 
