@@ -642,8 +642,12 @@ d'entrée dans l'état courant — celui que `kernel._route()` y a écrit :
   humaine, une échéance de WAIT — n'a pas de prédécesseur, et **rien n'est
   posé** : pas de bloc creux ;
 - une relance du même nœud lit sa propre tentative précédente ;
-- en fan-out, seul le run que l'événement porte est lu, jamais ses voisins :
-  l'anonymat du dossier du juge reste entier.
+- en fan-out, seul le run que l'événement porte est lu, jamais ses voisins ;
+- et le nœud arbitre ne reçoit rien du tout. Lui ne continue pas le travail
+  de son prédécesseur, il le juge — et son prédécesseur est un finaliste,
+  dont la passation et le journal nommeraient la CLI, le modèle et la
+  variante. C'est exactement ce que le dossier anonyme cache. Il écrit la
+  sienne comme les autres, il n'en lit aucune.
 
 Borné des deux côtés, parce qu'un agent noyé sous l'historique choisit mal :
 en taille (`PASSATION_CHARS`, 2 500 caractères, et la queue du journal aux

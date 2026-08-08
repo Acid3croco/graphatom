@@ -18,7 +18,8 @@ lit — sans base ni ordonnanceur : seul le prompt du bloc agent est en jeu.
      longue, le dernier nœud ne voit que l'avant-dernier
   6. une relance du même nœud lit la tentative précédente de ce nœud-là
   7. en fan-out, la passation lue est celle du candidat que l'événement
-     porte, dans son `c<k>/` — pas celle d'un voisin
+     porte, dans son `c<k>/` — pas celle d'un voisin ; et le nœud arbitre,
+     lui, ne reçoit rien : son dossier reste anonyme
   8. un prédécesseur qui n'a rendu aucune passation le dit, et ne fait
      tomber personne
 
@@ -212,13 +213,25 @@ def fan_out(workdir: Path) -> None:
     ecrire(workdir, elu, "## Fait\nle travail de l'élu\n")
     ecrire(workdir, voisin, "## Fait\nle travail du voisin recalé\n")
     assert blocks.passation_path(ITEM, elu).parent.name == "c1", "workspace du candidat"
-    texte = prompt(workdir, "judge", [{"to_state": "judge", "run_id": 51}],
-                   {51: elu, 52: voisin})
+    events = [{"to_state": "test_backend", "run_id": 51}]
+    texte = prompt(workdir, "test_backend", events, {51: elu, 52: voisin})
 
     assert "le travail de l'élu" in texte, texte
     assert "voisin recalé" not in texte, "le prompt lit un candidat qu'il ne doit pas"
     print("7. fan-out : la passation lue est celle du candidat c1, porté par "
           "l'événement — celle de c0 reste dans son coin ✓")
+
+    # le nœud arbitre, lui, ne reçoit rien : sa seule lecture est le dossier
+    # anonyme, et la passation d'un finaliste nommerait sa CLI et son modèle
+    ctx = contexte(workdir, "judge", events, {51: elu})
+    ctx.node["config"]["finalists_from"] = "implement"
+    ctx.node["block"] = "JUDGE"
+    arbitre = blocks._prompt(ctx, ctx.workspace.resolve(), SUJET)
+    assert "Passation de" not in arbitre, arbitre
+    assert "le travail de l'élu" not in arbitre, "l'arbitre lit un finaliste nommé"
+    assert "passation-judge.md" in arbitre, "l'arbitre en écrit une, lui"
+    print("7 bis. nœud arbitre : aucune passation reçue — il juge le travail, "
+          "pas son auteur ✓")
 
 
 def sans_passation(workdir: Path) -> None:
