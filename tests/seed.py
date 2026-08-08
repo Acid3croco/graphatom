@@ -36,6 +36,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import db  # noqa: E402
 
+from outils import kill_group, sh  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 WORK = Path(tempfile.mkdtemp(prefix="graphatom-seed-"))
 # hermétisme : ce dépôt-ci est le seul univers de la fixture. L'agent qui
@@ -46,28 +48,12 @@ os.environ.pop("GRAPHATOM_AGENT_DSN", None)
 TIMEOUT_S = 60
 
 
-def sh(*args: str) -> str:
-    out = subprocess.run(
-        ["uv", "run", "graphatom", *args],
-        cwd=ROOT, capture_output=True, text=True, check=True,
-    )
-    return out.stdout.strip()
-
-
 def scheduler() -> subprocess.Popen:
     # même lancement que le crash-test : binaire du venv, groupe dédié
     return subprocess.Popen(
         [str(ROOT / ".venv" / "bin" / "graphatom"), "run"],
         cwd=WORK, start_new_session=True,
     )
-
-
-def kill_group(proc: subprocess.Popen, sig: int) -> None:
-    try:
-        os.killpg(os.getpgid(proc.pid), sig)
-    except ProcessLookupError:
-        pass
-    proc.wait()
 
 
 def variant_raise() -> Path:

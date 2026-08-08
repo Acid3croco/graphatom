@@ -295,8 +295,14 @@ ITEM_SELECT = (
 )
 
 
+def _items_data(conn) -> list[dict]:
+    """Tous les items, du plus récent au plus ancien — même requête pour la
+    page et pour l'API : une seule lecture, deux rendus."""
+    return conn.execute(ITEM_SELECT + "ORDER BY w.id DESC").fetchall()
+
+
 def _items_page(conn, beat: dt.datetime | None) -> str:
-    rows = conn.execute(ITEM_SELECT + "ORDER BY w.id DESC").fetchall()
+    rows = _items_data(conn)
     body = ["<h1>items</h1>"]
     if not rows:
         body.append("<p class='empty'>Aucun item admis.</p>")
@@ -581,7 +587,13 @@ def _split_line(bundle: dict, runs: list[dict]) -> str:
             f"{_tokens(split['candidates']) or 'aucun usage rapporté'}</p>")
 
 
-def _item_page(conn, item_id: int, beat: dt.datetime | None) -> str | None:
+def _item_data(conn, item_id: int) -> dict | None:
+    """Tout ce que la page d'un item et son JSON ont besoin de savoir.
+
+    Une seule passe en base pour les deux rendus : l'item, son bundle, son
+    journal, ses runs, ses effets, ses questions — et l'arithmétique qui en
+    sort, durées et tokens comprises. `None` quand l'item n'existe pas.
+    """
     item = conn.execute(ITEM_SELECT + "WHERE w.id = %s", (item_id,)).fetchone()
     if item is None:
         return None
@@ -592,16 +604,43 @@ def _item_page(conn, item_id: int, beat: dt.datetime | None) -> str | None:
     runs = conn.execute(
         "SELECT * FROM node_run WHERE item_id = %s ORDER BY id", (item_id,)
     ).fetchall()
+    effects = conn.execute(
+        "SELECT * FROM effect WHERE item_id = %s ORDER BY op_id", (item_id,)
+    ).fetchall()
+    questions = conn.execute(
+        "SELECT * FROM question WHERE item_id = %s ORDER BY id", (item_id,)
+    ).fetchall()
 
     # le temps et les tokens du cycle, d'un coup d'œil et en tête de page
     spans = _spans(events)
     end = item["terminal_at"] or dt.datetime.now(dt.timezone.utc)
-    total = (end - events[0]["at"]).total_seconds() if events else 0.0
-    totals = _totals(runs)
     # un run n'a de durée que s'il a produit une transition : superseded et
     # stale n'en ont jamais eu, running pas encore
     run_span = {e["run_id"]: spans[e["item_version"]]
                 for e in events if e["run_id"] and e["item_version"] in spans}
+
+    return {
+        "item": item, "bundle": bundle, "events": events, "runs": runs,
+        "effects": effects, "questions": questions,
+        "spans": spans, "run_span": run_span,
+        "duration_s": (end - events[0]["at"]).total_seconds() if events else 0.0,
+        "usage": _totals(runs),
+        # les deux bouts de l'haltère, séparés : ce que le jugement coûte
+        # face à ce que la génération coûte
+        "usage_split": _cost_split(bundle, runs),
+        "criteria": _criteria(item_id),
+        "files": _files(item_id),
+    }
+
+
+def _item_page(conn, item_id: int, beat: dt.datetime | None) -> str | None:
+    data = _item_data(conn, item_id)
+    if data is None:
+        return None
+    item, bundle = data["item"], data["bundle"]
+    events, runs = data["events"], data["runs"]
+    spans, run_span, totals = data["spans"], data["run_span"], data["usage"]
+    total = data["duration_s"]
 
     state = "terminal" if item["terminal_at"] else "active"
     body = [
@@ -644,9 +683,7 @@ def _item_page(conn, item_id: int, beat: dt.datetime | None) -> str | None:
              f"<td>{_tokens(_usage(r))}</td>"
              f"<td>{_result(r['result'])}</td></tr>" for r in runs]))
 
-    effects = conn.execute(
-        "SELECT * FROM effect WHERE item_id = %s ORDER BY op_id", (item_id,)
-    ).fetchall()
+    effects = data["effects"]
     if effects:
         body.append("<h2>effets</h2>" + _table(
             ["clé logique", "cible", "observation"],
@@ -654,9 +691,7 @@ def _item_page(conn, item_id: int, beat: dt.datetime | None) -> str | None:
              f"<td><span class='badge {_e(f['observation'])}'>{_e(f['observation'])}</span></td></tr>"
              for f in effects]))
 
-    questions = conn.execute(
-        "SELECT * FROM question WHERE item_id = %s ORDER BY id", (item_id,)
-    ).fetchall()
+    questions = data["questions"]
     if questions:
         body.append("<h2>questions</h2>" + _table(
             ["q", "nœud", "question", "état", "réponse", "par", "deadline"],
@@ -665,7 +700,7 @@ def _item_page(conn, item_id: int, beat: dt.datetime | None) -> str | None:
              f"<td>{_e(q['answer'] or '')}</td><td>{_e(q['answered_by'] or '')}</td>"
              f"<td>{q['deadline']:%d/%m %H:%M}</td></tr>" for q in questions]))
 
-    files = _files(item_id)
+    files = data["files"]
     if files:
         body.append("<h2>workspace</h2>")
         for f in files:
@@ -729,9 +764,8 @@ def _api_item_row(row: dict) -> dict:
 
 
 def _api_items(conn) -> list[dict]:
-    """Tous les items, du plus récent au plus ancien — la table `/items`."""
-    return [_api_item_row(r) for r in conn.execute(
-        ITEM_SELECT + "ORDER BY w.id DESC").fetchall()]
+    """La table `/items` en JSON — même lignes que `_items_page`."""
+    return [_api_item_row(r) for r in _items_data(conn)]
 
 
 def _api_fanout(spec: dict) -> dict | None:
@@ -842,48 +876,30 @@ def _api_question(q: dict) -> dict:
 def _api_item(conn, item_id: int) -> dict | None:
     """La page d'un item en données. None quand l'item n'existe pas.
 
-    Mêmes requêtes que `_item_page`, même arithmétique : les durées sortent
-    des horodatages du journal, les tokens du résultat des runs. Un client
-    externe rend la même page sans relire la base ni parser du HTML.
+    Même assemblage que `_item_page` — `_item_data` —, sérialisé plutôt que
+    mis en page : un client externe rend la même page sans relire la base
+    ni parser du HTML.
     """
-    item = conn.execute(ITEM_SELECT + "WHERE w.id = %s", (item_id,)).fetchone()
-    if item is None:
+    data = _item_data(conn, item_id)
+    if data is None:
         return None
-    bundle = load_bundle(conn, item["revision"])
-    events = conn.execute(
-        "SELECT * FROM event WHERE item_id = %s ORDER BY item_version", (item_id,)
-    ).fetchall()
-    runs = conn.execute(
-        "SELECT * FROM node_run WHERE item_id = %s ORDER BY id", (item_id,)
-    ).fetchall()
-    effects = conn.execute(
-        "SELECT * FROM effect WHERE item_id = %s ORDER BY op_id", (item_id,)
-    ).fetchall()
-    questions = conn.execute(
-        "SELECT * FROM question WHERE item_id = %s ORDER BY id", (item_id,)
-    ).fetchall()
-
-    spans = _spans(events)
-    end = item["terminal_at"] or dt.datetime.now(dt.timezone.utc)
-    run_span = {e["run_id"]: spans[e["item_version"]]
-                for e in events if e["run_id"] and e["item_version"] in spans}
+    item, bundle = data["item"], data["bundle"]
+    spans, run_span = data["spans"], data["run_span"]
 
     return {
         "item": _api_item_row(item) | {
             "revision": item["revision"],
             "lineage_budget": item["lineage_budget"],
             "wall_deadline": item["wall_deadline"],
-            "duration_s": (end - events[0]["at"]).total_seconds() if events else 0.0,
-            "usage": _totals(runs),
-            # les deux bouts de l'haltère, séparés : ce que le jugement coûte
-            # face à ce que la génération coûte
-            "usage_split": _cost_split(bundle, runs),
+            "duration_s": data["duration_s"],
+            "usage": data["usage"],
+            "usage_split": data["usage_split"],
         },
         "graph": _api_graph(bundle, item["state"]),
         "journal": [{"version": e["item_version"], "at": e["at"], "kind": e["kind"],
                      "from_state": e["from_state"], "to_state": e["to_state"],
                      "outcome": e["outcome"], "run_id": e["run_id"],
-                     "duration_s": spans.get(e["item_version"])} for e in events],
+                     "duration_s": spans.get(e["item_version"])} for e in data["events"]],
         # `finished_at` est la seule date d'un candidat qui a perdu : il n'a
         # produit aucune transition, donc aucun span — mais il a bien couru,
         # et sa durée se mesure de l'entrée dans l'étape à sa fin
@@ -894,13 +910,13 @@ def _api_item(conn, item_id: int) -> dict | None:
                   "lease_expires_at": r["lease_expires_at"],
                   "finished_at": r["finished_at"],
                   "duration_s": run_span.get(r["id"]),
-                  "usage": _usage(r), "result": r["result"]} for r in runs],
+                  "usage": _usage(r), "result": r["result"]} for r in data["runs"]],
         "effects": [{"op_id": f["op_id"], "logical_key": f["logical_key"],
                      "target_uri": f["target_uri"], "observation": f["observation"]}
-                    for f in effects],
-        "questions": [_api_question(q) for q in questions],
-        "criteria": _criteria(item_id),
-        "files": _files(item_id),
+                    for f in data["effects"]],
+        "questions": [_api_question(q) for q in data["questions"]],
+        "criteria": data["criteria"],
+        "files": data["files"],
     }
 
 

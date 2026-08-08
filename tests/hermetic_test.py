@@ -33,6 +33,8 @@ import psycopg  # noqa: E402
 
 from graphatom import db  # noqa: E402
 
+from outils import git  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 # l'instance jetable : celle de l'agent qui nous lance, sinon la nôtre
 INSTANCE = os.environ.get("GRAPHATOM_AGENT_DSN") or db.DSN
@@ -46,12 +48,6 @@ PRODUCTION = "postgresql://graphatom:graphatom@127.0.0.1:5432/graphatom"
 def bases() -> list[str]:
     with psycopg.connect(INSTANCE, autocommit=True) as conn:
         return [r[0] for r in conn.execute("SELECT datname FROM pg_database")]
-
-
-def git(repo: Path, *args: str) -> str:
-    out = subprocess.run(["git", "-C", str(repo), *args],
-                         capture_output=True, text=True, check=True)
-    return out.stdout.strip()
 
 
 def depot(tmp: Path) -> Path:

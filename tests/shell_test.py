@@ -69,6 +69,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from graphatom import db, kernel  # noqa: E402
 from graphatom.blocks import AGENT_TIMEOUT_S  # noqa: E402
 
+from outils import git  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 BUNDLE = json.loads((ROOT / "examples" / "code-task.json").read_text())
 SUJET = "gh:Acid3croco/graphatom#77"
@@ -88,12 +90,6 @@ conn.execute("SELECT pg_advisory_lock(%s)", (int(sys.argv[2]),))
 print("pris", flush=True)
 time.sleep(3600)
 """
-
-
-def git(repo: Path, *args: str) -> str:
-    out = subprocess.run(["git", "-C", str(repo), *args],
-                         capture_output=True, text=True, check=True)
-    return out.stdout.strip()
 
 
 def depot(tmp: Path) -> Path:

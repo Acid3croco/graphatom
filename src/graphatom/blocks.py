@@ -81,9 +81,9 @@ from pathlib import Path
 
 import psycopg
 
-from . import db, worktree
+from . import db, effects, worktree
 from .graph import KERNEL_OUTCOMES, judge_source
-from .worktree import run_worktree
+from .worktree import run_git, run_worktree
 
 DATA_DIR = Path("data")  # les tests le font pointer sur un répertoire temporaire
 OUTBOX_NAME = "effects_outbox.log"  # sous DATA_DIR, résolu au moment de l'effet
@@ -325,14 +325,12 @@ def _git(worktree: Path, *args: str) -> tuple[int, str]:
 
     Un git qui rate n'est pas un échec de la tentative. Le code dit à
     l'appelant s'il peut croire la sortie ; la plainte, elle, part telle
-    quelle dans le prompt plutôt que de faire tomber le bloc.
+    quelle dans le prompt plutôt que de faire tomber le bloc. Le délai est
+    plus court que celui du dépôt (`worktree.GIT_TIMEOUT_S`) : c'est l'état
+    d'un seul worktree pour un prompt, pas une opération qui peut attendre
+    un verrou.
     """
-    try:
-        done = subprocess.run(["git", "-C", str(worktree), *args],
-                              capture_output=True, text=True, timeout=GIT_TIMEOUT_S)
-    except (OSError, subprocess.SubprocessError) as exc:
-        return 1, f"[git illisible : {exc}]"
-    return done.returncode, (done.stdout + done.stderr).strip()
+    return run_git(worktree, *args, timeout=GIT_TIMEOUT_S)
 
 
 def _committed(worktree: Path) -> str:
@@ -1071,17 +1069,9 @@ def effect(ctx: Context) -> dict:
     logical_key = f"{subject['graph']}:{subject['subject_key']}:{ctx.run['node']}"
     target_uri = ctx.config.get("target", "stub://outbox")
 
-    with conn.transaction():  # l'intention existe avant tout accès au monde
-        conn.execute(
-            "INSERT INTO effect (item_id, run_id, logical_key, target_uri, intent) "
-            "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (target_uri, logical_key) DO NOTHING",
-            (item["id"], ctx.run["id"], logical_key, target_uri,
-             json.dumps({"intent": ctx.config.get("intent", "noop")})),
-        )
-    row = conn.execute(
-        "SELECT * FROM effect WHERE target_uri = %s AND logical_key = %s",
-        (target_uri, logical_key),
-    ).fetchone()
+    # l'intention existe avant tout accès au monde
+    row = effects.intend(conn, item["id"], ctx.run["id"], logical_key, target_uri,
+                         {"intent": ctx.config.get("intent", "noop")})
     if row["observation"] == "applied":  # déjà fait par une tentative passée
         return {"outcome": "applied", "op_id": row["op_id"]}
 
@@ -1095,9 +1085,7 @@ def effect(ctx: Context) -> dict:
             f.write(f"{logical_key}\t{row['intent']}\n")
 
     with conn.transaction():
-        conn.execute(
-            "UPDATE effect SET observation = 'applied' WHERE op_id = %s", (row["op_id"],)
-        )
+        effects.mark_applied(conn, op_id=row["op_id"])
     return {"outcome": "applied", "op_id": row["op_id"]}
 
 

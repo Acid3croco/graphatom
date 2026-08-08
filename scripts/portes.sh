@@ -37,6 +37,12 @@
 #   2  environnement incomplet : pas d'atelier à examiner
 #   3  une porte a échoué — le pas et sa sortie sont dans `portes.md`
 #
+# Depuis l'atelier d'un candidat, **appelle `scripts/portes-ici.sh`** plutôt
+# que ce script : il crée le workspace jetable, lance les portes dedans et
+# nettoie derrière lui. Composer soi-même un `mktemp -d` avec son `trap
+# 'rm -rf …'` marche, mais la CLI `codex` refuse ce motif — « rm -f style
+# commands are not permitted » — et six exécutions y sont mortes.
+#
 # Usage : bash scripts/portes.sh — tout vient des variables GRAPHATOM_*.
 
 set -u

@@ -54,6 +54,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, graph, kernel, scheduler  # noqa: E402
 
+from outils import git  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 REEL = json.loads((ROOT / "examples" / "code-task.json").read_text())["nodes"]["implement"]
 VARIANTES = REEL["config"]["fanout"]["variants"]
@@ -149,12 +151,6 @@ def bundle_portes() -> dict:
 
 
 # ------------------------------------------------------------------ outillage
-
-
-def git(cwd: Path, *args: str) -> str:
-    out = subprocess.run(["git", "-C", str(cwd), *args],
-                         capture_output=True, text=True, check=True)
-    return out.stdout.strip()
 
 
 def depot(tmp: Path) -> Path:

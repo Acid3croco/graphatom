@@ -44,6 +44,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import channel, db, graph, kernel  # noqa: E402
 
+from outils import etat, git  # noqa: E402
+
 # hermétisme : les agents d'ici sont des scripts shell, ils n'ont pas de base
 os.environ.pop("GRAPHATOM_AGENT_DSN", None)
 
@@ -142,12 +144,6 @@ def bundle() -> dict:
 # ------------------------------------------------------------------ outillage
 
 
-def git(cwd: Path, *args: str) -> str:
-    out = subprocess.run(["git", "-C", str(cwd), *args],
-                         capture_output=True, text=True, check=True)
-    return out.stdout.strip()
-
-
 def depot(tmp: Path) -> Path:
     """Un clone jetable et son `origin` : ce dont `worktree` a besoin, pas plus.
 
@@ -195,11 +191,6 @@ def attendre(predicat, seconds: float = TIMEOUT_S):
             return valeur
         time.sleep(0.2)
     return predicat()
-
-
-def etat(conn, item_id: int) -> dict:
-    return conn.execute("SELECT * FROM work_item WHERE id = %s",
-                        (item_id,)).fetchone()
 
 
 def repondre(conn, item_id: int, option: str) -> None:

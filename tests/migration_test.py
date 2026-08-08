@@ -34,6 +34,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, kernel  # noqa: E402
 
+from outils import kill_group, sh  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 # comme le test de reconnexion : le test travaille dans un répertoire à lui,
 # jamais dans ROOT/data, qui peut être le data/ vivant d'un rail
@@ -48,14 +50,6 @@ COLONNE = "migration_test_col"  # la colonne ajoutée sous le worker en vol
 TIMEOUT_S = 60
 
 
-def sh(*args: str) -> str:
-    out = subprocess.run(
-        ["uv", "run", "graphatom", *args],
-        cwd=ROOT, capture_output=True, text=True, check=True,
-    )
-    return out.stdout.strip()
-
-
 def worker(*args: str, journal: Path | None = None) -> subprocess.Popen:
     """Un worker, lancé comme le crash-test : le binaire du venv, un groupe à lui.
 
@@ -68,14 +62,6 @@ def worker(*args: str, journal: Path | None = None) -> subprocess.Popen:
         stdout=journal.open("w") if journal else subprocess.DEVNULL,
         stderr=subprocess.STDOUT,
     )
-
-
-def kill_group(proc: subprocess.Popen, sig: int) -> None:
-    try:
-        os.killpg(os.getpgid(proc.pid), sig)
-    except ProcessLookupError:
-        pass
-    proc.wait()
 
 
 def terminal(conn, item_id: int) -> dict:

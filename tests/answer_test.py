@@ -92,9 +92,10 @@ class FakeConn:
                                  answered_by=params[1])
             return FakeCursor([])
         if sql.startswith("INSERT INTO effect"):
-            self.effects.setdefault((params[2], params[1]), "not_attempted")
+            # les params d'`effects.intend` : item, run, clé logique, cible, intention
+            self.effects.setdefault((params[3], params[2]), "not_attempted")
             return FakeCursor([])
-        if sql.startswith("SELECT observation FROM effect"):
+        if sql.startswith("SELECT * FROM effect"):
             return FakeCursor([{"observation": self.effects.get((params[0], params[1]))}])
         if sql.startswith("UPDATE effect SET observation"):
             self.effects[(params[0], params[1])] = "applied"

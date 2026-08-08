@@ -63,7 +63,7 @@ import urllib.request
 
 from psycopg import Connection
 
-from . import channel, db, graph, heartbeat, kernel
+from . import channel, db, effects, graph, heartbeat, kernel
 from .blocks import AGENT_TIMEOUT_S, item_workspace
 
 API = "https://api.github.com"
@@ -193,25 +193,17 @@ def _web() -> str:
 
 def _pending(conn: Connection, item_id: int, target: str, key: str,
              intent: dict) -> bool:
-    """Commet l'intention d'un effet ; faux si cet effet est déjà appliqué."""
-    with conn.transaction():
-        conn.execute(
-            "INSERT INTO effect (item_id, run_id, logical_key, target_uri, intent) "
-            "VALUES (%s, NULL, %s, %s, %s) ON CONFLICT (target_uri, logical_key) DO NOTHING",
-            (item_id, key, target, json.dumps(intent)),
-        )
-    row = conn.execute(
-        "SELECT observation FROM effect WHERE target_uri = %s AND logical_key = %s",
-        (target, key),
-    ).fetchone()
+    """Commet l'intention d'un effet ; faux si cet effet est déjà appliqué.
+
+    Pas de run_id : une prise de parole sur une issue n'est pas rattachée à
+    une tentative précise, elle l'est à l'item.
+    """
+    row = effects.intend(conn, item_id, None, key, target, intent)
     return row["observation"] != "applied"
 
 
 def _applied(conn: Connection, target: str, key: str) -> None:
-    conn.execute(
-        "UPDATE effect SET observation = 'applied' "
-        "WHERE target_uri = %s AND logical_key = %s", (target, key),
-    )
+    effects.mark_applied(conn, target_uri=target, logical_key=key)
 
 
 def _speak(conn: Connection, gh: GitHub, number: int, item_id: int,

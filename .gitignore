@@ -3,3 +3,6 @@ __pycache__/
 data/
 *.egg-info/
 .worktrees/
+profiles/
+c0.txt
+travail-c*.txt

@@ -54,6 +54,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, graph, kernel, scheduler, worktree  # noqa: E402
 
+from outils import attendre, git  # noqa: E402
+
 # hermétisme : les agents d'ici sont des scripts shell, ils n'ont pas de base
 os.environ.pop("GRAPHATOM_AGENT_DSN", None)
 
@@ -117,12 +119,6 @@ def bundle(labels: list[str]) -> dict:
 # ------------------------------------------------------------------ outillage
 
 
-def git(cwd: Path, *args: str) -> str:
-    out = subprocess.run(["git", "-C", str(cwd), *args],
-                         capture_output=True, text=True, check=True)
-    return out.stdout.strip()
-
-
 def depot(tmp: Path) -> Path:
     """Un dépôt jetable, un commit de socle. `GRAPHATOM_REPO_DIR` y est épinglé.
 
@@ -152,16 +148,6 @@ def inscrits(repo: Path) -> dict[Path, str]:
         elif ligne.startswith("branch refs/heads/") and chemin is not None:
             table[chemin] = ligne[len("branch refs/heads/"):]
     return table
-
-
-def attendre(predicat, seconds: float = 30.0) -> bool:
-    """Attend qu'un fait devienne vrai — une course n'est pas synchrone."""
-    deadline = time.time() + seconds
-    while time.time() < deadline:
-        if predicat():
-            return True
-        time.sleep(0.05)
-    return predicat()
 
 
 def ancetre(repo: Path, sha: str, branche: str) -> bool:
