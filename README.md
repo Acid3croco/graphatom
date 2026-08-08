@@ -1324,51 +1324,66 @@ bornait la charge tout seul ; le fan-out a supprimé cette borne implicite
 sans la remplacer.
 
 Deux plafonds la remplacent, dans l'ordonnanceur. Tous deux dérivés du nombre
-de cœurs de la machine — aucun chiffre magique — et surchargeables :
+de cœurs de la machine — aucun chiffre magique —, tous deux surchargeables,
+et tous deux plafonnés par en bas à `FANOUT_MAX_CANDIDATES` (8), la largeur
+du plus grand fan-out qu'un graph puisse publier :
 
 | plafond | défaut | sur 12 cœurs | surcharge |
 | --- | --- | --- | --- |
-| runs en vol, tous items confondus | `max(2, cœurs // 2)` | 6 | `GRAPHATOM_MAX_RUNS` |
-| runs en vol d'un même item | `max(1, plafond // 2)` | 3 | `GRAPHATOM_MAX_RUNS_PER_ITEM` |
+| runs en vol, tous items confondus | `max(FANOUT_MAX_CANDIDATES, cœurs // 2)` | 8 | `GRAPHATOM_MAX_RUNS` |
+| runs en vol d'un même item | `max(FANOUT_MAX_CANDIDATES, plafond // 2)` | 8 | `GRAPHATOM_MAX_RUNS_PER_ITEM` |
 
 **Pourquoi la moitié des cœurs.** Un candidat ne coûte pas un agent qui écrit
 du texte : il coûte un agent **plus ses portes** — une construction et une
 suite de tests, qui saturent un cœur chacune pendant qu'elles tournent. Un
-run vaut donc plus qu'un cœur, et six runs sur douze cœurs laissent la
-machine à Postgres, au canal GitHub et au front. Le défaut est
-volontairement prudent : mieux vaut un rail un peu lent qu'une base qui
-tombe.
+run vaut donc plus qu'un cœur, et huit runs sur douze cœurs laissent peu de
+marge à Postgres, au canal GitHub et au front. Le défaut est volontairement
+prudent : mieux vaut un rail un peu lent qu'une base qui tombe.
 
-**Pourquoi un plafond par item.** Sans lui, un item en fan-out à huit
-candidats occupe toute la capacité et bloque six items sur des nœuds bon
-marché. La moitié du plafond global le tient strictement sous celui-ci : il
-reste toujours de la place pour un autre item, donc la course d'un item ne
-famine jamais les autres.
+**Pourquoi un plancher à la largeur du fan-out.** Une course se réserve
+entière ou pas du tout (voir plus bas) : un plafond plus serré que
+`FANOUT_MAX_CANDIDATES` ne différerait pas la course la plus large qu'un
+graph publie, il l'empêcherait pour toujours — aucun tick suivant ne
+libérerait jamais assez de place. Le plancher garantit l'inverse : sur cette
+machine, les deux plafonds valent leur moitié de cœurs *ou* huit, le plus
+grand des deux, et une course n'est donc jamais plus large que ce que le
+dispatch peut accueillir d'un coup. Le plafond borne le nombre de courses
+simultanées, jamais la largeur d'une seule.
+
+**Pourquoi un plafond par item.** Sans lui, un item en fan-out large occupe
+toute la capacité et affame les autres items sur des nœuds bon marché. La
+moitié du plafond global le tient sous celui-ci quand cette moitié dépasse le
+plancher ; en dessous, les deux coïncident (8 sur 12 cœurs) et le plafond par
+item ne fait plus que garantir qu'une course complète tient toujours — la
+place pour un autre item vient alors du tick suivant, pas d'une réserve
+strictement plus étroite.
 
 **Ce que le plafond retient attend — rien n'échoue.** Un run retenu n'est pas
 réservé du tout : aucune ligne `node_run`, donc aucun bail posé, aucune
 tentative consommée, aucune issue d'échec, rien à annuler. Le tick suivant le
 prend. C'est la file du déploiement, appliquée au dispatch.
 
-**La redondance des portes internes : restreinte, pas sérialisée.** Quatre
-candidats de la même issue construisent le projet et lancent la même suite
-de tests, et c'est ce qui coûte. On ne la sérialise pas et on ne la partage
-pas : une porte jouée une fois pour tous ne prouverait plus rien sur le diff
-d'un candidat en particulier, et c'est précisément ce que la course
-sélectionne. Le plafond par item la **borne** — au plus trois portes en vol
-pour une même issue sur cette machine, les candidats suivants partant aux
-ticks d'après, à mesure que leurs frères rendent. Conséquence assumée : un
-fan-out plus large que ce plafond court en vagues plutôt que tous ensemble.
-La réduction, elle, ne change pas d'un pouce — elle attend les runs de la
-tentative, et le dispatch continue de réserver les candidats manquants tant
-que l'item est sur son nœud ; si tous les candidats réservés rendaient dans
-le même tick, elle trancherait sur eux seuls, ce que des agents à l'échelle
-de la minute ne produisent pas, mais qui est dit ici plutôt que caché.
+**Une course se réserve entière, ou elle attend.** Quatre candidats de la
+même issue construisent le projet et lancent la même suite de tests, et
+c'est ce qui coûte — on ne la sérialise pas et on ne la partage pas : une
+porte jouée une fois pour tous ne prouverait plus rien sur le diff d'un
+candidat en particulier, et c'est précisément ce que la course sélectionne.
+Le dispatch (`_dispatch`) ne réserve donc les K candidats d'un item que si la
+place en accueille tous : deux candidats réservés sur quatre, plus rien ne
+tourne, et la réduction trancherait sur une course amputée — les deux autres
+ne naîtraient jamais. Une course trop large pour attendre son tour reste
+entière ou attend, jamais coupée en deux ; le plancher ci-dessus garantit que
+ce cas n'arrive pas tant que les plafonds gardent leur défaut. **Dernier
+recours**, si une surcharge (`GRAPHATOM_MAX_RUNS` ou
+`GRAPHATOM_MAX_RUNS_PER_ITEM`) resserre l'un des deux plafonds sous la
+largeur d'une course : celle-ci passe quand même, entière, mais seulement
+quand plus rien d'autre ne peut avancer et que le rail est vide — sinon elle
+attendrait indéfiniment derrière des items plus étroits.
 
 **La charge se lit hors de la base.** `GET /api/load` rend les runs en vol et
-les deux plafonds effectifs — `{"running": 4, "max_runs": 6,
-"max_runs_per_item": 3}` : une saturation ne se diagnostique plus à coups de
-`ps`.
+les deux plafonds effectifs — `{"running": 4, "max_runs": 8,
+"max_runs_per_item": 8}` sur cette machine à 12 cœurs : une saturation ne se
+diagnostique plus à coups de `ps`.
 
 ## Ce qu'on ne fera jamais
 
