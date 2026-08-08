@@ -50,11 +50,30 @@ export type ItemHead = Item & {
   usage: Usage;
 };
 
+/**
+ * Une variante de fan-out : le fragment de config qu'elle surcharge.
+ *
+ * Ses clés sont celles que le graph a choisies — `label`, `strategy`, un
+ * `agent` surchargé. On les montre telles quelles ; rien n'est imposé ici.
+ */
+export type Variant = Record<string, unknown>;
+
+/** Un candidat d'un nœud en fan-out : sa variante, et la commande qu'il joue. */
+export type FanoutCandidate = { variant: Variant; cmd: string | null };
+
+/** Le fan-out d'un nœud tel que l'API le projette, un candidat par entrée. */
+export type NodeFanout = {
+  reduce: string;
+  repeat: number;
+  candidates: FanoutCandidate[];
+};
+
 export type GraphNode = {
   name: string;
   block: string | null;
   terminal: boolean;
   escalade: boolean;
+  fanout?: NodeFanout;
 };
 
 export type GraphEdge = { from: string; outcome: string; to: string };
@@ -84,10 +103,13 @@ export type Run = {
   node: string;
   cycle: number;
   attempt: number;
+  /** Le candidat du fan-out, ou `null` quand le nœud n'en porte pas. */
+  candidate: number | null;
   status: string;
   outcome: string | null;
   fence: number;
   lease_expires_at: string | null;
+  finished_at: string | null;
   duration_s: number | null;
   usage: Usage;
   result: Record<string, unknown> | null;
@@ -164,7 +186,15 @@ export type BundleConfig = {
   options?: string[];
   owner?: string;
   deadline_minutes?: number;
+  fanout?: BundleFanout;
   [key: string]: unknown;
+};
+
+/** Le fan-out d'un nœud, tel qu'il est déclaré dans le bundle. */
+export type BundleFanout = {
+  variants: Variant[];
+  repeat?: number;
+  reduce: string;
 };
 
 export type BundleNode = {

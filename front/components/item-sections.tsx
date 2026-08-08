@@ -20,6 +20,8 @@
  * C'est la page la plus large du front, et elle doit tenir dans 360 px :
  * le graph et les tables glissent chacun dans leur bloc, jamais la page.
  */
+import { Fragment, useState } from "react";
+
 import { useItem, itemFeed } from "@/lib/live";
 import type {
   Effect,
@@ -29,8 +31,10 @@ import type {
   Question,
   Run,
   Usage,
+  Variant,
   WorkspaceFile,
 } from "@/lib/api";
+import { running, steps, type Candidate } from "@/lib/fanout";
 import { cost, count, duration, moment, tokens } from "@/lib/format";
 import { AnswerForm } from "@/components/answer-form";
 import { CriteriaList } from "@/components/criteria-list";
@@ -169,43 +173,164 @@ export function ItemQuestions({
 }
 
 /** Le graph, avec le nœud courant marqué. */
-export function ItemGraph({ id, initial }: { id: number; initial: Graph }) {
+export function ItemGraph({
+  id,
+  initial,
+}: {
+  id: number;
+  initial: { graph: Graph; runs: Run[] };
+}) {
   // le graph change à chaque transition ; la visionneuse, elle, n'est
-  // jamais remontée — le cadrage choisi par l'œil ne bouge donc pas
-  const graph = useItem(id, (view) => view.graph, initial);
+  // jamais remontée — le cadrage choisi par l'œil ne bouge donc pas.
+  // Les runs sont là pour compter les candidats en vol, rien de plus :
+  // l'item reste sur *un* nœud, et la géométrie ne bouge pas d'un pixel.
+  const { graph, runs } = useItem(
+    id,
+    (view) => ({ graph: view.graph, runs: view.runs }),
+    initial,
+  );
 
   return (
     <section className="flex flex-col gap-2">
       <h2 className="text-base font-semibold sm:text-lg">graph</h2>
-      <GraphSvg graph={graph} item={id} />
+      <GraphSvg graph={graph} item={id} candidates={running(runs, graph.current)} />
     </section>
   );
 }
 
-/** Le journal, une ligne par version, et ce que chaque step a coûté. */
+/** Une variante, telle qu'elle est déclarée : ses clés, et rien d'inventé. */
+function VariantFields({ variant }: { variant: Variant }) {
+  // un objet — un `agent` surchargé — ne se met pas dans une cellule : ce
+  // qu'il change se lit déjà dans les colonnes modèle et CLI
+  const fields = Object.entries(variant).filter(
+    ([, value]) => typeof value !== "object" || value === null,
+  );
+  return (
+    <span className="flex flex-col gap-0.5">
+      {fields.map(([key, value]) => (
+        <span key={key}>
+          <span className="text-muted-foreground">{key}</span>{" "}
+          <b>{String(value)}</b>
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/**
+ * Les candidats d'une étape en fan-out, dépliés.
+ *
+ * Une table à elle, sous la ligne de l'étape : dix champs par candidat ne
+ * tiennent pas dans les colonnes du journal, et les aligner de force les
+ * rendrait illisibles. Le gagnant porte sa marque — un fond, un badge —
+ * qu'aucun perdant ne porte : il se voit sans comparer les colonnes.
+ */
+function Candidates({ candidates }: { candidates: Candidate[] }) {
+  return (
+    <Table className="text-xs">
+      <TableHeader>
+        <TableRow>
+          <TableHead>candidat</TableHead>
+          <TableHead>variante</TableHead>
+          <TableHead>modèle</TableHead>
+          <TableHead>CLI</TableHead>
+          <TableHead>issue</TableHead>
+          <TableHead>sort</TableHead>
+          <TableHead>durée</TableHead>
+          <TableHead>tokens in</TableHead>
+          <TableHead>tokens out</TableHead>
+          <TableHead>coût $</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {candidates.map((candidate) => (
+          <TableRow
+            key={candidate.run.id}
+            data-winner={candidate.winner || undefined}
+            className={candidate.winner ? "bg-emerald-50" : undefined}
+          >
+            <TableCell className="whitespace-nowrap">
+              c{candidate.index}
+            </TableCell>
+            <TableCell>
+              <VariantFields variant={candidate.variant} />
+            </TableCell>
+            <TableCell className="whitespace-nowrap">
+              {candidate.model ?? ""}
+            </TableCell>
+            <TableCell className="whitespace-nowrap">
+              {candidate.cli ?? ""}
+            </TableCell>
+            <TableCell>{candidate.run.outcome ?? ""}</TableCell>
+            {/* le vert est celui du gagnant, et de lui seul : un perdant
+                qui le porterait rendrait la lecture ambiguë */}
+            <TableCell>
+              {candidate.winner ? (
+                <Badge variant="active">gagnant</Badge>
+              ) : candidate.loss ? (
+                <Badge variant="alert">{candidate.loss}</Badge>
+              ) : (
+                <Badge variant="warn">en course</Badge>
+              )}
+            </TableCell>
+            <TableCell className="whitespace-nowrap">
+              {duration(candidate.duration_s)}
+            </TableCell>
+            <TableCell
+              className="whitespace-nowrap"
+              title={tokens(candidate.run.usage) || undefined}
+            >
+              {count(candidate.run.usage?.input_tokens)}
+            </TableCell>
+            <TableCell className="whitespace-nowrap">
+              {count(candidate.run.usage?.output_tokens)}
+            </TableCell>
+            <TableCell className="whitespace-nowrap">
+              {cost(candidate.run.usage?.total_cost_usd)}
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
+/**
+ * Le journal, une ligne par version, et ce que chaque step a coûté.
+ *
+ * Une étape en fan-out garde sa ligne — l'item n'a fait qu'une transition
+ * — mais elle dit alors combien de candidats l'ont courue, et se déplie
+ * sur eux. Sa durée reste celle du mur, celle du séjour dans le nœud ; ses
+ * jetons et son coût, eux, sont ceux de tous les candidats. Le pied de
+ * table additionne ce que les lignes montrent, donc le total de la page
+ * compte les perdants comme le gagnant.
+ */
 export function ItemJournal({
   id,
   initial,
 }: {
   id: number;
-  initial: { journal: JournalEntry[]; runs: Run[] };
+  initial: { journal: JournalEntry[]; runs: Run[]; graph: Graph };
 }) {
   // les runs sont dans la tranche parce que les colonnes de tokens les
   // lisent : le journal dit quel run a produit le step, le run porte son
-  // usage — la jointure se fait ici, une fois
-  const { journal, runs } = useItem(
+  // usage — la jointure se fait ici, une fois. Le graph nomme les
+  // candidats d'un nœud en fan-out ; il vient donc avec.
+  const { journal, runs, graph } = useItem(
     id,
-    (view) => ({ journal: view.journal, runs: view.runs }),
+    (view) => ({ journal: view.journal, runs: view.runs, graph: view.graph }),
     initial,
   );
-  const byRun = new Map(runs.map((run) => [run.id, run.usage]));
-  const usages = journal.map((entry) =>
-    entry.run_id === null ? undefined : byRun.get(entry.run_id),
-  );
+  // les étapes dépliées ; l'ouverture vit ici et survit aux tours de sondage
+  const [open, setOpen] = useState<number[]>([]);
+  const rows = steps(journal, runs, graph);
   // les totaux du pied de table sont la somme de ce que les lignes montrent,
   // pas un second calcul : un step sans LLM y pèse zéro, et ça se voit
   const sum = (key: string) =>
-    usages.reduce((acc, usage: Usage | undefined) => acc + (usage?.[key] ?? 0), 0);
+    rows.reduce(
+      (acc, step: { usage: Usage | undefined }) => acc + (step.usage?.[key] ?? 0),
+      0,
+    );
 
   return (
     <section className="flex flex-col gap-2">
@@ -226,39 +351,70 @@ export function ItemJournal({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {journal.map((entry, index) => {
-            const usage = usages[index];
+          {rows.map(({ entry, usage, candidates }) => {
+            const shown = open.includes(entry.version);
             return (
-              <TableRow key={entry.version}>
-                <TableCell>v{entry.version}</TableCell>
-                <TableCell className="whitespace-nowrap">
-                  {moment(entry.at, true)}
-                </TableCell>
-                <TableCell className="whitespace-nowrap">
-                  {duration(entry.duration_s)}
-                </TableCell>
-                <TableCell>{entry.kind}</TableCell>
-                <TableCell>
-                  {entry.from_state ? `${entry.from_state} → ` : ""}
-                  {entry.to_state}
-                </TableCell>
-                <TableCell>{entry.outcome ?? ""}</TableCell>
-                <TableCell>{entry.run_id ?? ""}</TableCell>
-                {/* le détail du cache tient dans l'infobulle : une colonne
-                    de plus dirait la même chose en prenant la place */}
-                <TableCell
-                  className="whitespace-nowrap"
-                  title={tokens(usage) || undefined}
-                >
-                  {count(usage?.input_tokens)}
-                </TableCell>
-                <TableCell className="whitespace-nowrap">
-                  {count(usage?.output_tokens)}
-                </TableCell>
-                <TableCell className="whitespace-nowrap">
-                  {cost(usage?.total_cost_usd)}
-                </TableCell>
-              </TableRow>
+              <Fragment key={entry.version}>
+                <TableRow>
+                  <TableCell>v{entry.version}</TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    {moment(entry.at, true)}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    {duration(entry.duration_s)}
+                  </TableCell>
+                  <TableCell>{entry.kind}</TableCell>
+                  <TableCell>
+                    {entry.from_state ? `${entry.from_state} → ` : ""}
+                    {entry.to_state}
+                  </TableCell>
+                  <TableCell>{entry.outcome ?? ""}</TableCell>
+                  {/* le dépliant tient dans la colonne du run : une colonne
+                      de plus décorerait toutes les étapes pour les rares qui
+                      sont en fan-out — celles-ci ne changent pas d'un pixel */}
+                  <TableCell>
+                    {candidates.length ? (
+                      <button
+                        type="button"
+                        className="cursor-pointer whitespace-nowrap underline"
+                        aria-expanded={shown}
+                        onClick={() =>
+                          setOpen((was) =>
+                            was.includes(entry.version)
+                              ? was.filter((v) => v !== entry.version)
+                              : [...was, entry.version],
+                          )
+                        }
+                      >
+                        {shown ? "▾" : "▸"} {candidates.length} candidats
+                      </button>
+                    ) : (
+                      (entry.run_id ?? "")
+                    )}
+                  </TableCell>
+                  {/* le détail du cache tient dans l'infobulle : une colonne
+                      de plus dirait la même chose en prenant la place */}
+                  <TableCell
+                    className="whitespace-nowrap"
+                    title={tokens(usage) || undefined}
+                  >
+                    {count(usage?.input_tokens)}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    {count(usage?.output_tokens)}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    {cost(usage?.total_cost_usd)}
+                  </TableCell>
+                </TableRow>
+                {shown && candidates.length > 0 && (
+                  <TableRow>
+                    <TableCell colSpan={10} className="bg-muted/40">
+                      <Candidates candidates={candidates} />
+                    </TableCell>
+                  </TableRow>
+                )}
+              </Fragment>
             );
           })}
         </TableBody>
@@ -311,7 +467,16 @@ export function ItemRuns({ id, initial }: { id: number; initial: Run[] }) {
               <TableCell>{run.id}</TableCell>
               <TableCell>{run.node}</TableCell>
               <TableCell>{run.cycle}</TableCell>
-              <TableCell>{run.attempt}</TableCell>
+              {/* K candidats partagent une tentative : sans leur numéro, la
+                  table montrerait K lignes identiques */}
+              <TableCell>
+                {run.attempt}
+                {run.candidate !== null && (
+                  <span className="ml-1 text-xs text-muted-foreground">
+                    c{run.candidate}
+                  </span>
+                )}
+              </TableCell>
               <TableCell>
                 <Badge variant={tone(run.status)}>{run.status}</Badge>
               </TableCell>

@@ -66,7 +66,7 @@ from urllib.parse import parse_qs, quote, unquote
 
 from . import channel, db, heartbeat
 from .blocks import item_workspace
-from .graph import load_bundle
+from .graph import candidate_node, fanout_variants, load_bundle
 
 STYLE = """
 body { font-family: system-ui, sans-serif; max-width: 58rem; margin: 2rem auto;
@@ -683,12 +683,40 @@ def _api_items(conn) -> list[dict]:
         ITEM_SELECT + "ORDER BY w.id DESC").fetchall()]
 
 
+def _api_fanout(spec: dict) -> dict | None:
+    """Le fan-out d'un nœud, un candidat par entrée — `None` sans fan-out.
+
+    Un candidat se lit par son numéro : l'entrée `k` de `candidates` est
+    celle du run qui porte `candidate = k`. Elle dit ce qui le distingue —
+    sa variante telle qu'elle est déclarée — et la commande qu'il joue
+    vraiment, variante posée sur celle du nœud. Le client y lit le modèle
+    et la CLI sans refaire la surcharge.
+    """
+    fanout = (spec.get("config") or {}).get("fanout")
+    if not fanout:
+        return None
+    return {
+        "reduce": fanout["reduce"],
+        "repeat": fanout.get("repeat", 1),
+        "candidates": [
+            {"variant": variant,
+             "cmd": ((candidate_node(spec, k).get("config") or {})
+                     .get("agent") or {}).get("cmd")}
+            for k, variant in enumerate(fanout_variants(spec))
+        ],
+    }
+
+
 def _api_graph(bundle: dict, current: str) -> dict:
     """De quoi redessiner le graph sans relire la base.
 
     Les nœuds avec ce que le SVG en dit — bloc, terminal, escalade —, les
     arêtes à plat (une par issue), les racines du placement (`entry` et les
     cibles du noyau) et le nœud courant, celui que la page peint en orange.
+
+    Un nœud en fan-out porte en plus ses candidats : c'est ce qui donne un
+    nom à chacun quand le journal les déplie. Les autres n'ont pas la clé —
+    un graph sans fan-out se lit exactement comme avant.
     """
     nodes = bundle["nodes"]
     return {
@@ -699,6 +727,7 @@ def _api_graph(bundle: dict, current: str) -> dict:
         "nodes": [{"name": n, "block": spec.get("block"),
                    "terminal": bool(spec.get("terminal")),
                    "escalade": bool(spec.get("escalade"))}
+                  | ({"fanout": fanout} if (fanout := _api_fanout(spec)) else {})
                   for n, spec in nodes.items()],
         "edges": [{"from": n, "outcome": outcome, "to": target}
                   for n, spec in nodes.items()
@@ -797,11 +826,15 @@ def _api_item(conn, item_id: int) -> dict | None:
                      "from_state": e["from_state"], "to_state": e["to_state"],
                      "outcome": e["outcome"], "run_id": e["run_id"],
                      "duration_s": spans.get(e["item_version"])} for e in events],
+        # `finished_at` est la seule date d'un candidat qui a perdu : il n'a
+        # produit aucune transition, donc aucun span — mais il a bien couru,
+        # et sa durée se mesure de l'entrée dans l'étape à sa fin
         "runs": [{"id": r["id"], "node": r["node"], "cycle": r["cycle"],
                   "attempt": r["attempt"], "candidate": r.get("candidate"),
                   "status": r["status"],
                   "outcome": r["outcome"], "fence": r["fence"],
                   "lease_expires_at": r["lease_expires_at"],
+                  "finished_at": r["finished_at"],
                   "duration_s": run_span.get(r["id"]),
                   "usage": _usage(r), "result": r["result"]} for r in runs],
         "effects": [{"op_id": f["op_id"], "logical_key": f["logical_key"],

@@ -126,11 +126,14 @@ function write(item: number, kept: Kept) {
 export function GraphSvg({
   graph,
   item,
+  candidates = 0,
   selected,
   onSelect,
 }: {
   graph: Graph;
   item?: number;
+  /** Les candidats en course sur le nœud courant, quand il est en fan-out. */
+  candidates?: number;
   selected?: string | null;
   onSelect?: (name: string) => void;
 }) {
@@ -437,6 +440,7 @@ export function GraphSvg({
         aria-label={
           `graph ${graph.name}` +
           (graph.current ? `, courant ${graph.current}` : "") +
+          (candidates > 1 ? `, ${candidates} candidats en course` : "") +
           `, orientation ${orient}`
         }
         onPointerDown={down}
@@ -511,6 +515,20 @@ export function GraphSvg({
                 >
                   {node.terminal ? node.name : `${node.name} · ${node.block}`}
                 </text>
+                {/* le fan-out se compte dans le nœud courant, et nulle part
+                    ailleurs : l'item est sur *un* nœud quel que soit le
+                    nombre de candidats, et la géométrie ne bouge pas */}
+                {candidates > 1 && node.name === graph.current && (
+                  <text
+                    x={x + W - 4}
+                    y={y + 11}
+                    fontSize="8"
+                    fill="#7a4a00"
+                    textAnchor="end"
+                  >
+                    ×{candidates}
+                  </text>
+                )}
               </g>
             );
           })}
