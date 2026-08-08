@@ -83,7 +83,7 @@ class FakeConn:
         if sql.startswith("INSERT INTO effect"):
             self.effects.setdefault((params[2], params[1]), "not_attempted")
             return FakeCursor([])
-        if sql.startswith("SELECT observation FROM effect"):
+        if sql.startswith("SELECT * FROM effect"):
             return FakeCursor([{"observation": self.effects.get((params[0], params[1]))}])
         if sql.startswith("UPDATE effect SET observation"):
             if not self.amnesique:
