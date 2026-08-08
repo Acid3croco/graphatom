@@ -61,6 +61,15 @@ from .graph import KERNEL_OUTCOMES, GraphError, fanout_variants, load_bundle
 LEASE_SECONDS = 30
 MAX_ATTEMPTS = 3  # défaut central, par passage : réessayer, puis escalader
 
+# Les runs que *ce processus-ci* a réservés et qui volent encore. En mémoire,
+# donc vide au démarrage : un worker qui vient de naître ne reconnaît aucun
+# des runs `running` qu'il trouve en base, et c'est exactement l'information
+# qui manquait au faucheur — un run qu'il n'a pas réservé a été emporté par
+# la mort du worker d'avant, son agent n'y est pour rien. Voir `reap`.
+# Le tick le remplit, les threads des blocs le vident : un set suffit, `add`
+# et `discard` ne se marchent pas dessus.
+CLAIMED: set[int] = set()
+
 UTC = dt.timezone.utc
 
 
@@ -136,6 +145,9 @@ def claim(conn: psycopg.Connection, item_id: int) -> dict | None:
     est celle de tous — les K candidats la partagent, avec sa barrière —, et
     chacun a son bail, son numéro et son workspace. Sans `fanout`, il n'y a
     qu'un candidat, il n'a pas de numéro, et rien de tout ceci ne se voit.
+
+    Le run réservé est noté dans `CLAIMED`, la mémoire du processus : c'est
+    ce qui dira au faucheur, plus tard, si ce run est le sien.
     """
     with conn.transaction():
         item = conn.execute(
@@ -187,6 +199,7 @@ def claim(conn: psycopg.Connection, item_id: int) -> dict | None:
              candidate if fanout else None, fence, item["version"],
              now() + dt.timedelta(seconds=lease_s)),
         ).fetchone()
+        CLAIMED.add(run["id"])  # ce run est le nôtre, tant qu'on vit
         return run
 
 
@@ -245,6 +258,13 @@ def apply(conn: psycopg.Connection, run_id: int, submitted: dict) -> str:
             (outcome, json.dumps(submitted), now(), run_id),
         )
         losers = _settle(conn, item, bundle, run, outcome, kind="result")
+    # rendu et classé : ce run ne vole plus, il sort de la mémoire du
+    # processus. Ici et pas à l'entrée : un `apply` qui échoue — le thread
+    # d'un bloc qui perd la base — laisse le run en vol sous ce worker-ci,
+    # qui n'a pas redémarré. Le faucheur doit y lire « bail expiré », pas un
+    # redémarrage. Les trois rejets plus haut laissent leur numéro derrière
+    # eux : leur run est déjà classé, le faucheur ne le reverra jamais.
+    CLAIMED.discard(run_id)
     # hors transaction : la grâce du SIGTERM ne tient pas les verrous
     for loser in losers:
         revoke_orphan(item["id"], loser)
@@ -491,6 +511,12 @@ def reap(conn: psycopg.Connection) -> int:
     encore vivant au bout du bail, c'est un agent qui déborde de son budget
     — `timed_out`, escalade directe ; un groupe déjà mort, c'est une panne
     — `crashed`, retry sur place comme avant.
+
+    `CLAIMED` tranche, lui, le post-mortem : un run que ce worker n'a pas
+    réservé vient d'un worker qui n'est plus là — un déploiement, une
+    migration, un SIGKILL. L'issue ne change pas, la cause probable si :
+    lire « bail expiré, agent déjà mort » ferait chercher un agent instable
+    là où il n'y a qu'un processus qui a redémarré.
     """
     expired = conn.execute(
         "SELECT id FROM node_run WHERE status = 'running' AND lease_expires_at < %s",
@@ -520,8 +546,13 @@ def reap(conn: psycopg.Connection) -> int:
                     "UPDATE work_item SET fence = fence + 1 WHERE id = %s", (item["id"],)
                 )
             # l'agent travaillait-il encore ? La réponse fait l'issue, et le
-            # post-mortem se lit dans le résultat du run comme pour un bloc
-            post = lease_autopsy(item["id"], run, agent_alive(item["id"], run["id"]))
+            # post-mortem se lit dans le résultat du run comme pour un bloc.
+            # Un run qui n'est pas dans CLAIMED n'a pas été réservé par ce
+            # worker-ci : il a survécu à celui d'avant, qui l'a emporté.
+            orphaned = run["id"] not in CLAIMED
+            CLAIMED.discard(run["id"])
+            post = lease_autopsy(item["id"], run,
+                                 agent_alive(item["id"], run["id"]), orphaned)
             conn.execute(
                 "UPDATE node_run SET status = 'faulted', outcome = %s, result = %s, "
                 "finished_at = %s WHERE id = %s",

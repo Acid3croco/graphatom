@@ -552,7 +552,7 @@ def _autopsy(proc: subprocess.Popen, log: Path, exc: BaseException,
             "timeout": timeout, "exit_code": proc.returncode, "log_tail": _tail(log)}
 
 
-def lease_autopsy(item_id: int, run: dict, alive: bool) -> dict:
+def lease_autopsy(item_id: int, run: dict, alive: bool, orphaned: bool) -> dict:
     """Le post-mortem d'une tentative fauchée par son bail.
 
     Même forme que `_autopsy`, sans code de sortie : le faucheur n'a pas de
@@ -560,9 +560,18 @@ def lease_autopsy(item_id: int, run: dict, alive: bool) -> dict:
     l'expiration du bail — un budget dépassé, donc `timed_out` — ou s'il
     était déjà mort — une panne, donc `crashed`. Le journal de la tentative
     se retrouve par le nom de ses traces.
+
+    `orphaned` : le worker qui a réservé ce run n'est plus là — il a
+    redémarré, et le run est resté `running` derrière lui. L'issue est la
+    même, la cause probable non, et c'est elle qu'on lit : un redémarrage
+    emporte tous les fils en vol d'un coup, et leurs agents avec. Le dire
+    évite de chercher des agents instables quand c'est le worker qui tombe.
     """
+    agent = "encore vivant" if alive else "déjà mort"
     return {"outcome": "timed_out" if alive else "crashed",
-            "error": "bail expiré, agent " + ("encore vivant" if alive else "déjà mort"),
+            "error": (f"run emporté par un redémarrage du worker — agent orphelin, "
+                      f"{agent} : le worker est tombé, pas l'agent"
+                      if orphaned else f"bail expiré, agent {agent}"),
             "timeout": alive, "exit_code": None,
             "log_tail": _tail(attempt_log(run_workspace(item_id, run), run))}
 
