@@ -23,6 +23,10 @@ course réelle, et de vrais agents factices pour les candidats :
      ni la révision, ni le passage : il est classé, jamais routé
   7. tous en échec : l'issue majoritaire est routée comme une issue de nœud
      ordinaire ; à égalité, celle du run terminé en premier
+  8. `keep_n` : elle attend tout le monde — rien n'est décidé tant qu'un
+     candidat court — puis laisse passer exactement n finalistes, les n
+     premiers à avoir réussi ; les réussites de trop sont recalées, et zéro
+     réussite se route comme sous `first_pass`
 
 Le test ne détruit rien : il crée son sujet, ses items, et laisse la base
 en place — il peut tourner à côté d'un rail vivant.
@@ -112,17 +116,20 @@ def bundle_agent() -> dict:
     }
 
 
-def bundle_stub(k: int | None) -> dict:
+def bundle_stub(k: int | None, keep: int | None = None) -> dict:
     """Le même graph en stub : pas d'agent, K candidats, ou aucun fan-out.
 
     `k` à None, c'est le nœud d'avant le fan-out — il sert la non-régression.
+    `keep` choisit la réduction : `first_pass` sans lui, `keep_n` avec.
     """
     config: dict = {"duration_s": 0}
     if k is not None:
         config["fanout"] = {"variants": [{"label": f"v{i}"} for i in range(k)],
                             "reduce": "first_pass"}
+        if keep is not None:
+            config["fanout"] |= {"reduce": "keep_n", "n": keep}
     return {
-        "name": f"fanout-stub-{k}",
+        "name": f"fanout-stub-{k}-{keep}",
         "entry": "travail",
         "budgets": {"escalations": 2, "wall_deadline_hours": 1},
         "on_kernel": {"escalate_to": "escalate", "exhausted_to": "abandon"},
@@ -399,6 +406,61 @@ def tous_en_echec(conn) -> None:
               f"« {premier} », celle du run terminé en premier ✓")
 
 
+def keep_n(conn) -> None:
+    """9. `keep_n` attend tout le monde, puis laisse passer n finalistes."""
+    item_id = nouvel_item(conn, bundle_stub(4, keep=2))
+    runs = reserve_tout(conn, item_id)
+    assert len(runs) == 4, runs
+    depart = etat(conn, item_id)
+
+    # trois réussissent, un rate — et personne ne tranche avant le dernier
+    issues = ("ok", "crashed", "ok", "ok")
+    statuts = []
+    for run, issue in zip(runs, issues):
+        statuts.append(kernel.apply(conn, run["id"], {"outcome": issue}))
+        item = etat(conn, item_id)
+        if run is not runs[-1]:
+            assert item["version"] == depart["version"], (
+                f"décision prise alors que {len(runs) - 1 - runs.index(run)} "
+                "candidat(s) courent encore")
+            assert item["state"] == "travail", item["state"]
+    print(f"9. item {item_id} : les 3 premiers rendus n'ont rien décidé — "
+          "keep_n attend la fin de tous les candidats ✓")
+
+    # la course finie : deux finalistes, et deux seulement
+    finaux = {r["candidate"]: r for r in runs_de(conn, item_id)}
+    finalistes = sorted(k for k, r in finaux.items()
+                        if r["status"] == "applied" and r["outcome"] == "ok")
+    assert finalistes == [0, 2], f"les deux premières réussites passent : {finalistes}"
+    assert finaux[1]["status"] == "applied" and finaux[1]["outcome"] == "crashed", \
+        f"l'échec garde son issue, il n'est pas finaliste : {finaux[1]}"
+    assert finaux[3]["status"] == "superseded", \
+        f"la troisième réussite est recalée : {finaux[3]['status']}"
+    assert statuts == ["applied", "applied", "applied", "superseded"], statuts
+
+    item = etat(conn, item_id)
+    assert item["version"] == depart["version"] + 1, "une seule issue de nœud"
+    assert item["state"] == "fini", item["state"]
+    routages = [e for e in evenements(conn, item_id) if e["kind"] == "result"]
+    assert len(routages) == 1 and routages[0]["outcome"] == "ok", routages
+    assert routages[0]["run_id"] == finaux[0]["id"], routages[0]
+    print(f"   deux finalistes c0 et c2 (les deux premiers à réussir), c3 recalé, "
+          f"c1 en échec ; item routé travail → fini, une seule fois ✓")
+
+    # zéro réussite : rien de neuf, l'issue majoritaire se route comme avant
+    item_id = nouvel_item(conn, bundle_stub(2, keep=2))
+    runs = reserve_tout(conn, item_id)
+    for run in runs:
+        kernel.apply(conn, run["id"], {"outcome": "crashed"})
+    item = etat(conn, item_id)
+    assert item["state"] == "travail", item["state"]
+    assert evenements(conn, item_id)[-1]["outcome"] == "crashed"
+    assert not [r for r in runs_de(conn, item_id) if r["status"] == "superseded"], \
+        "aucune réussite à recaler : rien n'est classé"
+    print(f"   item {item_id} : zéro finaliste → « crashed » routé comme sous "
+          "first_pass, retour sur `travail` ✓")
+
+
 def main() -> None:
     db.init_db()  # idempotent : ne détruit rien, rattrape juste le schéma
     workdir = Path(tempfile.mkdtemp(prefix="graphatom-fanout-"))
@@ -409,6 +471,7 @@ def main() -> None:
             course(conn, workdir)
             resultat_tardif(conn)
             tous_en_echec(conn)
+            keep_n(conn)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
