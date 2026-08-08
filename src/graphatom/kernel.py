@@ -74,7 +74,7 @@ from collections import Counter
 import psycopg
 
 from . import worktree
-from .blocks import agent_alive, lease_autopsy, revoke_orphan
+from .blocks import agent_alive, lease_autopsy, revoke_orphan, write_failure_trace
 from .graph import KERNEL_OUTCOMES, GraphError, fanout_variants, load_bundle
 
 LEASE_SECONDS = 30
@@ -593,6 +593,13 @@ def _route(conn, item, bundle, run, outcome: str, kind: str) -> None:
     nodes = bundle["nodes"]
     node = nodes[run["node"]]
     on_kernel = bundle["on_kernel"]
+
+    # Seul un run porte un journal et un rapport. Réponses humaines et
+    # échéances passent aussi ici, mais n'inventent pas une tentative. La
+    # trace se prend avant une éventuelle conversion en `budget_exhausted` :
+    # elle dit l'issue que le nœud a réellement rendue.
+    if run.get("id") is not None:
+        write_failure_trace(item["id"], run, outcome)
 
     if outcome in (node.get("edges") or {}):
         target = node["edges"][outcome]
