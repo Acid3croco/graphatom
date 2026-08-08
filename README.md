@@ -101,6 +101,9 @@ uv run python tests/opencode_test.py                 # l'adaptateur opencode : u
                                                      # nœud réel tourne sous un
                                                      # modèle gratuit (demande
                                                      # `opencode` et le réseau)
+uv run python tests/portes_test.py                   # les portes d'un candidat
+                                                     # d'implement : un succès ne
+                                                     # compte qu'une fois prouvé
 ```
 
 Les tests ne touchent jamais au `data/` du repo : chacun travaille dans un
@@ -657,12 +660,42 @@ deux issues et le prompt de reprise.
 **Ce qui n'est pas commité se perd au couperet.** Le prompt d'`implement`
 demande donc de commiter au fil de l'eau, morceau par morceau — c'est une
 règle du graph, pas un commentaire écrit à la main sur l'issue au troisième
-dépassement. Le budget du nœud monte du même coup à **25 min**
-(`timeout_s: 1500`, bail `lease_s: 1560`) : 840 s étaient calibrées sur une
-issue de surface, et deux changements de noyau d'affilée les ont dépassées
-pour aboutir en une seconde passe — un aller-retour par l'humain à chaque
-fois. `release` n'en est pas gênée : elle commite ce qui reste quand il reste
-quelque chose, et le corps de la PR porte `Closes #<num>` de toute façon.
+dépassement. Le budget de l'agent monte du même coup à **25 min** : 840 s
+étaient calibrées sur une issue de surface, et deux changements de noyau
+d'affilée les ont dépassées pour aboutir en une seconde passe — un
+aller-retour par l'humain à chaque fois. `release` n'en est pas gênée : elle
+commite ce qui reste quand il reste quelque chose, et le corps de la PR porte
+`Closes #<num>` de toute façon.
+
+**`implement` est une course.** Le nœud déclare un `fanout` de trois
+variantes — *minimal* (le plus petit diff qui tienne), *réécriture* (le
+composant repris en entier), *test d'abord* (le test rouge, puis le code qui
+le passe) — réduit par `first_pass`. Trois candidats implémentent la même
+issue en même temps, chacun dans son atelier et avec son angle imposé ; le
+premier qui rend `done` gagne, les deux autres sont révoqués en vol et leurs
+ateliers détruits. On paie trois fois le prix d'une étape pour rendre le
+meilleur des trois essais au lieu du seul essai d'un seul agent.
+
+**Un candidat porte ses propres portes.** Sans elles, « le premier qui
+réussit » ne voudrait dire que « le premier qui s'est déclaré fini » : on
+sélectionnerait le plus rapide à prétendre, pas le plus correct. Le `cmd` du
+candidat lance donc [`scripts/portes.sh`](scripts/portes.sh) dès que l'agent
+rend la main — le projet doit s'importer, et les tests sans base concernés
+par son diff doivent passer — et **retire son `outcome.json` quand une porte
+lâche**. Le noyau ne voit alors aucun succès : le candidat sort en `crashed`
+comme n'importe quel raté, et la course continue sans lui.
+
+Les K candidats partagent la base jetable de leur item : une porte qui la
+détruit ou la recrée les ferait tomber les uns les autres. Le script coupe
+donc `GRAPHATOM_DSN` et `GRAPHATOM_AGENT_DSN` d'entrée et épingle
+`GRAPHATOM_REPO_DIR` sur l'atelier du candidat — aucune porte ne *peut*
+toucher une base ni le clone de référence partagé, quelle que soit la
+distraction de qui éditera la liste. `tests/crash_test.py`, qui drope la base
+nommée par `GRAPHATOM_DSN`, n'y est donc pas : `test_backend` le joue après
+la course, une fois seul. Trois jeux de portes lancés en même temps mettent
+**53 s**, une seconde de plus qu'un seul ; le budget du nœud passe de 25 à
+**28 min** (`timeout_s: 1680`, bail `lease_s: 1740`) pour que l'agent garde
+les siennes entières.
 
 Le `cmd` des nœuds à modèle de `code-task` diffuse pour cette raison :
 `--output-format stream-json --verbose` écrit au fil de l'eau dans le
@@ -952,10 +985,11 @@ faucheur ni les autres items.
 Le rail a été conçu pour un agent cher et compétent par nœud. La direction
 change : on veut pouvoir lancer **des myriades de modèles bon marché,
 potentiellement stupides**, sur la même étape, et laisser la sélection
-produire la qualité que l'intelligence individuelle ne donne pas. Rien de
-ce qui suit n'est codé à ce jour — c'est la vision à laquelle les issues
-suivantes se réfèrent, écrite dans le dépôt parce qu'un principe non écrit
-se perd.
+produire la qualité que l'intelligence individuelle ne donne pas. Le premier
+étage est en place — `implement` court en fan-out de trois stratégies, et
+chaque candidat porte ses portes déterministes ; le reste de ce qui suit est
+la vision à laquelle les issues suivantes se réfèrent, écrite dans le dépôt
+parce qu'un principe non écrit se perd.
 
 **Le renversement économique.** Quand le token ne coûte plus rien, la
 ressource rare n'est plus l'intelligence par appel : c'est la **capacité de
@@ -971,6 +1005,11 @@ une contrainte de coût mesurable : chaque critère non mécanisable est un
 critère qui exige un modèle cher. Corollaire : si `criteria.md` était
 entièrement exécutable, aucun juge ne serait nécessaire — le premier
 candidat qui franchit toutes les portes gagne, et la course est le juge.
+
+Le premier pas est fait : `implement` court en fan-out de trois stratégies,
+et chaque candidat porte ses portes déterministes ([`scripts/portes.sh`](scripts/portes.sh)).
+Ce qui manque encore, c'est l'étage de jugement des finalistes, et un
+`criteria.md` assez exécutable pour qu'il ne serve jamais.
 
 **L'haltère : cher aux deux bouts, gratuit au milieu.**
 
