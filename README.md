@@ -11,6 +11,7 @@ L'idée : des portes successives dont l'exécution est certaine — du code atom
 - [`index.html`](index.html) — **le noyau** (v2, simplifié) : six pièces, sept concepts utilisateur, quatre gardes de frontière, sept tables.
 - [`cas-usage.html`](cas-usage.html) — **le cas d'usage pilote** : d'une carte Notion à la prod. Trois gestes humains, le reste est le rail. C'est ce scénario qui pilote les choix.
 - [`pourquoi.html`](pourquoi.html) — **pourquoi pas Temporal/Restate/LangGraph** : les cinq garanties qu'aucun moteur existant ne donne. Le moteur est une commodité, les portes sont le produit.
+- [`DECOUPE.md`](DECOUPE.md) — **découper un travail en N morceaux différents, et le recoller** : la forme de configuration, les agrégations retenues bloc par bloc, le sort d'un morceau en échec, et pourquoi l'invariant d'état unique tient. Conception seule — rien n'en est encore exécutable.
 - [`archive/graph-runner-original.html`](archive/graph-runner-original.html) — la dérivation complète (v1) : algèbre de capacités, particules élémentaires, forces d'interaction, les douze trous de frontière. Le raisonnement, pas la spécification.
 
 ## Le noyau en six pièces
@@ -78,6 +79,9 @@ uv run python tests/links_test.py                    # les liens du frontend ver
                                                      # dans la table, sans base
 uv run python tests/depends_test.py                  # `Depends-on: #N` : l'admission
                                                      # attend, sans base ni réseau
+uv run python tests/split_deps_test.py               # une découpe reporte les
+                                                     # dépendances de la mère sur la
+                                                     # dernière fille, puis la ferme
 uv run python tests/hermetic_test.py                 # ce qu'un agent lance ne voit
                                                      # ni la base ni le dépôt de la
                                                      # production
@@ -837,10 +841,19 @@ au worktree : il lit, il écrit, il crée des issues.
   create --label graphatom`), chacune atomique avec ses critères dans son
   corps, chaînées par `Depends-on: #N` quand l'ordre compte — deux filles
   qui touchent les mêmes fichiers se sérialisent —, et une task list
-  `- [ ] #fille` dans la mère pour l'œil. Puis il **ferme la mère** sur
-  GitHub (`gh issue close`, commentaire *Découpée en #A, #B — suivi sur les
-  filles.*) : son cycle s'arrête là, aucune pull request ne viendra la
-  fermer. La fermeture est idempotente, un rejeu du nœud ne la casse pas.
+  `- [ ] #fille` dans la mère pour l'œil. Puis il **ferme la mère** par
+  `graphatom split-close --repo … --mother … --children A B C`, qui reporte
+  d'abord les dépendances : toute issue encore en attente qui porte
+  `Depends-on: #<mère>` voit cette ligne — et elle seule — réécrite vers la
+  **dernière fille** de la chaîne, avec le commentaire qui nomme l'ancienne
+  cible et la nouvelle. Sans ce report, la fermeture de la mère satisfait
+  une dépendance sans livrer le travail attendu, et le dépendant part pour
+  rien. L'ordre fait la sûreté : tant qu'un dépendant n'est pas reporté, la
+  mère reste ouverte, donc personne n'est libéré — une réécriture
+  impossible arrête la découpe en nommant l'issue, plutôt que d'admettre
+  trop tôt en silence. Puis la mère est fermée (*Découpée en #A, #B — suivi
+  sur les filles.*) : son cycle s'arrête là, aucune pull request ne viendra
+  la fermer. Tout est idempotent, un rejeu du nœud ne casse rien.
   Outcome `split`, vers le terminal
   dédié `close_split` ; les filles suivent le pipeline normal, admises par
   le sync comme n'importe quelle issue.
