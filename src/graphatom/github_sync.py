@@ -26,7 +26,8 @@ tout le reste :
                   le `criteria.md` et le `validate.md` du workspace, quand
                   ils sont là, partent avec la question — l'humain voit ce
                   qui est demandé et ce qui est coché, pas seulement
-                  « on garde ? »
+                  « on garde ? ». Une escalade née d'un timeout dit en plus
+                  quel budget a sauté et sur quoi l'agent en était
   5. réponses   — un commentaire `/answer <id> <option>` d'un auteur
                   autorisé, postérieur à l'armement de la question,
                   enregistre la réponse ; l'ordonnanceur route
@@ -53,7 +54,7 @@ import urllib.request
 from psycopg import Connection
 
 from . import channel, db, graph, heartbeat, kernel
-from .blocks import item_workspace
+from .blocks import AGENT_TIMEOUT_S, item_workspace
 
 API = "https://api.github.com"
 LABEL = "graphatom"
@@ -69,6 +70,7 @@ CHECKLIST_TITLE = "**Critères de succès, cochés par `validate`**"
 CRITERIA = "criteria.md"    # les critères figés par le nœud scope, même workspace
 CRITERIA_LINES = 80         # une spécification proposée est plus longue qu'une checklist
 CRITERIA_TITLE = "**Ce que le rail a compris** — critères figés par `scope`"
+TIMEOUT_TITLE = "**Escalade après timeout** — le budget du nœud a été dépassé"
 TIMEOUT_S = 30.0            # tout appel sortant est borné : au-delà, GitHub est injoignable
 
 
@@ -431,19 +433,66 @@ def _publish_criteria(conn: Connection, gh: GitHub) -> None:
                       "le corps de l'issue, lui, reste à l'humain.")
 
 
+def _budget_s(conn: Connection, run: dict) -> float:
+    """Le budget d'une tentative sur ce nœud — son `timeout_s`, ou le défaut.
+
+    Le run porte la révision de son item : le budget lu est celui du graph
+    sous lequel la tentative a tourné, pas celui d'une révision plus récente.
+    """
+    node = graph.load_bundle(conn, run["revision"])["nodes"][run["node"]]
+    agent = (node.get("config") or {}).get("agent") or {}
+    return float(agent.get("timeout_s", AGENT_TIMEOUT_S))
+
+
+def _timeout_report(conn: Connection, item_id: int, node: str) -> str:
+    """Le post-mortem du timeout qui vient d'escalader — sinon rien du tout.
+
+    Un dépassement de budget ne se relance plus tout seul : c'est l'humain
+    qui tranche entre `retry` et `abandon`, et il tranche mieux en sachant
+    quel budget a sauté et sur quoi l'agent en était. Le budget est le
+    `timeout_s` du nœud, la queue du journal celle de l'autopsie du run.
+
+    On ne lit que le dernier pas — l'événement qui a armé cette question :
+    un timeout d'un passage précédent ne regarde pas celui-ci.
+    """
+    event = conn.execute(
+        "SELECT outcome, run_id FROM event WHERE item_id = %s AND to_state = %s "
+        "ORDER BY item_version DESC LIMIT 1", (item_id, node),
+    ).fetchone()
+    if not event or event["outcome"] != "timed_out" or event["run_id"] is None:
+        return ""
+    run = conn.execute(
+        "SELECT n.*, w.revision FROM node_run n JOIN work_item w ON w.id = n.item_id "
+        "WHERE n.id = %s", (event["run_id"],),
+    ).fetchone()
+    if run is None:
+        return ""
+    tail = ((run["result"] or {}).get("log_tail") or "").strip()
+    quoted = "\n".join(f"> {line}".rstrip() for line in tail.splitlines())
+    return (f"{TIMEOUT_TITLE} : `{run['node']}` a dépassé son `timeout_s` de "
+            f"{_budget_s(conn, run):.0f} s "
+            f"(passage {run['cycle']}, tentative {run['attempt']}).\n\n"
+            + (f"Queue du journal :\n\n{quoted}\n\n" if quoted else ""))
+
+
+def _question_body(conn: Connection, q: dict, web: str) -> str:
+    """Le corps publié pour une question ouverte — construit ici, dit ailleurs."""
+    options = " / ".join(f"`{o}`" for o in q["options"])
+    return (f"**Question du rail** — pour @{q['owner']}, "
+            f"avant le {q['deadline']:%d/%m %H:%M} UTC\n\n{q['text']}\n\n"
+            f"{_timeout_report(conn, q['item_id'], q['node'])}"
+            f"{_cite(q['item_id'], CRITERIA, CRITERIA_LINES, CRITERIA_TITLE, web)}"
+            f"{_cite(q['item_id'], CHECKLIST, CHECKLIST_LINES, CHECKLIST_TITLE, web)}"
+            f"Options : {options}\n"
+            f"Répondre par un commentaire : `/answer {q['id']} <option>`\n"
+            f"Trajectoire et artefacts (previews) : {web}/item/{q['item_id']}")
+
+
 def _publish_questions(conn: Connection, gh: GitHub) -> None:
+    web = _web()
     for q in _gh_questions(conn, gh):
-        number = _issue_number(q["subject_key"])
-        options = " / ".join(f"`{o}`" for o in q["options"])
-        web = _web()
-        body = (f"**Question du rail** — pour @{q['owner']}, "
-                f"avant le {q['deadline']:%d/%m %H:%M} UTC\n\n{q['text']}\n\n"
-                f"{_cite(q['item_id'], CRITERIA, CRITERIA_LINES, CRITERIA_TITLE, web)}"
-                f"{_cite(q['item_id'], CHECKLIST, CHECKLIST_LINES, CHECKLIST_TITLE, web)}"
-                f"Options : {options}\n"
-                f"Répondre par un commentaire : `/answer {q['id']} <option>`\n"
-                f"Trajectoire et artefacts (previews) : {web}/item/{q['item_id']}")
-        _speak(conn, gh, number, q["item_id"], f"q{q['id']}", body)
+        _speak(conn, gh, _issue_number(q["subject_key"]), q["item_id"],
+               f"q{q['id']}", _question_body(conn, q, web))
 
 
 def _collect_answers(conn: Connection, gh: GitHub, allowed: set[str]) -> None:

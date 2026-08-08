@@ -23,6 +23,13 @@ tours de boucle, pas les traversées : la première visite d'un nœud
 d'escalade dans le passage courant est gratuite, la re-entrée décompte —
 un item au budget épuisé finit donc son chemin nominal, il ne peut juste
 plus boucler.
+
+Les tentatives amortissent une panne, pas un dépassement. Une tentative
+`crashed` ou `invalid_result` a droit à sa seconde chance sur place :
+l'infra retombe, une sortie malformée se rejoue. Une tentative `timed_out`,
+non — le budget a sauté, la relancer à l'identique le rebrûlerait pour
+retomber au même endroit. Elle escalade tout de suite, quel que soit le
+compteur : c'est l'humain qui décide de rouvrir un passage, ou d'abandonner.
 """
 
 import datetime as dt
@@ -30,7 +37,7 @@ import json
 
 import psycopg
 
-from .blocks import revoke_orphan
+from .blocks import agent_alive, lease_autopsy, revoke_orphan
 from .graph import KERNEL_OUTCOMES, load_bundle
 
 LEASE_SECONDS = 30
@@ -223,7 +230,13 @@ def _route(conn, item, bundle, run, outcome: str, kind: str) -> None:
 
     if outcome in (node.get("edges") or {}):
         target = node["edges"][outcome]
-    elif outcome in ("crashed", "timed_out", "invalid_result"):
+    elif outcome == "timed_out":
+        # un dépassement n'est pas une panne transitoire : la tâche déborde
+        # du budget, et la relance à l'identique brûlerait un cycle de plus
+        # pour retomber au même endroit. Escalade tout de suite, quel que
+        # soit le compteur de tentatives — c'est l'humain qui tranche.
+        target = on_kernel["escalate_to"]
+    elif outcome in ("crashed", "invalid_result"):
         # défaut central : réessayer sur place, puis escalader
         if run.get("attempt", 0) < MAX_ATTEMPTS:
             target = run["node"]
@@ -278,11 +291,16 @@ def _route(conn, item, bundle, run, outcome: str, kind: str) -> None:
 
 
 def reap(conn: psycopg.Connection) -> int:
-    """Runs au bail expiré : révoque (fence++ et pgid), classe crashed, route.
+    """Runs au bail expiré : révoque (fence++ et pgid), classe, route.
 
     La révocation a deux moitiés : l'autorité en base, et le processus. Un
     agent lancé par un worker mort ne peut plus rien appliquer, mais il
     travaille encore — le pgid laissé dans le workspace le tue.
+
+    Ce même pgid tranche l'issue, mécaniquement et sans modèle : un groupe
+    encore vivant au bout du bail, c'est un agent qui déborde de son budget
+    — `timed_out`, escalade directe ; un groupe déjà mort, c'est une panne
+    — `crashed`, retry sur place comme avant.
     """
     expired = conn.execute(
         "SELECT id FROM node_run WHERE status = 'running' AND lease_expires_at < %s",
@@ -301,12 +319,15 @@ def reap(conn: psycopg.Connection) -> int:
             conn.execute(  # révocation d'autorité : un zombie ne peut plus appliquer
                 "UPDATE work_item SET fence = fence + 1 WHERE id = %s", (item["id"],)
             )
+            # l'agent travaillait-il encore ? La réponse fait l'issue, et le
+            # post-mortem se lit dans le résultat du run comme pour un bloc
+            post = lease_autopsy(item["id"], run, agent_alive(item["id"], run["id"]))
             conn.execute(
-                "UPDATE node_run SET status = 'faulted', outcome = 'crashed' "
-                "WHERE id = %s", (run["id"],),
+                "UPDATE node_run SET status = 'faulted', outcome = %s, result = %s "
+                "WHERE id = %s", (post["outcome"], json.dumps(post), run["id"]),
             )
             bundle = load_bundle(conn, item["revision"])
-            _route(conn, item, bundle, run, "crashed", kind="reaped")
+            _route(conn, item, bundle, run, post["outcome"], kind="reaped")
         # hors transaction : la grâce du SIGTERM ne tient pas les verrous
         revoke_orphan(item["id"], run["id"])
     return len(expired)

@@ -456,6 +456,24 @@ et `timeout` (vrai si c'est le bail du bloc qui a fauché l'agent). La table
 des runs de `/item/<id>` l'affiche : le post-mortem se lit sur la page, pas en
 fouillant le workspace à la main.
 
+**Un timeout ne se relance jamais tout seul.** Une tentative qui déborde de
+son budget rend l'issue `timed_out`, pas `crashed` — et le noyau ne la
+retente pas sur place : elle part droit sur `escalate_to`, dès la première
+tentative et quel que soit le compteur. Relancer à l'identique brûlerait un
+cycle complet de plus pour retomber au même endroit ; c'est l'humain qui
+tranche entre `retry` — un passage neuf, pleine marge — et `abandon`. Une
+panne d'infra (`crashed`) ou une sortie malformée (`invalid_result`), elles,
+gardent leur seconde chance automatique : elles se rejouent. Le faucheur
+applique la même règle sans modèle : à l'expiration d'un bail, le pgid
+persisté dit si l'agent travaillait encore — groupe vivant, c'est un
+dépassement (`timed_out`) ; groupe déjà mort, c'est une panne (`crashed`).
+La question d'escalade née d'un timeout porte le budget dépassé (le
+`timeout_s` du nœud) et la queue du journal, directement sur l'issue. Rien
+à déclarer dans les graphs : `timed_out` n'est l'arête de personne, c'est
+le défaut central de `_route` qui change de branche.
+[`tests/escalade_timeout_test.py`](tests/escalade_timeout_test.py) fige la
+règle de bout en bout.
+
 **Ce que coûte un cycle se lit sur la même page.** Chaque transition du
 journal porte sa durée — l'écart avec la précédente, tentatives comprises —,
 chaque run la sienne et ses tokens, et l'en-tête le temps total de l'item
