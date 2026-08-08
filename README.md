@@ -94,6 +94,10 @@ uv run python tests/answer_test.py                   # `/answer` : la première 
 uv run python tests/silence_test.py                  # le chien de garde : un agent
                                                      # muet est coupé tôt, et le
                                                      # progrès constaté fait l'issue
+uv run python tests/opencode_test.py                 # l'adaptateur opencode : un
+                                                     # nœud réel tourne sous un
+                                                     # modèle gratuit (demande
+                                                     # `opencode` et le réseau)
 ```
 
 Les tests ne touchent jamais au `data/` du repo : chacun travaille dans un
@@ -453,8 +457,12 @@ démonstration — il lance `opencode run` sur le `prompt.md` du workspace et
 traduit ce qu'opencode rend en `outcome.json` conforme :
 
 ```sh
-"cmd": "scripts/agent-opencode.sh opencode/deepseek-v4-flash-free"
+"cmd": "$GRAPHATOM_REPO_DIR/scripts/agent-opencode.sh opencode/deepseek-v4-flash-free"
 ```
+
+Le chemin est absolu parce que le `cmd` tourne depuis le workspace de
+l'item, jamais depuis le dépôt : le clone de référence se nomme par
+`GRAPHATOM_REPO_DIR`, comme le font déjà les nœuds shell du graph.
 
 Le modèle se donne en argument, ou par `OPENCODE_MODEL` ; à défaut c'est
 `opencode/deepseek-v4-flash-free`, le seul dont le fonctionnement est
@@ -488,6 +496,17 @@ le chien de garde du bloc le couperait de toute façon, mais un adaptateur
 qui se tait est un adaptateur cassé. La borne du script est donc plus
 courte que le `timeout_s` du nœud : c'est l'adaptateur qui doit parler du
 modèle, pas le couperet.
+
+**La mesure, pas l'opinion.** `uv run python tests/opencode_test.py` fait
+tourner un nœud réel du graph sous `opencode/deepseek-v4-flash-free` et
+relit son issue en base : le modèle écrit son `outcome.json`, le noyau
+route, et l'`usage.json` de l'adaptateur rejoint le résultat du run. Le
+test se saute en le disant quand `opencode` n'est pas là. Le modèle muet,
+lui, coûte sa borne d'attente entière et se vérifie donc à la main :
+
+```sh
+OPENCODE_TIMEOUT_S=45 scripts/agent-opencode.sh opencode/north-mini-code-free
+```
 
 **Les traces sont auditables, jamais écrasées.** Le journal, le prompt et
 l'usage d'une tentative portent le nœud, le passage et la tentative dans
