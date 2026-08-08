@@ -87,6 +87,20 @@ def main() -> None:
     else:
         sys.exit("ÉCHEC : une boucle non réflexive par une file a passé la validation")
 
+    # 5. solo est un booléen de nœud exécutable, jamais une propriété d'un
+    #    WAIT qui ne réserve précisément aucun run.
+    bundle = json.loads(json.dumps(bundles["code-task.json"]))
+    assert bundle["nodes"]["deploy"]["config"]["solo"] is True
+    graph.validate(bundle)
+    bundle["nodes"]["escalate"]["config"]["solo"] = True
+    try:
+        graph.validate(bundle)
+    except graph.GraphError as e:
+        assert "WAIT" in str(e) and "solo" in str(e), str(e)
+        print(f"5. solo accepté sur deploy et refusé sur WAIT : {e} ✓")
+    else:
+        sys.exit("ÉCHEC : un nœud WAIT solo a passé la validation")
+
     print("\nvalidation : OK — une cible on_kernel fantôme ne se publie plus")
 
 

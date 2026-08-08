@@ -109,10 +109,23 @@ class FakeConn:
 class CountConn:
     """La base qui compte : `/api/load` ne lit qu'un `count(*)` de runs."""
 
-    def __init__(self, running: int):
+    def __init__(self, running: int, solo_running: int = 0, solo_waiting: int = 0):
         self.running = running
+        self.solo_running = solo_running
+        self.solo_waiting = solo_waiting
 
     def execute(self, sql: str, params: tuple = ()):
+        if "FROM work_item" in sql:
+            return FakeCursor([
+                {"id": i, "state": "travail", "revision": "solo-rev"}
+                for i in range(1, self.solo_running + self.solo_waiting + 1)
+            ])
+        if "SELECT DISTINCT item_id" in sql:
+            return FakeCursor([{"item_id": i}
+                               for i in range(1, self.solo_running + 1)])
+        if "FROM graph_revision" in sql:
+            return FakeCursor([{"bundle": {"nodes": {"travail": {
+                "block": "ACT", "config": {"solo": True}}}}}])
         return FakeCursor([{"n": self.running}])
 
 
@@ -256,9 +269,10 @@ def main() -> None:
         print("7. /api/heartbeat, et le payload sérialisable en ISO 8601 ✓")
 
         # la charge du rail : les runs en vol, et les plafonds qui les bornent
-        charge = web._api_load(CountConn(4))
+        charge = web._api_load(CountConn(4, solo_running=1, solo_waiting=2))
         assert charge == {"running": 4, "max_runs": scheduler.MAX_RUNS,
-                          "max_runs_per_item": scheduler.MAX_RUNS_PER_ITEM}, charge
+                          "max_runs_per_item": scheduler.MAX_RUNS_PER_ITEM,
+                          "solo": {"running": 1, "waiting": 2}}, charge
         # Le plafond par item reste sous le global dès que la machine a de
         # quoi. Sur une petite machine les deux tombent sur le plancher de
         # `FANOUT_MAX_CANDIDATES` : une course se réserve entière, donc
