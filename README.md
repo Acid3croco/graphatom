@@ -104,6 +104,9 @@ uv run python tests/opencode_test.py                 # l'adaptateur opencode : u
 uv run python tests/portes_test.py                   # les portes d'un candidat
                                                      # d'implement : un succès ne
                                                      # compte qu'une fois prouvé
+uv run python tests/fanout_opencode_test.py          # le candidat gratuit
+                                                     # d'implement : sa CLI absente
+                                                     # dit son nom dans le run
 ```
 
 Les tests ne touchent jamais au `data/` du repo : chacun travaille dans un
@@ -498,6 +501,12 @@ Le chemin est absolu parce que le `cmd` tourne depuis le workspace de
 l'item, jamais depuis le dépôt : le clone de référence se nomme par
 `GRAPHATOM_REPO_DIR`, comme le font déjà les nœuds shell du graph.
 
+La course d'`implement` s'en sert pour son candidat gratuit, à un détail
+près : un candidat a son propre atelier, et c'est celui-là qu'il nomme —
+`GRAPHATOM_WORKTREE` pour lire le script comme pour le donner au modèle en
+`OPENCODE_DIR`. Le clone de référence est partagé par tous les items ; un
+candidat n'y écrit jamais.
+
 Le modèle se donne en argument, ou par `OPENCODE_MODEL` ; à défaut c'est
 `opencode/deepseek-v4-flash-free`, le seul dont le fonctionnement est
 établi, écriture de fichier comprise. Les variantes gratuites d'opencode
@@ -667,14 +676,32 @@ aller-retour par l'humain à chaque fois. `release` n'en est pas gênée : elle
 commite ce qui reste quand il reste quelque chose, et le corps de la PR porte
 `Closes #<num>` de toute façon.
 
-**`implement` est une course.** Le nœud déclare un `fanout` de trois
+**`implement` est une course.** Le nœud déclare un `fanout` de quatre
 variantes — *minimal* (le plus petit diff qui tienne), *réécriture* (le
 composant repris en entier), *test d'abord* (le test rouge, puis le code qui
-le passe) — réduit par `first_pass`. Trois candidats implémentent la même
-issue en même temps, chacun dans son atelier et avec son angle imposé ; le
-premier qui rend `done` gagne, les deux autres sont révoqués en vol et leurs
-ateliers détruits. On paie trois fois le prix d'une étape pour rendre le
-meilleur des trois essais au lieu du seul essai d'un seul agent.
+le passe), *gratuit* (le chemin court, sur un modèle qui ne coûte rien) —
+réduit par `first_pass`. Quatre candidats implémentent la même issue en même
+temps, chacun dans son atelier et avec son angle imposé ; le premier qui rend
+`done` gagne, les autres sont révoqués en vol et leurs ateliers détruits. On
+paie quatre fois le prix d'une étape pour rendre le meilleur des quatre
+essais au lieu du seul essai d'un seul agent.
+
+**Un candidat qui ne coûte rien.** La variante *gratuit* ne change que sa
+commande : elle passe par [`scripts/agent-opencode.sh`](scripts/agent-opencode.sh)
+sur `opencode/deepseek-v4-flash-free`, et hérite du prompt, des budgets et
+des portes de tout le monde. C'est une mesure, pas une économie : si le
+harnais fait le travail de fiabilité, un modèle gratuit suffit parfois, et
+c'est la course qui le dit. Son `OPENCODE_DIR` est l'atelier du candidat —
+rien à configurer, aucun identifiant, le modèle visé est sans
+authentification.
+
+Un candidat qui perdrait en silence fausserait justement cette mesure.
+L'adaptateur sort donc en **code 3** quand `opencode` est introuvable, en
+nommant la commande manquante ; la commande du candidat s'arrête là — les
+portes ne tournent pas quand il n'y a pas d'issue à garder —, et le
+post-mortem du `node_run` porte ce message dans son `log_tail`. Une CLI
+absente se lit comme telle dans le résultat du run, pas comme du code qui ne
+compile pas : celui-là, lui, laisse un `portes.md`.
 
 **Un candidat porte ses propres portes.** Sans elles, « le premier qui
 réussit » ne voudrait dire que « le premier qui s'est déclaré fini » : on
@@ -692,8 +719,9 @@ donc `GRAPHATOM_DSN` et `GRAPHATOM_AGENT_DSN` d'entrée et épingle
 toucher une base ni le clone de référence partagé, quelle que soit la
 distraction de qui éditera la liste. `tests/crash_test.py`, qui drope la base
 nommée par `GRAPHATOM_DSN`, n'y est donc pas : `test_backend` le joue après
-la course, une fois seul. Trois jeux de portes lancés en même temps mettent
-**53 s**, une seconde de plus qu'un seul ; le budget du nœud passe de 25 à
+la course, une fois seul. Des jeux de portes lancés en même temps ne coûtent
+presque rien de plus qu'un seul — trois mettaient **53 s**, une seconde de
+plus qu'un seul ; le budget du nœud passe de 25 à
 **28 min** (`timeout_s: 1680`, bail `lease_s: 1740`) pour que l'agent garde
 les siennes entières.
 
@@ -986,10 +1014,10 @@ Le rail a été conçu pour un agent cher et compétent par nœud. La direction
 change : on veut pouvoir lancer **des myriades de modèles bon marché,
 potentiellement stupides**, sur la même étape, et laisser la sélection
 produire la qualité que l'intelligence individuelle ne donne pas. Le premier
-étage est en place — `implement` court en fan-out de trois stratégies, et
-chaque candidat porte ses portes déterministes ; le reste de ce qui suit est
-la vision à laquelle les issues suivantes se réfèrent, écrite dans le dépôt
-parce qu'un principe non écrit se perd.
+étage est en place — `implement` court en fan-out de quatre candidats, dont
+un sur modèle gratuit, et chacun porte ses portes déterministes ; le reste
+de ce qui suit est la vision à laquelle les issues suivantes se réfèrent,
+écrite dans le dépôt parce qu'un principe non écrit se perd.
 
 **Le renversement économique.** Quand le token ne coûte plus rien, la
 ressource rare n'est plus l'intelligence par appel : c'est la **capacité de
@@ -1006,10 +1034,11 @@ critère qui exige un modèle cher. Corollaire : si `criteria.md` était
 entièrement exécutable, aucun juge ne serait nécessaire — le premier
 candidat qui franchit toutes les portes gagne, et la course est le juge.
 
-Le premier pas est fait : `implement` court en fan-out de trois stratégies,
-et chaque candidat porte ses portes déterministes ([`scripts/portes.sh`](scripts/portes.sh)).
-Ce qui manque encore, c'est l'étage de jugement des finalistes, et un
-`criteria.md` assez exécutable pour qu'il ne serve jamais.
+Le premier pas est fait : `implement` court en fan-out de quatre candidats —
+trois stratégies sur modèle cher, une sur modèle gratuit — et chacun porte
+ses portes déterministes ([`scripts/portes.sh`](scripts/portes.sh)). Ce qui
+manque encore, c'est l'étage de jugement des finalistes, et un `criteria.md`
+assez exécutable pour qu'il ne serve jamais.
 
 **L'haltère : cher aux deux bouts, gratuit au milieu.**
 
