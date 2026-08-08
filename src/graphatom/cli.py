@@ -55,8 +55,18 @@ def main() -> None:
     args = p.parse_args()
 
     if args.cmd == "init-db":
-        db.init_db(drop=args.drop)
+        changes = db.init_db(drop=args.drop)
         print("base initialisée")
+        # le journal du déploiement dit ce que la migration a changé : sans
+        # cette ligne, un worker qui se reconnecte sur un plan périmé au même
+        # moment n'a aucune cause visible
+        if changes:
+            print(f"migration : la forme des tables a changé — "
+                  f"{len(changes)} colonne(s)")
+            for change in changes:
+                print(f"  {change}")
+        else:
+            print("migration : aucun changement de forme")
         return
     if args.cmd == "drop-agent-db":
         # avant toute connexion : on ne drop pas une base qu'on tient ouverte

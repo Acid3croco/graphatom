@@ -39,6 +39,12 @@ ramène à une seule issue avant que l'item n'avance, et c'est cette issue-là
 que `_route` traite comme celle d'un nœud ordinaire. L'item garde donc un
 seul état, une seule révision, une seule issue de nœud : rien ne fusionne,
 un candidat survit, les autres sont révoqués.
+
+Un candidat a aussi son atelier git, et la révocation ne s'arrête pas à son
+groupe de processus : le travail du gagnant est promu sur la branche de
+l'item, et les ateliers de tous les candidats sont détruits. Sur *tous* les
+chemins terminaux — la réduction, mais aussi un `wall_deadline` tombé en
+pleine course. Voir `worktree`.
 """
 
 import datetime as dt
@@ -48,11 +54,21 @@ from collections import Counter
 
 import psycopg
 
+from . import worktree
 from .blocks import agent_alive, lease_autopsy, revoke_orphan
 from .graph import KERNEL_OUTCOMES, GraphError, fanout_variants, load_bundle
 
 LEASE_SECONDS = 30
 MAX_ATTEMPTS = 3  # défaut central, par passage : réessayer, puis escalader
+
+# Les runs que *ce processus-ci* a réservés et qui volent encore. En mémoire,
+# donc vide au démarrage : un worker qui vient de naître ne reconnaît aucun
+# des runs `running` qu'il trouve en base, et c'est exactement l'information
+# qui manquait au faucheur — un run qu'il n'a pas réservé a été emporté par
+# la mort du worker d'avant, son agent n'y est pour rien. Voir `reap`.
+# Le tick le remplit, les threads des blocs le vident : un set suffit, `add`
+# et `discard` ne se marchent pas dessus.
+CLAIMED: set[int] = set()
 
 UTC = dt.timezone.utc
 
@@ -129,6 +145,9 @@ def claim(conn: psycopg.Connection, item_id: int) -> dict | None:
     est celle de tous — les K candidats la partagent, avec sa barrière —, et
     chacun a son bail, son numéro et son workspace. Sans `fanout`, il n'y a
     qu'un candidat, il n'a pas de numéro, et rien de tout ceci ne se voit.
+
+    Le run réservé est noté dans `CLAIMED`, la mémoire du processus : c'est
+    ce qui dira au faucheur, plus tard, si ce run est le sien.
     """
     with conn.transaction():
         item = conn.execute(
@@ -180,6 +199,7 @@ def claim(conn: psycopg.Connection, item_id: int) -> dict | None:
              candidate if fanout else None, fence, item["version"],
              now() + dt.timedelta(seconds=lease_s)),
         ).fetchone()
+        CLAIMED.add(run["id"])  # ce run est le nôtre, tant qu'on vit
         return run
 
 
@@ -238,14 +258,29 @@ def apply(conn: psycopg.Connection, run_id: int, submitted: dict) -> str:
             (outcome, json.dumps(submitted), now(), run_id),
         )
         losers = _settle(conn, item, bundle, run, outcome, kind="result")
+    # rendu et classé : ce run ne vole plus, il sort de la mémoire du
+    # processus. Ici et pas à l'entrée : un `apply` qui échoue — le thread
+    # d'un bloc qui perd la base — laisse le run en vol sous ce worker-ci,
+    # qui n'a pas redémarré. Le faucheur doit y lire « bail expiré », pas un
+    # redémarrage. Les trois rejets plus haut laissent leur numéro derrière
+    # eux : leur run est déjà classé, le faucheur ne le reverra jamais.
+    CLAIMED.discard(run_id)
     # hors transaction : la grâce du SIGTERM ne tient pas les verrous
     for loser in losers:
         revoke_orphan(item["id"], loser)
+    _ateliers(conn, item, run)
     return "applied"
 
 
 def apply_item(conn: psycopg.Connection, item_id: int, outcome: str, kind: str) -> None:
-    """Transition sans run : réponse humaine, échéance de WAIT, wall_deadline."""
+    """Transition sans run : réponse humaine, échéance de WAIT, wall_deadline.
+
+    Rien ici n'est une réduction : l'item quitte son nœud sans qu'aucun
+    candidat ait gagné. Ceux qui couraient encore n'ont donc plus rien à
+    garder — leurs ateliers sont détruits, comme après une réduction. C'est
+    ce qui tient la promesse sur *tous* les chemins terminaux, et pas
+    seulement quand la course va jusqu'au bout.
+    """
     with conn.transaction():
         item = conn.execute(
             "SELECT * FROM work_item WHERE id = %s FOR UPDATE", (item_id,)
@@ -255,6 +290,7 @@ def apply_item(conn: psycopg.Connection, item_id: int, outcome: str, kind: str) 
         bundle = load_bundle(conn, item["revision"])
         run = {"node": item["state"], "id": None, "attempt": 0}
         _route(conn, item, bundle, run, outcome, kind=kind)
+    worktree.discard(item_id)  # hors transaction : git ne tient pas les verrous
 
 
 def _settle(conn, item, bundle, run, outcome: str, kind: str) -> list[int]:
@@ -342,6 +378,36 @@ def _revoke_losers(conn, item, winner) -> list[int]:
         "UPDATE work_item SET fence = fence + 1 WHERE id = %s", (item["id"],)
     )
     return [r["id"] for r in losers]
+
+
+def _ateliers(conn, item, run) -> None:
+    """La course finie : le gagnant promu, les ateliers des candidats détruits.
+
+    Le prédicat est celui de la réduction, lu sur les mêmes lignes : tant
+    qu'un frère court, rien n'est tranché et rien ne bouge. Une fois la
+    tentative close, le travail du gagnant rejoint la branche de l'item, et
+    tous les ateliers de candidats disparaissent — celui du gagnant compris,
+    puisqu'il n'a plus rien d'unique.
+
+    Un nœud sans fan-out n'a pas de candidat : rien de tout ceci ne le
+    concerne, et son atelier d'item reste celui du shell du graph.
+
+    Hors transaction, toujours : un `git merge` n'a rien à faire sous le
+    verrou d'un item.
+    """
+    if run["candidate"] is None:
+        return
+    batch = conn.execute(
+        "SELECT candidate, status FROM node_run WHERE item_id = %s AND node = %s "
+        "AND cycle = %s AND attempt = %s",
+        (item["id"], run["node"], run["cycle"], run["attempt"]),
+    ).fetchall()
+    if any(r["status"] == "running" for r in batch):
+        return
+    gagnant = next((r["candidate"] for r in batch if r["status"] == "applied"), None)
+    if gagnant is not None:
+        worktree.promote(item["id"], gagnant)
+    worktree.discard(item["id"])
 
 
 def _boucle(conn, item, nodes: dict, target: str, cycle: int) -> bool:
@@ -445,6 +511,12 @@ def reap(conn: psycopg.Connection) -> int:
     encore vivant au bout du bail, c'est un agent qui déborde de son budget
     — `timed_out`, escalade directe ; un groupe déjà mort, c'est une panne
     — `crashed`, retry sur place comme avant.
+
+    `CLAIMED` tranche, lui, le post-mortem : un run que ce worker n'a pas
+    réservé vient d'un worker qui n'est plus là — un déploiement, une
+    migration, un SIGKILL. L'issue ne change pas, la cause probable si :
+    lire « bail expiré, agent déjà mort » ferait chercher un agent instable
+    là où il n'y a qu'un processus qui a redémarré.
     """
     expired = conn.execute(
         "SELECT id FROM node_run WHERE status = 'running' AND lease_expires_at < %s",
@@ -474,8 +546,13 @@ def reap(conn: psycopg.Connection) -> int:
                     "UPDATE work_item SET fence = fence + 1 WHERE id = %s", (item["id"],)
                 )
             # l'agent travaillait-il encore ? La réponse fait l'issue, et le
-            # post-mortem se lit dans le résultat du run comme pour un bloc
-            post = lease_autopsy(item["id"], run, agent_alive(item["id"], run["id"]))
+            # post-mortem se lit dans le résultat du run comme pour un bloc.
+            # Un run qui n'est pas dans CLAIMED n'a pas été réservé par ce
+            # worker-ci : il a survécu à celui d'avant, qui l'a emporté.
+            orphaned = run["id"] not in CLAIMED
+            CLAIMED.discard(run["id"])
+            post = lease_autopsy(item["id"], run,
+                                 agent_alive(item["id"], run["id"]), orphaned)
             conn.execute(
                 "UPDATE node_run SET status = 'faulted', outcome = %s, result = %s, "
                 "finished_at = %s WHERE id = %s",
@@ -486,4 +563,5 @@ def reap(conn: psycopg.Connection) -> int:
         # hors transaction : la grâce du SIGTERM ne tient pas les verrous
         for orphan in (run["id"], *losers):
             revoke_orphan(item["id"], orphan)
+        _ateliers(conn, item, run)
     return len(expired)
