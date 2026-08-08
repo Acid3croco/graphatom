@@ -31,6 +31,7 @@ import { execution } from "@/lib/agent-model";
 // Miroir de `KERNEL_OUTCOMES` dans `src/graphatom/graph.py`.
 const KERNEL_OUTCOMES = new Set([
   "crashed",
+  "starved",
   "stalled",
   "timed_out",
   "invalid_result",

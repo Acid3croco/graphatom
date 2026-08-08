@@ -603,11 +603,11 @@ def _route(conn, item, bundle, run, outcome: str, kind: str) -> None:
 
     if outcome in (node.get("edges") or {}):
         target = node["edges"][outcome]
-    elif outcome == "timed_out":
-        # un dépassement n'est pas une panne transitoire : la tâche déborde
-        # du budget, et la relance à l'identique brûlerait un cycle de plus
-        # pour retomber au même endroit. Escalade tout de suite, quel que
-        # soit le compteur de tentatives — c'est l'humain qui tranche.
+    elif outcome in ("timed_out", "starved"):
+        # Un dépassement et un fournisseur affamé ne sont pas des pannes
+        # transitoires. La relance à l'identique retomberait au même endroit :
+        # hors budget pour l'un, sans crédits pour l'autre. Escalade tout de
+        # suite, quel que soit le compteur de tentatives.
         target = on_kernel["escalate_to"]
     elif outcome in ("crashed", "invalid_result", "stalled"):
         # défaut central : réessayer sur place, puis escalader. `stalled` est

@@ -12,7 +12,7 @@ import psycopg
 
 BLOCK_KINDS = {"FETCH", "JUDGE", "ACT", "CHECK", "EFFECT", "WAIT"}
 
-KERNEL_OUTCOMES = {"crashed", "stalled", "timed_out", "invalid_result",
+KERNEL_OUTCOMES = {"crashed", "starved", "stalled", "timed_out", "invalid_result",
                    "budget_exhausted", "wall_deadline"}
 
 # Le fan-out de candidats : un nœud déclare des variantes de sa propre config,
