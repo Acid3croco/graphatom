@@ -166,6 +166,46 @@ def promote(item_id: int, candidate: int) -> str | None:
     return mine
 
 
+def candidate_work(item_id: int, candidate: int, limit: int) -> str | None:
+    """Le travail d'un candidat, lu depuis le dépôt : ses commits, son diff.
+
+    C'est ce qu'un juge doit lire pour départager des finalistes, et c'est
+    exactement ce qu'une promotion emporterait — la branche du candidat face
+    à celle de l'item. Ce qu'il aurait laissé non commité n'y est pas, et
+    c'est juste : un `merge --ff-only` ne l'emporterait pas non plus.
+
+    Tout se lit dans le dépôt, par les noms de branches : l'atelier du
+    candidat n'est pas touché, pas même en lecture. Un juge n'a rien à y
+    faire, et une commande git dans son worktree y écrirait au moins un
+    cache d'index.
+
+    Rien à lire — pas de dépôt, pas de branche, un git qui rate : None. Le
+    bloc dit alors « diff illisible » plutôt que de faire passer un candidat
+    vide pour un candidat sans changement.
+    """
+    root, item = repo(), item_path(item_id)
+    if root is None or item is None:
+        return None
+    branch = _registered(root).get(item)
+    if branch is None:
+        return None
+    mine = candidate_branch(branch, candidate)
+    if not _known_branch(root, mine):
+        return None
+
+    # les titres ne citent pas les refs : un nom de branche porte le numéro
+    # du candidat, et le juge n'a rien à savoir de qui a produit quoi
+    parts = []
+    for titre, args in (("commits", ["log", "--oneline", f"{branch}..{mine}"]),
+                        ("diff", ["diff", f"{branch}...{mine}"])):
+        code, out = _git(root, *args)
+        if code != 0:
+            return None
+        parts.append(f"{titre} :\n\n```\n{out or '(rien)'}\n```")
+    work = "\n\n".join(parts)
+    return work if len(work) <= limit else work[:limit] + "\n… (tronqué)"
+
+
 def discard(item_id: int) -> list[str]:
     """Détruit les ateliers des candidats de l'item. Rend les branches retirées.
 
