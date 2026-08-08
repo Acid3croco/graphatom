@@ -370,6 +370,34 @@ curl -s http://127.0.0.1:8851/items | grep -c _next   # le front rendu
 curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8850/items  # le secours
 ```
 
+**Une porte attend avant de conclure.** `docker compose up` rend la main
+dès que les conteneurs sont créés, pas quand ils écoutent : un front Next
+reconstruit ouvre son port plusieurs secondes plus tard. Mesuré à cet
+instant-là, le déploiement le plus sain rend `000` — connexion refusée —,
+l'item escalade, et un humain répond `retry` pour constater que tout allait
+bien. Une porte qui échoue à tort finit par être lue comme du bruit : c'est
+exactement ce qu'une porte ne doit jamais devenir. Les portes sondent donc
+toutes les 2 s jusqu'à une réponse, et deux cas restent nets :
+
+- **rien qui répond est une attente** — le `000` de curl, ou un service pas
+  encore en marche : c'est l'état normal juste après un redémarrage ;
+- **une réponse fausse est un échec immédiat** — un `500`, un corps sans
+  `_next`, un `docker compose ps` en erreur : attendre ne les améliorerait
+  pas, cela ne ferait que retarder le diagnostic. La porte 4 n'attend
+  jamais non plus : un `Traceback` déjà écrit ne s'efface pas.
+
+**Le budget d'attente est commun aux quatre portes : 60 s au total**, et
+non 60 s chacune (`GRAPHATOM_PORTES_DELAI_S` le déplace). C'est ce qui rend
+le pire cas du nœud calculable et indépendant du nombre de portes : au
+maximum **60 s d'attente**, plus une sonde en cours (5 s de `--max-time`)
+et les deux appels à `docker compose` — moins de 80 s en tout. Le nœud
+garde donc son `timeout_s` de 120 s et son bail de 180 s inchangés, là où
+60 s par porte auraient demandé de tripler les deux. Le partage n'enlève
+rien au cas qui a motivé la mesure : quand seul le front traîne, les autres
+portes concluent en une sonde et lui laissent le budget entier.
+`verify_deploy.md` porte, porte par porte, le temps attendu avant de
+conclure — c'est ce qui permettra de savoir si 60 s est bien réglé.
+
 ## De vrais agents dans les blocs (milestone 3b)
 
 Un nœud ACT / CHECK / JUDGE peut déclarer `config.agent` — le bloc écrit
