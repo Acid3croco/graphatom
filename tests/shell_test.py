@@ -586,7 +586,7 @@ def main() -> None:
 
     # 1. absorption vide : aucune porte n'est exécutée. Le PATH le prouve —
     #    `python3` et `npm` y échouent, et la release passe quand même
-    repo, workspace, worktree = cas_release(tmp, "portes-a-jour")
+    repo, workspace, worktree = cas_release(tmp, "construction-a-jour")
     assert release(repo, workspace, SUJET, {"PATH": portes_muettes(tmp, "muettes")}) == 6
     rapport = (workspace / "release.md").read_text()
     assert "rien d'absorbé" in rapport, rapport
@@ -594,7 +594,7 @@ def main() -> None:
 
     # 2. absorption non vide et saine, hors `front/` : la porte python passe
     #    et se nomme — et la porte front, elle, n'est pas exécutée
-    repo, workspace, worktree = cas_release(tmp, "portes-saines")
+    repo, workspace, worktree = cas_release(tmp, "construction-saine")
     travaille(worktree, "travail.txt", "l'implémentation de l'item\n")
     avance_main(repo, "src/voisin.py", "def voisin():\n    return 1\n")
     assert release(repo, workspace, SUJET, aveugle) == 6
@@ -603,7 +603,7 @@ def main() -> None:
     assert "front" not in rapport, rapport  # rien d'absorbé sous front/
 
     # 3. absorption non vide touchant `front/` : les deux portes s'exécutent
-    repo, workspace, worktree = cas_release(tmp, "portes-front")
+    repo, workspace, worktree = cas_release(tmp, "construction-front")
     travaille(worktree, "travail.txt", "l'implémentation de l'item\n")
     avance_main(repo, "front/graph-view.tsx", "export const vue = () => null\n")
     assert release(repo, workspace, SUJET, {"PATH": faux_npm(tmp, "npm-passe", 0, "construit")}) == 6
@@ -614,7 +614,7 @@ def main() -> None:
     # 4. l'absorption casse la compilation python : code 11, la sortie du
     #    compilateur dans `release.md`, aucune PR tentée, et le worktree
     #    laissé sur sa fusion — c'est un état à réparer, pas à effacer
-    repo, workspace, worktree = cas_release(tmp, "portes-python-cassee")
+    repo, workspace, worktree = cas_release(tmp, "construction-python-cassee")
     travaille(worktree, "travail.txt", "l'implémentation de l'item\n")
     avance_main(repo, "src/casse.py", "def casse(:\n    return 1\n")
     assert release(repo, workspace, SUJET, aveugle) == 11
@@ -625,7 +625,7 @@ def main() -> None:
         "la fusion à réparer a été effacée"
 
     # 5. l'absorption casse le build du front : même code, même compte rendu
-    repo, workspace, worktree = cas_release(tmp, "portes-front-cassee")
+    repo, workspace, worktree = cas_release(tmp, "construction-front-cassee")
     travaille(worktree, "travail.txt", "l'implémentation de l'item\n")
     avance_main(repo, "front/graph-view.tsx", "export const vue = () => null\n")
     casse = faux_npm(tmp, "npm-casse", 1, "graph-view.tsx(25,8): error TS2741")

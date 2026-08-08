@@ -16,6 +16,7 @@
 #   8  merge lancé, jamais observé
 #   9  rapprochement d'origin/main impossible sans jugement
 #  10  fetch en échec, ou origin/main illisible — main serait lu périmé
+#  11  porte de construction en échec sur le contenu absorbé
 #
 # Les codes 2 à 8 gardent leur sens : le pas de rapprochement est arrivé
 # après eux, il prend donc les deux codes libres qui suivent, pas la place
@@ -36,6 +37,7 @@ SUJET="${GRAPHATOM_SUBJECT_KEY:-}"
 MD=""            # release.md, connu dès que le workspace l'est
 TITRE=""         # le titre de l'issue, lu au plus tard : le commit et la PR le portent
 ATTENTES=8       # relectures du merge, une toutes les 15 s : deux minutes
+ABSORBE=""       # les fichiers que le rapprochement a changés — vide, aucune porte
 
 dit() {  # une ligne de journal, à l'écran et dans le compte rendu
     printf '%s\n' "$*"
@@ -94,10 +96,12 @@ lance git -C "$WT" fetch origin \
     || echoue "fetch d'origin : main serait lu périmé, la release s'arrête ici" 10
 AMONT=$(git -C "$WT" rev-parse --short origin/main 2>&1) \
     || echoue "origin/main introuvable après le fetch : $AMONT" 10
+AVANT=$(git -C "$WT" rev-parse HEAD)
 if git -C "$WT" merge-base --is-ancestor origin/main HEAD; then
-    dit "rapprochement : déjà à jour avec origin/main ($AMONT)"
+    dit "rapprochement : déjà à jour avec origin/main ($AMONT) — rien d'absorbé"
 elif lance git -C "$WT" merge origin/main --no-edit; then
     FUSION=$(git -C "$WT" rev-parse --short HEAD)
+    ABSORBE=$(git -C "$WT" diff --name-only "$AVANT" HEAD)
     dit "rapprochement : merge automatique d'origin/main ($AMONT) — commit $FUSION"
 else
     CONFLITS=$(git -C "$WT" diff --name-only --diff-filter=U)
@@ -112,6 +116,35 @@ else
         dit "par origin/main ($AMONT) — la liste est juste au-dessus"
     fi
     echoue "rapprochement d'origin/main ($AMONT) impossible sans jugement" 9
+fi
+
+# 2 bis. la porte de construction, sur le contenu que le rapprochement vient
+#    d'absorber. Un merge sans le moindre marqueur de conflit peut casser la
+#    construction : deux branches se compilaient chacune de son côté, leur
+#    somme non — git a raison sur le texte et tort sur le sens. Le
+#    compilateur tranche cette classe d'erreurs en secondes ; on ne rejoue
+#    donc pas les tests ici, on compile. Rien d'absorbé, rien à vérifier :
+#    le contenu a déjà été testé tel quel par les nœuds de test, et ce
+#    chemin-là — le plus fréquent — reste aussi rapide qu'avant.
+if [ -n "$ABSORBE" ]; then
+    dit "contenu absorbé — $(printf '%s\n' "$ABSORBE" | wc -l) fichier(s) à construire"
+    # le bytecode part dans un répertoire jetable : une porte ne salit pas le
+    # worktree qu'elle vérifie, et le commit qui suit n'a rien de neuf à voir
+    PYC=$(mktemp -d)
+    export PYTHONPYCACHEPREFIX="$PYC"
+    lance python3 -m compileall -q "$WT/src"
+    PORTE=$?
+    unset PYTHONPYCACHEPREFIX
+    rm -rf "$PYC"
+    [ "$PORTE" -eq 0 ] || echoue "porte compilation python sur le contenu absorbé" 11
+    dit "porte compilation python : passée"
+    # le front ne se construit que si l'absorption l'a touché : c'est la
+    # porte chère, et un merge qui n'apporte que du Python ne la mérite pas
+    if printf '%s\n' "$ABSORBE" | grep -q '^front/'; then
+        lance npm --prefix "$WT/front" run build \
+            || echoue "porte construction front sur le contenu absorbé" 11
+        dit "porte construction front : passée"
+    fi
 fi
 
 # 3. le commit — titre de l'issue, ligne vide, `Closes #<num>`. Un agent qui
