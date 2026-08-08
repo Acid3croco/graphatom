@@ -8,8 +8,9 @@ elles se jouent ici sur une base factice et un répertoire jetable :
      `release.json` en porte une
   2. `/api/item/<id>` : les sept clés de la page, et un item inconnu qui
      ne rend rien du tout — c'est ce None que la route tourne en 404
-  3. le graph redessinable sans la base, les runs avec durée et tokens,
-     les fichiers du workspace avec l'URL qui les sert
+  3. le graph redessinable sans la base — fan-out d'un nœud compris, un
+     candidat par entrée —, les runs avec durée et tokens, les fichiers du
+     workspace avec l'URL qui les sert
   4. `/api/questions` : le jeton de `POST /answer`, jusqu'ici enfoui dans
      le HTML, et les options de chaque question ouverte
   5. `/api/heartbeat`, et tout le reste sérialisable : les horodatages
@@ -50,6 +51,26 @@ BUNDLE = {
                      "edges": {"retry": "ingest", "expired": "closed"}},
         "closed": {"terminal": True},
     },
+}
+
+
+# un nœud en fan-out, tel qu'un graph le déclare : deux variantes jouées
+# deux fois, dont une qui surcharge la commande du nœud
+FANOUT_NODE = {
+    "block": "ACT",
+    "config": {
+        "agent": {"cmd": "claude --model opus", "prompt": "le prompt du nœud"},
+        "fanout": {
+            "variants": [
+                {"label": "opus", "strategy": "raisonne longtemps"},
+                {"label": "haiku", "strategy": "va droit au but",
+                 "agent": {"cmd": "claude --model haiku"}},
+            ],
+            "repeat": 2,
+            "reduce": "first_pass",
+        },
+    },
+    "edges": {"ok": "closed"},
 }
 
 
@@ -103,8 +124,9 @@ def conn_of(item_id: int, subject_key: str = ISSUE, terminal: bool = True) -> Fa
          "outcome": "ok", "run_id": 7},
     ]
     runs = [{"id": 7, "item_id": item_id, "node": "ingest", "cycle": 1, "attempt": 1,
-             "status": "applied", "fence": 1, "expected_version": 1,
-             "lease_expires_at": T0 + dt.timedelta(minutes=20), "outcome": "ok",
+             "candidate": None, "status": "applied", "fence": 1, "expected_version": 1,
+             "lease_expires_at": T0 + dt.timedelta(minutes=20),
+             "finished_at": T0 + dt.timedelta(seconds=10), "outcome": "ok",
              "result": {"outcome": "ok", "usage": {"input_tokens": 120,
                                                    "output_tokens": 30}}}]
     questions = [{"id": 5, "item_id": item_id, "node": "escalate",
@@ -174,7 +196,24 @@ def main() -> None:
         assert payload["item"]["usage"]["input_tokens"] == 120, payload["item"]
         assert payload["item"]["duration_s"] == 30.0, payload["item"]
         assert payload["journal"][1]["duration_s"] == 10.0, payload["journal"]
+        # un candidat qui a perdu n'a produit aucune transition, donc aucune
+        # durée : `finished_at` est la seule date qui le situe
+        assert run["candidate"] is None and run["finished_at"] is not None, run
         print("4. graph redessinable, runs chiffrés, journal daté ✓")
+
+        # le fan-out d'un nœud, un candidat par entrée : sans lui, le client
+        # ne saurait pas nommer les candidats qu'il déplie
+        assert all("fanout" not in n for n in graph["nodes"]), graph["nodes"]
+        fanout = web._api_fanout(FANOUT_NODE)
+        assert fanout["reduce"] == "first_pass" and fanout["repeat"] == 2, fanout
+        # variantes × répétition : chaque variante deux fois, dans l'ordre
+        labels = [c["variant"]["label"] for c in fanout["candidates"]]
+        assert labels == ["opus", "opus", "haiku", "haiku"], labels
+        # la variante qui surcharge `agent.cmd` joue la sienne, l'autre hérite
+        cmds = [c["cmd"] for c in fanout["candidates"]]
+        assert cmds[0] == "claude --model opus" and cmds[3] == "claude --model haiku", cmds
+        assert web._api_fanout({"block": "ACT", "config": {}}) is None
+        print("   fanout projeté : 4 candidats, la surcharge de cmd résolue ✓")
 
         # les fichiers du workspace, avec l'URL qui les sert
         names = {f["name"]: f["href"] for f in payload["files"]}

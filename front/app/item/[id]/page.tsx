@@ -55,10 +55,14 @@ export default async function ItemPage({
     <div className="flex flex-col gap-6">
       <ItemHeader id={item} initial={view.item} />
       <ItemQuestions id={item} initial={view.questions} />
-      <ItemGraph id={item} initial={view.graph} />
+      <ItemGraph id={item} initial={{ graph: view.graph, runs: view.runs }} />
       <ItemJournal
         id={item}
-        initial={{ journal: view.journal, runs: view.runs }}
+        initial={{
+          journal: view.journal,
+          runs: view.runs,
+          graph: view.graph,
+        }}
       />
       <ItemRuns id={item} initial={view.runs} />
       <ItemCriteria
