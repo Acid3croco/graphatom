@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import blocks  # noqa: E402
+from graphatom import blocks, kernel  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +43,13 @@ class FakeConn:
         return None
 
 
+class RouteConn:
+    """Le routage écrit ses deux mutations ; leur contenu ne sert pas ici."""
+
+    def execute(self, sql, *args):
+        return self
+
+
 def context(node: str, attempt: int, cmd: str, outcome: str,
             item_id: int = ITEM_ID) -> blocks.Context:
     """Un nœud ACT réel, sans dépôt ni base, avec son workspace de candidat."""
@@ -53,6 +60,16 @@ def context(node: str, attempt: int, cmd: str, outcome: str,
                                  "timeout_s": 10, "silence_s": 10}}}
     return blocks.Context(FakeConn(), run, {"id": item_id, "subject_id": 1},
                           spec, {"name": "failure-trace"})
+
+
+def route(ctx: blocks.Context, outcome: str) -> None:
+    """Le vrai point de routage, qui écrit la trace avant de bouger l'item."""
+    item = {"id": ctx.item["id"], "state": ctx.run["node"],
+            "cycle": 1, "version": 1}
+    bundle = {"nodes": {ctx.run["node"]: ctx.node,
+                        "suite": {"terminal": True}},
+              "on_kernel": {"escalate_to": "suite", "exhausted_to": "suite"}}
+    kernel._route(RouteConn(), item, bundle, ctx.run, outcome, kind="result")
 
 
 def fake_codex(path: Path) -> None:
@@ -79,8 +96,8 @@ def rendered_failure(workdir: Path) -> tuple[Path, dict]:
     ctx = context("codex", 1, cmd, "failed")
     result = blocks.act(ctx)
     assert result["outcome"] == "failed", result
-    path = blocks.write_failure_trace(ITEM_ID, ctx.run, result["outcome"])
-    assert path == blocks.failure_path(ITEM_ID)
+    route(ctx, result["outcome"])
+    path = blocks.failure_path(ITEM_ID)
     return path, json.loads(path.read_text())
 
 
@@ -91,8 +108,8 @@ def dead_failure() -> tuple[Path, dict]:
     ctx = context("deploy", 2, cmd, "failed")
     result = blocks.act(ctx)
     assert result["outcome"] == "crashed", result
-    path = blocks.write_failure_trace(ITEM_ID, ctx.run, result["outcome"])
-    assert path == blocks.failure_path(ITEM_ID)
+    route(ctx, result["outcome"])
+    path = blocks.failure_path(ITEM_ID)
     return path, json.loads(path.read_text())
 
 
@@ -105,7 +122,7 @@ def success_writes_nothing() -> None:
     ctx = context("release", 1, cmd, "done", item_id=item_id)
     result = blocks.act(ctx)
     assert result["outcome"] == "done", result
-    assert blocks.write_failure_trace(item_id, ctx.run, result["outcome"]) is None
+    route(ctx, result["outcome"])
     assert not path.exists(), path
 
 
