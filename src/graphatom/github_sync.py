@@ -1,7 +1,7 @@
 """Le canal GitHub — module hors noyau, par polling.
 
 GitHub est l'interface humaine et la cible des effets ; Postgres reste
-l'unique autorité d'exécution. Ce module fait sept choses, et refuse
+l'unique autorité d'exécution. Ce module fait huit choses, et refuse
 tout le reste :
 
   1. admission  — une issue ouverte portant le label `graphatom` devient
@@ -41,6 +41,11 @@ tout le reste :
                   terminal sans condition — l'issue peut être déjà fermée ;
                   `rail:stalled` s'y ajoute quand le worker ne bat plus
   7. rapports   — un item terminal reçoit son commentaire de clôture
+  8. découpe    — hors tick, appelée par le nœud `scope` qui découpe
+                  (`graphatom split-close`) : les issues qui attendaient la
+                  mère sont reposées sur la dernière fille, puis seulement
+                  la mère est fermée. Sans ce report, une fermeture qui ne
+                  livre aucun travail libérerait ses dépendants pour rien
 
 Aucun parsing de langage naturel. Aucune lecture de GitHub comme état
 d'item. Chaque prise de parole du rail est un effet : clé logique,
@@ -827,13 +832,18 @@ def tick(conn: Connection, gh: GitHub, revision: str, allowed: set[str],
         print(f"github injoignable : {exc} — on réessaie", flush=True)
 
 
-def sync_forever(repo: str, bundle_path: str, poll_s: float = 15.0) -> None:
+def from_env(repo: str) -> GitHub:
+    """Le client du jeton d'environnement — le seul endroit qui le lit."""
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
         raise SystemExit("GITHUB_TOKEN manquant")
+    return GitHub(repo, token)
+
+
+def sync_forever(repo: str, bundle_path: str, poll_s: float = 15.0) -> None:
     allowed = set(filter(None, os.environ.get(
         "GRAPHATOM_ANSWERERS", repo.split("/")[0]).split(",")))
-    gh = GitHub(repo, token)
+    gh = from_env(repo)
     drawn: dict[int, int] = {}   # item → version de trajectoire déjà peinte
     said: set[tuple[int, str]] = set()  # actes de parole d'avant l'admission, déjà dits
 
