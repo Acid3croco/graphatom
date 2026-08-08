@@ -651,15 +651,26 @@ d'`usage.json` : ces nœuds ne coûtent aucun token, et la page de l'item le
 montre — c'est exactement le gain que l'on cherchait.
 
 **`release` est le seul hybride : un agent script-first.** Tout le nominal
-vit dans [`scripts/release.sh`](scripts/release.sh) — commit (titre de
-l'issue, puis `Closes #<num>`), push, PR ouverte ou retrouvée, merge
-surveillé jusqu'au SHA, un code de retour par pas. Le prompt du nœud tient
-en une phrase : lance le script ; sortie 0 → `done`, rien d'autre — le
-nominal coûte un aller-retour de modèle. Si le script lâche, l'agent a le
-droit d'agir, dans une frontière stricte : réparer la mécanique — relancer
-un push, recréer une PR obsolète d'un cycle passé, rebaser quand le rebase
-passe tout seul — puis relancer le script, oui ; merger du code qu'il a
-modifié, jamais. D'où trois issues fermées : `done`, `conflict` (l'agent
+vit dans [`scripts/release.sh`](scripts/release.sh) — rapprochement
+d'`origin/main`, commit (titre de l'issue, puis `Closes #<num>`), push, PR
+ouverte ou retrouvée, merge surveillé jusqu'au SHA, un code de retour par
+pas. Le rapprochement est le pas le plus récent, et il dit la règle du
+script entière : `git fetch origin` puis `git merge origin/main` dans le
+worktree de l'item, avant le commit. Main n'a pas bougé, ou a bougé
+ailleurs — le cas fréquent — et personne n'est dérangé ; le conflit
+textuel, lui, annule proprement le merge, nomme ses fichiers dans
+`release.md` et sort en code 9. Le pas tourne avant le commit, comme
+l'issue le demande : le travail de l'item est donc encore à nu, et si main
+a bougé sur un fichier qu'il tient ouvert, git refuse le merge d'entrée —
+même sans conflit de contenu. C'est le second visage du code 9, et il coûte
+une reprise que le même pas placé après le commit s'épargnerait. Un merge, jamais un rebase : la branche est
+publique dès son premier push, son histoire ne se réécrit pas. Le prompt du
+nœud tient en une phrase : lance le script ; sortie 0 → `done`, rien
+d'autre — le nominal coûte un aller-retour de modèle. Si le script lâche,
+l'agent a le droit d'agir, dans une frontière stricte : réparer la
+mécanique — relancer un push, recréer une PR obsolète d'un cycle passé,
+résoudre le conflit du code 9 — puis relancer le script, oui ; merger du
+code qu'il a modifié, jamais. D'où trois issues fermées : `done`, `conflict` (l'agent
 n'y arrive pas, l'humain reprend) et **`rebased`** — il a fallu résoudre de
 vrais conflits, donc pas de merge : l'arête renvoie la branche à
 `test_backend`, parce qu'une fusion est une combinaison que personne n'a
