@@ -90,6 +90,7 @@ OUTBOX_NAME = "effects_outbox.log"  # sous DATA_DIR, résolu au moment de l'effe
 GRACE_S = 5.0  # entre le SIGTERM et le SIGKILL du groupe de l'agent
 PGID_FILE = "agent.pgid"  # la trace qui survit au worker, écrasée à chaque tentative
 OUTCOME_NAME = "outcome.json"  # transitoire : purgé avant chaque tentative
+STARVED_NAME = "starved.json"  # idem — une panne de crédits nommée par l'adaptateur
 PROMPT_NAME = "prompt.md"  # l'interface avec le cmd, archivée après la tentative
 USAGE_NAME = "usage.json"  # idem — ce que l'agent veut bien dire de sa consommation
 TAIL_LINES = 20  # queue du log rendue dans l'autopsie d'une tentative crashée
@@ -262,6 +263,20 @@ DEATHS = {  # ce qui a tué la tentative précédente, dit en clair au repreneur
 }
 
 
+def _death(previous: dict) -> str:
+    """La mort précédente, avec la raison du fournisseur s'il l'a donnée."""
+    if previous["outcome"] == "starved":
+        result = previous.get("result") or {}
+        provider = result.get("provider")
+        reason = result.get("reason")
+        if provider and reason:
+            return (f"a perdu son fournisseur {provider} : {reason}. "
+                    "Ce qu'elle avait fait est resté là")
+    return DEATHS.get(previous["outcome"],
+                      f"a rendu « {previous['outcome']} », et ce qu'elle a "
+                      "laissé est toujours là")
+
+
 def _last_attempt(ctx: Context) -> dict | None:
     """La dernière tentative achevée de ce nœud, tous passages confondus.
 
@@ -276,7 +291,7 @@ def _last_attempt(ctx: Context) -> dict | None:
     C'est exactement le cas qu'une reprise doit couvrir.
     """
     return ctx.conn.execute(
-        "SELECT cycle, attempt, outcome FROM node_run "
+        "SELECT cycle, attempt, outcome, result FROM node_run "
         "WHERE item_id = %s AND node = %s AND outcome IS NOT NULL "
         "ORDER BY cycle DESC, attempt DESC LIMIT 1",
         (ctx.item["id"], ctx.run["node"]),
@@ -293,7 +308,7 @@ def _work_files(workspace: Path) -> list[str]:
     pendu qui n'a laissé qu'un journal vide — et une reprise inventée est
     pire que pas de reprise du tout.
     """
-    traces = {PGID_FILE, OUTCOME_NAME, PROMPT_NAME, USAGE_NAME}
+    traces = {PGID_FILE, OUTCOME_NAME, STARVED_NAME, PROMPT_NAME, USAGE_NAME}
     return sorted(p.name for p in workspace.iterdir()
                   if p.is_file() and p.name not in traces
                   and not p.name.startswith(("agent-", "prompt-", "usage-")))
@@ -369,9 +384,7 @@ def _reprise(ctx: Context, workspace: Path) -> str:
     # la liste, elle, ne cache rien : les traces des tentatives passées se
     # lisent aussi, et leur journal dit souvent où celle d'avant s'est arrêtée
     files = sorted(p.name for p in workspace.iterdir() if p.is_file())
-    death = DEATHS.get(previous["outcome"],
-                       f"a rendu « {previous['outcome']} », et ce qu'elle a "
-                       "laissé est toujours là")
+    death = _death(previous)
     return (
         f"\n\n--- Reprise de la tentative {previous['attempt']} du passage "
         f"{previous['cycle']} ---\n"
@@ -507,7 +520,8 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
     ).fetchone()["subject_key"]
 
     outcome_path = workspace / OUTCOME_NAME
-    for transient in (outcome_path, workspace / USAGE_NAME):
+    starved_path = workspace / STARVED_NAME
+    for transient in (outcome_path, starved_path, workspace / USAGE_NAME):
         transient.unlink(missing_ok=True)  # rien de la tentative précédente
     (workspace / PROMPT_NAME).write_text(_prompt(ctx, workspace, subject))
 
@@ -555,8 +569,26 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
         data = json.loads(outcome_path.read_text())
         outcome, summary = data["outcome"], data.get("summary", "")
     except (OSError, ValueError, KeyError, TypeError) as exc:  # pas d'issue valide
-        return _autopsy(proc, log, exc, timeout=False)
+        return _starved(starved_path) or _autopsy(proc, log, exc, timeout=False)
     return {"outcome": outcome, "summary": summary}
+
+
+def _starved(path: Path) -> dict | None:
+    """La panne de fournisseur déclarée par l'adaptateur, si elle est valide.
+
+    Le bloc ne reconnaît aucun message de CLI. Il ne fait que lire le contrat
+    de fichier : deux chaînes non vides, le fournisseur et sa raison exacte.
+    Un fichier absent ou mal formé ne change rien au verdict `crashed`.
+    """
+    try:
+        data = json.loads(path.read_text())
+        provider, reason = data["provider"], data["reason"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not all(isinstance(value, str) and value.strip()
+               for value in (provider, reason)):
+        return None
+    return {"outcome": "starved", "provider": provider, "reason": reason}
 
 
 def _autopsy(proc: subprocess.Popen, log: Path, exc: BaseException,
