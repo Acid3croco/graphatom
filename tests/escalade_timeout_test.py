@@ -19,6 +19,8 @@ bloc jusqu'au commentaire qui pose la question à l'humain :
   6. la révocation ne bouge pas : fence +1 des deux côtés, orphelin tué
   7. la question d'escalade née d'un timeout dit le mot, le budget dépassé
      et la queue du journal
+  8. `starved` escalade aussi dès la tentative 1, à tout compteur
+  9. sa question porte le fournisseur et sa raison exacte
 
 Le test ne détruit rien : il crée ses sujets et ses items, et laisse la base
 en place — il peut tourner à côté d'un rail vivant.
@@ -54,6 +56,8 @@ JOURNAL = "avant-dernière ligne\nl'agent en était là quand le bail a sauté\n
 LIGNE = "l'agent en était là quand le bail a sauté"
 ITEM_FACTICE = 0      # l'item des contextes de bloc : jamais un item de la base
 REPO = f"test-{uuid.uuid4().hex[:8]}/escalade"  # le dépôt du canal, à ce test seul
+PROVIDER = "codex"
+STARVED_REASON = "You have 0 weighted tokens left"
 
 
 def bundle(nom: str) -> dict:
@@ -247,6 +251,31 @@ def escalade_directe(conn, revision: str) -> int:
     return item_id
 
 
+def escalade_affamee(conn, revision: str) -> int:
+    """8. `starved` est une issue noyau et escalade sans seconde tentative."""
+    assert "starved" in graph.KERNEL_OUTCOMES
+    item_id = kernel.admit(conn, revision, f"gh:{REPO}#112")
+    run = kernel.claim(conn, item_id)
+    assert run["attempt"] == 1, run
+    kernel.apply(conn, run["id"], {
+        "outcome": "starved", "provider": PROVIDER, "reason": STARVED_REASON,
+    })
+    item = etat(conn, item_id)
+    event = dernier_event(conn, item_id)
+    assert item["state"] == "escalate", item
+    assert (event["to_state"], event["outcome"]) == ("escalate", "starved"), event
+    assert runs_du_noeud(conn, item_id, "travail") == 1, "le nœud affamé a été rouvert"
+
+    for attempt in (0, 1, MAX_ATTEMPTS, MAX_ATTEMPTS + 1):
+        autre = item_neuf(conn, revision, "starved-compteur")
+        assert route(conn, autre, "starved", attempt) == "escalate", attempt
+        assert dernier_event(conn, autre)["outcome"] == "starved"
+        assert runs_du_noeud(conn, autre, "travail") == 0, "le nœud a été rouvert"
+    print(f"8. starved → escalate aux compteurs 0, 1, {MAX_ATTEMPTS}, "
+          f"{MAX_ATTEMPTS + 1}, aucun re-run ✓")
+    return item_id
+
+
 def seconde_chance(conn, revision: str) -> None:
     """4. une panne et une sortie malformée gardent leur retry sur place."""
     for outcome in ("crashed", "invalid_result"):
@@ -305,10 +334,11 @@ def faucheur(conn, revision: str) -> None:
           "côtés, queue du journal au post-mortem ✓")
 
 
-def question_d_escalade(conn, item_id: int) -> None:
-    """7. la question dit le timeout, le budget dépassé et la queue du log."""
+def questions_d_escalade(conn, timeout_id: int, starved_id: int) -> None:
+    """7 et 9. Chaque question dit la cause qui a armé son escalade."""
     gh = gs.GitHub(REPO, "jeton")  # aucun appel sortant : on ne construit que le corps
-    q = next(q for q in gs._gh_questions(conn, gh) if q["item_id"] == item_id)
+    questions = {q["item_id"]: q for q in gs._gh_questions(conn, gh)}
+    q = questions[timeout_id]
     corps = gs._question_body(conn, q, "http://127.0.0.1:9")
 
     assert "timeout" in corps.lower(), corps
@@ -316,6 +346,14 @@ def question_d_escalade(conn, item_id: int) -> None:
     assert LIGNE in corps, corps
     print(f"7. question {q['id']} : « timeout », budget {BUDGET_S} s et queue "
           "du journal dans le commentaire ✓")
+
+    q = questions[starved_id]
+    corps = gs._question_body(conn, q, "http://127.0.0.1:9")
+    assert gs.STARVED_TITLE in corps, corps
+    assert PROVIDER in corps, corps
+    assert STARVED_REASON in corps, corps
+    print(f"9. question {q['id']} : fournisseur {PROVIDER} et raison exacte dans "
+          "le commentaire ✓")
 
 
 def main() -> None:
@@ -328,13 +366,14 @@ def main() -> None:
         with db.connect() as conn:
             revision = graph.publish(conn, bundle(f"escalade-timeout-{REPO[5:13]}"))
             escalade = escalade_directe(conn, revision)
+            affamee = escalade_affamee(conn, revision)
             seconde_chance(conn, revision)
             faucheur(conn, revision)
-            question_d_escalade(conn, escalade)
+            questions_d_escalade(conn, escalade, affamee)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
-    print("\nescalade timeout : OK — un dépassement escalade, une panne retente")
+    print("\nescalade : OK — timeout et fournisseur affamé escaladent directement")
 
 
 if __name__ == "__main__":

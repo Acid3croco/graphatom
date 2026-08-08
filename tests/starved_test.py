@@ -8,12 +8,14 @@ l'adaptateur doit reconnaître. Le test tranche quatre propriétés :
   2. sans fichier valide, il garde `crashed`
   3. `starved.json` est purgé avant la tentative suivante
   4. les adaptateurs opencode et codex reconnaissent leurs motifs fermés
+  5. les commandes Claude du graph reconnaissent leur limite mensuelle
 
 Usage : uv run python tests/starved_test.py
 """
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -87,6 +89,8 @@ def contrat_du_bloc(workdir: Path) -> None:
            "> starved.json; exit 9")
     starved = blocks.act(contexte(workdir, cmd, 2))
     assert starved == {"outcome": "starved", "provider": "codex", "reason": reason}, starved
+    reprise = blocks._death({"outcome": "starved", "result": starved})
+    assert "codex" in reprise and reason in reprise, reprise
     print("2. starved.json valide sans outcome.json → starved, raison intacte ✓")
 
     invalide = blocks.act(contexte(
@@ -106,7 +110,9 @@ def contrat_du_bloc(workdir: Path) -> None:
 def faux_cli(path: Path, sortie: str, stderr: bool = False) -> None:
     """Une CLI qui rejoue une sortie enregistrée, puis sort en erreur."""
     cible = " >&2" if stderr else ""
-    path.write_text(f"#!/bin/sh\nprintf '%s\\n' '{sortie}'{cible}\nexit 1\n")
+    path.write_text(
+        f"#!/bin/sh\nprintf '%s\\n' {shlex.quote(sortie)}{cible}\nexit 1\n"
+    )
     path.chmod(0o755)
 
 
@@ -138,6 +144,37 @@ def joue_adaptateur(workdir: Path, provider: str) -> None:
     print(f"4. {provider} : sortie enregistrée → starved.json, raison intacte ✓")
 
 
+def joue_claude(workdir: Path) -> None:
+    """5. Le cmd Claude du graph reconnaît la sortie réelle observée."""
+    bundle = json.loads((ROOT / "examples" / "code-task.json").read_text())
+    nodes = (bundle["nodes"][name]["config"]["agent"]["cmd"]
+             for name in ("scope", "implement", "validate", "judge"))
+    cmds = list(nodes)
+    for cmd in cmds:
+        assert "You've hit your monthly spend limit" in cmd, cmd
+        assert "starved.json" in cmd and "--arg provider claude" in cmd, cmd
+
+    workspace = workdir / "claude"
+    workspace.mkdir()
+    (workspace / "prompt.md").write_text("fais le travail\n")
+    binaires = workspace / "bin"
+    binaires.mkdir()
+    cli = binaires / "claude"
+    reason = ("You've hit your monthly spend limit · raise it at "
+              "claude.ai/settings/usage?from=cc_cli_limit_message")
+    faux_cli(cli, reason, stderr=True)
+    done = subprocess.run(
+        ["bash", "-c", cmds[0]], cwd=workspace,
+        env=os.environ | {"PATH": f"{binaires}:{os.environ['PATH']}"},
+        capture_output=True, text=True,
+    )
+
+    assert done.returncode == 1, (done.returncode, done.stdout, done.stderr)
+    result = json.loads((workspace / blocks.STARVED_NAME).read_text())
+    assert result == {"provider": "claude", "reason": reason}, result
+    print("5. quatre cmd Claude portent les motifs ; limite mensuelle → starved ✓")
+
+
 def main() -> None:
     workdir = Path(tempfile.mkdtemp(prefix="graphatom-starved-"))
     os.environ.pop("GRAPHATOM_REPO_DIR", None)
@@ -146,6 +183,7 @@ def main() -> None:
         contrat_du_bloc(workdir)
         for provider in ("opencode", "codex"):
             joue_adaptateur(workdir, provider)
+        joue_claude(workdir)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
