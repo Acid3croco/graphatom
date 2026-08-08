@@ -29,6 +29,12 @@ services:
       timeout: 2s
       retries: 15
 
+  # La migration. Elle pose ses deux délais de sûreté (voir README, « une
+  # transaction oubliée ») et, bloquée par un verrou, échoue en quelques
+  # secondes en nommant la session fautive. Les trois services ci-dessous
+  # gardent donc leur `service_completed_successfully` : la porte ne peut
+  # plus rester fermée sans limite, puisque `init` ne peut plus attendre
+  # sans limite — et le déploiement suivant reprend tout seul.
   init:
     build: .
     command: graphatom init-db

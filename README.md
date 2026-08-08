@@ -73,6 +73,9 @@ uv run python tests/reconnect_test.py                # couper la base sous le wo
 uv run python tests/migration_test.py                # migrer le schéma sous le
                                                      # worker : ses plans cachés
                                                      # périment, il encaisse et le dit
+uv run python tests/verrou_test.py                   # la transaction oubliée d'un
+                                                     # tiers : elle meurt seule, et
+                                                     # la migration bloquée le dit
 uv run python tests/links_test.py                    # les liens du frontend vers
                                                      # l'issue et la PR, et le titre
                                                      # dans la table, sans base
@@ -424,6 +427,54 @@ rien au cas qui a motivé la mesure : quand seul le front traîne, les autres
 portes concluent en une sonde et lui laissent le budget entier.
 `verify_deploy.md` porte, porte par porte, le temps attendu avant de
 conclure — c'est ce qui permettra de savoir si 60 s est bien réglé.
+
+### Une transaction oubliée ne met pas le site à terre
+
+Le 2026-08-08, le site a rendu 502 sur toutes ses pages pendant un quart
+d'heure, base et worker en parfait état. La chaîne : un client externe en
+lecture seule — un script de surveillance, pas le rail — laisse une
+transaction ouverte et inactive, qui tient un `AccessShareLock` sur
+`subject` ; `init-db` demande derrière elle l'`AccessExclusiveLock` de son
+`ALTER TABLE` et attend **sans limite** ; la file d'attente des verrous
+étant FIFO, toutes les lectures s'empilent derrière ce DDL ; et `web`,
+`front` et `github-sync` dépendant d'`init` en
+`service_completed_successfully`, la porte ne s'ouvre jamais. Il a fallu un
+`pg_terminate_backend` à la main. Le code du rail n'y était pour rien : le
+défaut est qu'**un client tiers mal élevé suffisait à tout arrêter**.
+
+Trois protections indépendantes, toutes posées par le passage d'`init-db`
+(`db.init_db`), toutes locales — pas un démon de plus :
+
+1. **une transaction inactive meurt d'elle-même.**
+   `idle_in_transaction_session_timeout`, 5 min par défaut
+   (`GRAPHATOM_IDLE_TX_TIMEOUT`), posé sur le rôle applicatif pour la base
+   du passage. C'est la protection qui, seule, aurait évité toute la
+   panne : la session fautive disparaît avant d'avoir des conséquences. Le
+   rail lui-même n'en voit jamais la couleur — `db.connect` ouvre en
+   `autocommit`, et chaque `conn.transaction()` est bornée.
+2. **une migration n'attend jamais sans limite.** `lock_timeout`, 3 s par
+   défaut (`GRAPHATOM_LOCK_TIMEOUT`), posé avant le DDL, avec 3 essais
+   espacés de 2 s. Bloquée, la migration échoue en moins de 10 s **en
+   nommant le bloqueur** — pid, état et requête, lus dans `pg_locks` joint
+   à `pg_stat_activity`. « Bloqué » sans dire par qui n'aide personne à
+   trancher entre attendre et intervenir.
+3. **la porte de démarrage reste ce qu'elle est.** Des deux pistes
+   ouvertes — `init` échoue vite, ou les services de lecture démarrent
+   malgré tout —, **c'est la première qui est retenue** : `web`, `front` et
+   `github-sync` gardent leur `depends_on: init: service_completed_successfully`
+   dans `docker-compose.yml`. La raison : la protection 2 supprime le cas
+   qui rendait cette porte dangereuse, l'attente sans limite. Une porte qui
+   ne peut plus rester fermée qu'une dizaine de secondes n'est plus une
+   panne, et le déploiement suivant reprend tout seul. Laisser démarrer des
+   services de lecture sur une base dont on ne sait pas si le schéma est
+   celui du code, c'est en revanche servir des pages fausses au lieu d'une
+   page absente — plus de complexité pour une garantie plus faible.
+
+[`tests/verrou_test.py`](tests/verrou_test.py) rejoue la panne en entier,
+dans une base à lui : la transaction tierce inactive est terminée par la
+base, `init-db` échoue en nommant le pid et la requête, puis le bloqueur
+parti de lui-même, un simple nouveau démarrage passe — le test n'appelle
+`pg_terminate_backend` nulle part.
 
 ### Un seul déploiement à la fois : la concurrence est une file
 
