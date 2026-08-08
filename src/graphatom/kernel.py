@@ -45,6 +45,12 @@ groupe de processus : le travail du gagnant est promu sur la branche de
 l'item, et les ateliers de tous les candidats sont détruits. Sur *tous* les
 chemins terminaux — la réduction, mais aussi un `wall_deadline` tombé en
 pleine course. Voir `worktree`.
+
+Deux réductions, et elles ne coûtent pas la même chose. `first_pass` est
+monotone : le premier succès tranche, personne n'attend. `keep_n` attend
+tout le monde et laisse passer n finalistes au lieu d'un gagnant — le noyau
+ne choisit alors rien entre eux, ni ne range leurs ateliers : c'est le nœud
+d'aval, un JUDGE arbitre, qui élit et qui range. Voir `blocks.judge`.
 """
 
 import datetime as dt
@@ -258,6 +264,11 @@ def apply(conn: psycopg.Connection, run_id: int, submitted: dict) -> str:
             (outcome, json.dumps(submitted), now(), run_id),
         )
         losers = _settle(conn, item, bundle, run, outcome, kind="result")
+        # `keep_n` recale les réussites au-delà de la n-ième : ce run-ci peut
+        # être l'une d'elles, et rendre « applied » mentirait à l'appelant
+        statut = conn.execute(
+            "SELECT status FROM node_run WHERE id = %s", (run_id,)
+        ).fetchone()["status"]
     # rendu et classé : ce run ne vole plus, il sort de la mémoire du
     # processus. Ici et pas à l'entrée : un `apply` qui échoue — le thread
     # d'un bloc qui perd la base — laisse le run en vol sous ce worker-ci,
@@ -268,8 +279,8 @@ def apply(conn: psycopg.Connection, run_id: int, submitted: dict) -> str:
     # hors transaction : la grâce du SIGTERM ne tient pas les verrous
     for loser in losers:
         revoke_orphan(item["id"], loser)
-    _ateliers(conn, item, run)
-    return "applied"
+    _ateliers(conn, item, bundle, run)
+    return statut
 
 
 def apply_item(conn: psycopg.Connection, item_id: int, outcome: str, kind: str) -> None:
@@ -307,12 +318,28 @@ def _settle(conn, item, bundle, run, outcome: str, kind: str) -> list[int]:
 
 
 def _reduce(conn, item, bundle, run, outcome: str, kind: str) -> list[int]:
-    """`first_pass` : le premier candidat qui réussit gagne, les autres meurent.
+    """La réduction du nœud, celle que le bundle a déclarée. Rend les révoqués.
 
     Un succès est une issue que le nœud a déclarée par une arête ; une issue
     du noyau — `crashed`, `timed_out`, `stalled`, `invalid_result` — est un
     échec. La distinction est mécanique, elle ne demande aucun modèle : le
-    nœud a nommé son vocabulaire, le noyau nomme ses ratés.
+    nœud a nommé son vocabulaire, le noyau nomme ses ratés. Les deux
+    réductions la lisent pareil.
+
+    Le prédicat s'évalue sous le verrou de l'item et ne dépend que des runs
+    terminés : un résultat qui arrive après la décision ne la change jamais.
+    """
+    fanout = bundle["nodes"][run["node"]]["config"]["fanout"]
+    if fanout["reduce"] == "first_pass":
+        return _first_pass(conn, item, bundle, run, outcome, kind)
+    if fanout["reduce"] == "keep_n":
+        return _keep_n(conn, item, bundle, run, fanout["n"], kind)
+    # la publication ne laisse rien passer d'autre
+    raise GraphError(f"réduction inconnue à l'exécution : {fanout['reduce']}")
+
+
+def _first_pass(conn, item, bundle, run, outcome: str, kind: str) -> list[int]:
+    """Le premier candidat qui réussit gagne, les autres meurent.
 
     La réduction est monotone : elle décide dès qu'un candidat réussit, sans
     attendre le plus lent — c'est la seule qui n'introduit aucune attente, et
@@ -322,29 +349,70 @@ def _reduce(conn, item, bundle, run, outcome: str, kind: str) -> list[int]:
     Tous en échec : le nœud prend l'issue la plus fréquente, et `_route` la
     traite comme celle d'un nœud ordinaire — les arêtes d'échec et le compte
     des tentatives ne changent pas d'un pouce.
-
-    Le prédicat s'évalue sous le verrou de l'item et ne dépend que des runs
-    terminés : un résultat qui arrive après la décision ne la change jamais.
     """
-    reduce = bundle["nodes"][run["node"]]["config"]["fanout"]["reduce"]
-    if reduce != "first_pass":  # la publication ne laisse rien passer d'autre
-        raise GraphError(f"réduction inconnue à l'exécution : {reduce}")
-
     if outcome not in KERNEL_OUTCOMES:  # un succès : la course s'arrête là
         losers = _revoke_losers(conn, item, run)
         _route(conn, item, bundle, run, outcome, kind=kind)
         return losers
 
-    batch = conn.execute(
-        "SELECT * FROM node_run WHERE item_id = %s AND node = %s AND cycle = %s "
-        "AND attempt = %s ORDER BY finished_at, id",
-        (item["id"], run["node"], run["cycle"], run["attempt"]),
-    ).fetchall()
+    batch = _batch(conn, item, run)
     if any(r["status"] == "running" for r in batch):
         return []  # la course continue : un candidat en échec n'emporte rien
     perdant = _majoritaire([r for r in batch if r["outcome"]])
     _route(conn, item, bundle, perdant, perdant["outcome"], kind=kind)
     return []
+
+
+def _keep_n(conn, item, bundle, run, n: int, kind: str) -> list[int]:
+    """Les n premiers candidats qui ont réussi passent en aval, ensemble.
+
+    Contrairement à `first_pass`, elle **attend tout le monde** : garder les
+    n meilleurs demande de les avoir tous vus, et un succès précoce ne peut
+    donc rien trancher seul. C'est le prix de la sélection, et c'est le chien
+    de garde du silence qui le rend tenable — un seul candidat pendu
+    retiendrait sinon tout le fan-out jusqu'au bail.
+
+    La course finie, les réussites se comptent dans l'ordre où elles se sont
+    terminées : les n premières restent `applied` — ce sont les finalistes, et
+    c'est à ce statut que le nœud arbitre les reconnaîtra —, les suivantes
+    sont classées `superseded`. Aucune réussite : rien de neuf, l'issue
+    majoritaire est routée exactement comme sous `first_pass`.
+
+    L'item, lui, avance sur une seule arête : celle de l'issue majoritaire des
+    finalistes. Le choix entre eux n'appartient pas au noyau — c'est tout
+    l'objet du nœud d'aval.
+    """
+    batch = _batch(conn, item, run)
+    if any(r["status"] == "running" for r in batch):
+        return []  # keep_n attend tout le monde : personne ne tranche seul
+
+    reussis = [r for r in batch if r["outcome"] and r["outcome"] not in KERNEL_OUTCOMES]
+    if not reussis:
+        perdant = _majoritaire([r for r in batch if r["outcome"]])
+        _route(conn, item, bundle, perdant, perdant["outcome"], kind=kind)
+        return []
+
+    recales = [r["id"] for r in reussis[n:]]
+    if recales:
+        conn.execute(
+            "UPDATE node_run SET status = 'superseded' WHERE id = ANY(%s)", (recales,)
+        )
+    finaliste = _majoritaire(reussis[:n])
+    _route(conn, item, bundle, finaliste, finaliste["outcome"], kind=kind)
+    return []
+
+
+def _batch(conn, item, run) -> list[dict]:
+    """Les runs de la tentative, triés par date de fin — la course entière.
+
+    L'ordre est celui qui départage : le premier terminé tranche une égalité
+    d'issues, et c'est lui aussi que `keep_n` garde en premier.
+    """
+    return conn.execute(
+        "SELECT * FROM node_run WHERE item_id = %s AND node = %s AND cycle = %s "
+        "AND attempt = %s ORDER BY finished_at, id",
+        (item["id"], run["node"], run["cycle"], run["attempt"]),
+    ).fetchall()
 
 
 def _majoritaire(runs: list[dict]) -> dict:
@@ -380,7 +448,7 @@ def _revoke_losers(conn, item, winner) -> list[int]:
     return [r["id"] for r in losers]
 
 
-def _ateliers(conn, item, run) -> None:
+def _ateliers(conn, item, bundle, run) -> None:
     """La course finie : le gagnant promu, les ateliers des candidats détruits.
 
     Le prédicat est celui de la réduction, lu sur les mêmes lignes : tant
@@ -388,6 +456,11 @@ def _ateliers(conn, item, run) -> None:
     tentative close, le travail du gagnant rejoint la branche de l'item, et
     tous les ateliers de candidats disparaissent — celui du gagnant compris,
     puisqu'il n'a plus rien d'unique.
+
+    `keep_n` fait exception, et c'est toute sa raison d'être : elle ne
+    désigne pas de gagnant, elle passe des finalistes en aval. Leurs ateliers
+    sont ce que le nœud arbitre va lire, et c'est lui qui promeut l'élu puis
+    range tout le reste. Ranger ici détruirait ce qu'on veut faire juger.
 
     Un nœud sans fan-out n'a pas de candidat : rien de tout ceci ne le
     concerne, et son atelier d'item reste celui du shell du graph.
@@ -397,6 +470,8 @@ def _ateliers(conn, item, run) -> None:
     """
     if run["candidate"] is None:
         return
+    if bundle["nodes"][run["node"]]["config"]["fanout"]["reduce"] == "keep_n":
+        return  # les ateliers des finalistes attendent le juge
     batch = conn.execute(
         "SELECT candidate, status FROM node_run WHERE item_id = %s AND node = %s "
         "AND cycle = %s AND attempt = %s",
@@ -563,5 +638,5 @@ def reap(conn: psycopg.Connection) -> int:
         # hors transaction : la grâce du SIGTERM ne tient pas les verrous
         for orphan in (run["id"], *losers):
             revoke_orphan(item["id"], orphan)
-        _ateliers(conn, item, run)
+        _ateliers(conn, item, bundle, run)
     return len(expired)
