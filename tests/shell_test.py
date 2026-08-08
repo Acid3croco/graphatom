@@ -3,6 +3,8 @@
 Les `cmd` du graph sont joués tels quels sur un dépôt jetable — aucun
 modèle, aucun réseau, aucun docker. Ce qu'on vérifie, c'est la promesse
 qui autorise un nœud sans agent : il écrit toujours son `outcome.json`.
+Une base est nécessaire depuis que `deploy` y pose le verrou de sa file ;
+le test prend celle que `GRAPHATOM_DSN` désigne, sans y écrire une ligne.
 
   1. `worktree` crée le worktree de l'item sur `rail/issue-<num>` depuis
      `origin/main`, et le dit dans `worktree.md`
@@ -30,6 +32,19 @@ qui autorise un nœud sans agent : il écrit toujours son `outcome.json`.
      tout de suite, sans consommer le budget d'attente
  14. ce budget tient dans le `timeout_s` du nœud, donc dans son bail, et le
      README le justifie
+ 15. deux `deploy` lancés en même temps sur la même cible déploient l'un
+     après l'autre, tous deux en succès : la concurrence est une file
+ 16. le second voit que le SHA visé est déjà déployé et conclut sans
+     relancer `docker compose up` — son rapport porte la comparaison
+ 17. le verrou d'une session morte ne bloque personne, et rien sur disque
+     ne survit à cette mort : le verrou n'est pas un fichier
+ 18. l'attente est bornée, et son dépassement rend `waiting` — que le
+     graph renvoie sur `deploy`, jamais sur `escalate`
+ 19. le conteneur bâtard d'un `up` interrompu est retiré, et le `up` rejoué
+ 20. les garde-fous du verrou : seul `deploy` le prend, son attente tient
+     dans le couperet du nœud, et le README comme le prompt le justifient
+ 21. le `python3` du PATH n'a pas psycopg — celui du clone de référence
+     l'a, et c'est lui qui prend le verrou
 
 Usage : uv run python tests/shell_test.py
 """
@@ -46,9 +61,29 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from graphatom import db  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 BUNDLE = json.loads((ROOT / "examples" / "code-task.json").read_text())
 SUJET = "gh:Acid3croco/graphatom#77"
+# la base où `deploy` pose son verrou. Celle de l'item qui nous lance fait
+# l'affaire : les verrous consultatifs sont locaux à une base, et la clé,
+# elle, vient du chemin de la cible — deux exécutions de ce test dans deux
+# répertoires temporaires ne se disputent donc jamais le même verrou.
+VERROU_DSN = db.DSN
+TIENT_LE_VERROU = """
+import sys
+import time
+
+import psycopg
+
+conn = psycopg.connect(sys.argv[1], autocommit=True)
+conn.execute("SELECT pg_advisory_lock(%s)", (int(sys.argv[2]),))
+print("pris", flush=True)
+time.sleep(3600)
+"""
 
 
 def git(repo: Path, *args: str) -> str:
@@ -151,6 +186,86 @@ def faux_docker(tmp: Path, nom: str, services: str, log: str = "sync au repos\n"
     return f"{binaires}:{os.environ['PATH']}"
 
 
+def faux_deploiement(dossier: Path, duree: str = "0", etiquette: bool = True,
+                     conflit: str = "") -> str:
+    """Un PATH où `docker` et `gh` jouent le déploiement, et notent tout.
+
+    Le journal garde l'intervalle de chaque `docker compose up`, en
+    nanosecondes : c'est ce qui prouve que deux déploiements ne se sont pas
+    recouverts. Le shim rend aussi l'étiquette `com.graphatom.sha` que le
+    vrai compose pose sur les conteneurs, et sait rendre **une fois** le
+    conflit de nom qu'un `up` interrompu laisse derrière lui.
+    """
+    dossier.mkdir(parents=True)
+    (dossier / "duree.txt").write_text(duree)
+    (dossier / "conflit.txt").write_text(conflit)
+    (dossier / "services.txt").write_text("github-sync\nweb\nfront\n")
+    (dossier / "journal.txt").write_text("")
+    if etiquette:
+        (dossier / "etiquette").write_text("")
+    faux = dossier / "docker"
+    faux.write_text(
+        "#!/bin/sh\n"
+        f'ICI="{dossier}"\n'
+        'for A in "$@"; do DERNIER="$A"; done\n'
+        'printf "appel %s\\n" "$*" >> "$ICI/journal.txt"\n'
+        'case "$1" in\n'
+        '  inspect) cat "$ICI/sha-${DERNIER#id-}.txt" 2>/dev/null; exit 0 ;;\n'
+        '  rm) printf "retiré %s\\n" "$DERNIER" >> "$ICI/journal.txt"; exit 0 ;;\n'
+        "esac\n"
+        'case "$2" in\n'
+        "  up)\n"
+        '    DEBUT=$(date +%s%N)\n'
+        '    sleep "$(cat "$ICI/duree.txt")"\n'
+        '    printf "up %s %s\\n" "$DEBUT" "$(date +%s%N)" >> "$ICI/journal.txt"\n'
+        '    if [ -s "$ICI/conflit.txt" ]; then\n'
+        '      cat "$ICI/conflit.txt"; : > "$ICI/conflit.txt"; exit 1\n'
+        "    fi\n"
+        '    if [ -f "$ICI/etiquette" ]; then\n'
+        '      for S in github-sync web front; do\n'
+        '        printf "%s" "${GRAPHATOM_SHA:-}" > "$ICI/sha-$S.txt"\n'
+        "      done\n"
+        "    fi\n"
+        '    echo "reconstruit"; exit 0 ;;\n'
+        "  ps)\n"
+        '    case " $* " in *" -q "*) printf "id-%s\\n" "$DERNIER"; exit 0 ;; esac\n'
+        '    cat "$ICI/services.txt"; exit 0 ;;\n'
+        "esac\n"
+        'echo "commande inconnue : $*" >&2\n'
+        "exit 1\n"
+    )
+    faux.chmod(0o755)
+    jeton = dossier / "gh"
+    jeton.write_text('#!/bin/sh\necho "jeton-de-test"\n')
+    jeton.chmod(0o755)
+    return f"{dossier}:{os.environ['PATH']}"
+
+
+def montees(dossier: Path) -> list[tuple[int, int]]:
+    """Les intervalles des `docker compose up` que le faux docker a vus."""
+    vus = []
+    for ligne in (dossier / "journal.txt").read_text().splitlines():
+        if ligne.startswith("up "):
+            debut, fin = ligne.split()[1:3]
+            vus.append((int(debut), int(fin)))
+    return sorted(vus)
+
+
+def cle_verrou(repo: Path) -> int:
+    """La clé du verrou de `deploy` : la somme de contrôle du chemin visé."""
+    out = subprocess.run(f"printf '%s' '{repo}' | cksum", shell=True,
+                         capture_output=True, text=True, check=True)
+    return int(out.stdout.split()[0])
+
+
+def tenant(dsn: str, cle: int) -> subprocess.Popen:
+    """Une session postgres qui prend le verrou et ne le rend jamais."""
+    proc = subprocess.Popen([sys.executable, "-c", TIENT_LE_VERROU, dsn, str(cle)],
+                            stdout=subprocess.PIPE, text=True)
+    assert proc.stdout.readline().strip() == "pris", "le tenant n'a pas pris le verrou"
+    return proc
+
+
 class Serveur(threading.Thread):
     """Un serveur HTTP jetable qui n'ouvre son écoute qu'après `delai`.
 
@@ -197,9 +312,10 @@ def joue(node: str, repo: Path, workspace: Path, subject: str = SUJET,
     """Le `cmd` d'un nœud du graph, joué tel quel. Rend son outcome.json.
 
     Les deux URL des portes visent par défaut le port 9, où rien n'écoute :
-    aucun test ne doit tomber sur le déploiement réel de la machine. Le
-    budget d'attente, lui, est ramené à quelques secondes — les 60 s de
-    production se vérifient en lisant le `cmd`, pas en les subissant.
+    aucun test ne doit tomber sur le déploiement réel de la machine. Les
+    deux budgets d'attente, celui des portes et celui du verrou, sont
+    ramenés à quelques secondes — les valeurs de production se vérifient en
+    lisant le `cmd`, pas en les subissant.
     """
     (workspace / "outcome.json").unlink(missing_ok=True)
     subprocess.run(
@@ -210,7 +326,9 @@ def joue(node: str, repo: Path, workspace: Path, subject: str = SUJET,
                           "GRAPHATOM_SUBJECT_KEY": subject,
                           "GRAPHATOM_WEB_URL": "http://127.0.0.1:9",
                           "GRAPHATOM_FRONT_URL": "http://127.0.0.1:9",
-                          "GRAPHATOM_PORTES_DELAI_S": "4"} | (plus or {}),
+                          "GRAPHATOM_PORTES_DELAI_S": "4",
+                          "GRAPHATOM_VERROU_DSN": VERROU_DSN,
+                          "GRAPHATOM_VERROU_DELAI_S": "10"} | (plus or {}),
     )
     return json.loads((workspace / "outcome.json").read_text())
 
@@ -509,6 +627,162 @@ def main() -> None:
     assert f"{budget} s d'attente" in readme, "le README ne dit pas le budget retenu"
     print(f"14. budget d'attente {budget} s < timeout_s "
           f"{config['agent']['timeout_s']} s < bail {config['lease_s']} s ✓")
+
+    # 15. la cible du deploy est unique : deux items qui l'atteignent en même
+    #    temps doivent déployer l'un après l'autre. Le faux docker met 2 s à
+    #    monter et note l'intervalle de chaque `up` — si les deux se
+    #    recouvraient, un vrai docker refuserait le second sur un nom pris
+    file = tmp / "file"
+    file.mkdir()
+    concurrent = depot(file)
+    docker15 = faux_deploiement(file / "bin", duree="2", etiquette=False)
+    rendus: dict[str, dict] = {}
+    fils = []
+    for nom in ("premier", "second"):
+        atelier = file / nom
+        atelier.mkdir()
+        fils.append(threading.Thread(
+            target=lambda n=nom, a=atelier: rendus.__setitem__(
+                n, joue("deploy", concurrent, a, plus={"PATH": docker15,
+                                                       "GRAPHATOM_VERROU_DELAI_S": "60"}))))
+    for fil in fils:
+        fil.start()
+    for fil in fils:
+        fil.join()
+    for nom, outcome in rendus.items():
+        assert outcome["outcome"] == "done", (nom, outcome)
+    vus = montees(file / "bin")
+    assert len(vus) == 2, vus
+    assert vus[0][1] <= vus[1][0], f"les deux `up` se sont recouverts : {vus}"
+    print(f"15. deux deploy simultanés : deux `up` successifs, "
+          f"{(vus[1][0] - vus[0][1]) / 1e9:.1f} s entre les deux, aucun conflit ✓")
+
+    # 16. rejoué sur le même `main`, le deploy ne reconstruit rien : les
+    #    conteneurs portent déjà le SHA visé, et le rapport le dit
+    memes = tmp / "deja"
+    memes.mkdir()
+    stable = depot(memes)
+    docker16 = faux_deploiement(memes / "bin")
+    for nom in ("un", "deux"):
+        atelier = memes / nom
+        atelier.mkdir()
+        outcome = joue("deploy", stable, atelier, plus={"PATH": docker16})
+        assert outcome["outcome"] == "done", outcome
+    assert len(montees(memes / "bin")) == 1, montees(memes / "bin")
+    assert "déjà déployé" in outcome["summary"], outcome
+    sha = git(stable, "rev-parse", "--short", "origin/main")
+    rapport = (memes / "deux" / "deploy.md").read_text()
+    assert f"front porte {sha} - voulu {sha}" in rapport, rapport
+    print(f"16. {outcome['summary']} ✓")
+
+    # 17. le verrou meurt avec sa session : celui d'un shell tué en plein vol
+    #    ne bloque pas le suivant. Rien sur disque ne lui survit — un verrou
+    #    qui survit à un crash serait pire que pas de verrou du tout
+    mort = tmp / "session-morte"
+    mort.mkdir()
+    orphelin = depot(mort)
+    docker17 = faux_deploiement(mort / "bin")
+    atelier = mort / "item"
+    atelier.mkdir()
+    tueur = tenant(VERROU_DSN, cle_verrou(orphelin))
+    tueur.kill()
+    tueur.wait()
+    outcome = joue("deploy", orphelin, atelier, plus={"PATH": docker17,
+                                                     "GRAPHATOM_VERROU_DELAI_S": "20"})
+    assert outcome["outcome"] == "done", outcome
+    assert len(montees(mort / "bin")) == 1, montees(mort / "bin")
+    deploiement = BUNDLE["nodes"]["deploy"]["config"]["agent"]["cmd"]
+    for interdit in ("flock", ".lock", "mkdir"):
+        assert interdit not in deploiement, f"le verrou passe par {interdit}"
+    print("17. le verrou d'une session tuée est rendu par postgres, "
+          "et rien sur disque ne le porte ✓")
+
+    # 18. l'attente est bornée : le verrou tenu par une session vivante fait
+    #    rendre `waiting` — que le graph renvoie sur `deploy`, pas sur
+    #    `escalate`. Jamais d'escalade pour cause de concurrence
+    tenu = tmp / "attente"
+    tenu.mkdir()
+    occupe = depot(tenu)
+    docker18 = faux_deploiement(tenu / "bin")
+    atelier = tenu / "item"
+    atelier.mkdir()
+    tient = tenant(VERROU_DSN, cle_verrou(occupe))
+    depart = time.monotonic()
+    outcome = joue("deploy", occupe, atelier, plus={"PATH": docker18,
+                                                   "GRAPHATOM_VERROU_DELAI_S": "3"})
+    ecoule = time.monotonic() - depart
+    tient.kill()
+    tient.wait()
+    assert outcome["outcome"] == "waiting", outcome
+    assert 3 <= ecoule < 30, f"l'attente a duré {ecoule:.0f} s"
+    assert montees(tenu / "bin") == [], "un `up` est passé sans le verrou"
+    assert BUNDLE["nodes"]["deploy"]["edges"]["waiting"] == "deploy", "waiting n'attend pas"
+    print(f"18. {outcome['summary']} ✓")
+
+    # 19. le conteneur bâtard d'un `up` interrompu est rattrapé au
+    #    déploiement suivant : le message nomme le coupable, le shell le
+    #    retire et rejoue — pas d'humain dans la boucle
+    batard = tmp / "conflit-docker"
+    batard.mkdir()
+    coince = depot(batard)
+    reste = ("741ae7f1a135_imperative-crunching-conway-init-1")
+    docker19 = faux_deploiement(batard / "bin", conflit=(
+        "Error response from daemon: Conflict. The container name "
+        f'"/{reste}" is already in use by container "86fea9f768f3".\n'))
+    atelier = batard / "item"
+    atelier.mkdir()
+    outcome = joue("deploy", coince, atelier, plus={"PATH": docker19})
+    assert outcome["outcome"] == "done", outcome
+    assert len(montees(batard / "bin")) == 2, montees(batard / "bin")
+    assert f"retiré {reste}" in (batard / "bin" / "journal.txt").read_text()
+    assert reste in (atelier / "deploy.md").read_text()
+    print(f"19. conteneur bâtard {reste[:20]}… retiré, `up` rejoué ✓")
+
+    # 20. les garde-fous du verrou, relus dans le bundle à chaque tour : lui
+    #    seul se sérialise, son attente tient dans le couperet du nœud, et
+    #    l'arbitrage entre exclusion mutuelle et attente bornée est écrit
+    for nom, node in BUNDLE["nodes"].items():
+        shell = node.get("config", {}).get("agent", {}).get("cmd", "")
+        if nom != "deploy":
+            assert "advisory_lock" not in shell, f"{nom} se sérialise lui aussi"
+    config = BUNDLE["nodes"]["deploy"]["config"]
+    verrou = int(re.search(r"GRAPHATOM_VERROU_DELAI_S:-(\d+)", deploiement).group(1))
+    assert verrou < config["agent"]["timeout_s"] < config["lease_s"], config
+    prompt = config["agent"]["prompt"]
+    for marque in ("exclusion mutuelle", "attente bornée", "pg_advisory_lock"):
+        assert marque in prompt, f"le prompt de deploy ne dit pas « {marque} »"
+    readme = (ROOT / "README.md").read_text()
+    assert "GRAPHATOM_VERROU_DELAI_S" in readme, "le README ne justifie pas l'attente"
+    assert f"{verrou} s d'attente" in readme, "le README ne dit pas le budget retenu"
+    print(f"20. seul deploy prend le verrou, attente {verrou} s < timeout_s "
+          f"{config['agent']['timeout_s']} s < bail {config['lease_s']} s ✓")
+
+    # 21. le worker du rail n'a pas son venv dans son PATH : le `python3`
+    #    ambiant y est celui du système, sans psycopg. Le nœud doit trouver
+    #    l'interprète du clone de référence — sinon le verrou se tairait, et
+    #    la file ne serait qu'un commentaire dans le bundle
+    nu = tmp / "python-nu"
+    nu.mkdir()
+    cible = depot(nu)
+    venv = cible / ".venv" / "bin"
+    venv.mkdir(parents=True)
+    (venv / "python3").symlink_to(sys.executable)
+    docker21 = faux_deploiement(nu / "bin")
+    sourd = nu / "bin" / "python3"  # celui du PATH ne sait pas importer psycopg
+    sourd.write_text("#!/bin/sh\nexit 1\n")
+    sourd.chmod(0o755)
+    atelier = nu / "item"
+    atelier.mkdir()
+    tient = tenant(VERROU_DSN, cle_verrou(cible))
+    outcome = joue("deploy", cible, atelier, plus={"PATH": docker21,
+                                                  "GRAPHATOM_VERROU_DELAI_S": "3"})
+    tient.kill()
+    tient.wait()
+    assert outcome["outcome"] == "waiting", \
+        f"le verrou s'est tu faute d'interprète : {outcome}"
+    assert montees(nu / "bin") == [], "un `up` est passé sans le verrou"
+    print("21. le python du PATH n'a pas psycopg : celui du clone de "
+          "référence prend le verrou quand même ✓")
 
     shutil.rmtree(tmp, ignore_errors=True)
     print("\nnœuds shell : OK — déterministes, et jamais sans outcome")
