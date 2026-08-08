@@ -24,7 +24,7 @@ from psycopg.conninfo import make_conninfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import db, graph, kernel, quota  # noqa: E402
+from graphatom import db, graph, kernel, quota, web  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTANCE = os.environ.get("GRAPHATOM_AGENT_DSN") or db.DSN
@@ -115,10 +115,27 @@ def plafond_global(conn) -> None:
     while any(p.poll() is None for p in procs):
         maximum = max(maximum, charge(conn))
         assert maximum <= 2, maximum
+        if maximum == 2:
+            vue = web._api_load(conn)
+            assert vue["builds"] == 2, vue
+            assert vue["max_builds"] == quota.MAX_BUILDS, vue
         time.sleep(0.05)
     assert maximum == 2, maximum
     assert all(p.returncode == 0 for p in procs)
     print("1. cinq candidats de cinq items, quota 2 : maximum observé 2 ✓")
+
+
+def configuration() -> None:
+    """Le défaut vient des cœurs et GRAPHATOM_MAX_BUILDS le surcharge."""
+    attendu = max(1, (os.cpu_count() or 4) // 6)
+    assert quota.MAX_BUILDS == attendu, (quota.MAX_BUILDS, attendu)
+    env = {**os.environ, "GRAPHATOM_MAX_BUILDS": "3"}
+    out = subprocess.run(
+        [PYTHON, "-c", "from graphatom.quota import MAX_BUILDS; print(MAX_BUILDS)"],
+        cwd=ROOT, env=env, capture_output=True, text=True, check=True,
+    )
+    assert out.stdout.strip() == "3", out.stdout
+    print(f"6. {os.cpu_count()} cœurs → quota {attendu} ; surcharge 3 lue ✓")
 
 
 def attente_gratuite(conn) -> None:
@@ -193,6 +210,7 @@ def main() -> None:
         attente_gratuite(conn)
         rendue_sur_toutes_les_fins(conn)
         equite(conn)
+        configuration()
     print("\nquota : OK — plafond global, attente gratuite et sessions sûres")
 
 

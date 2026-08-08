@@ -1402,8 +1402,9 @@ Le plafond des runs ne suffit pas : un agent qui écrit du texte et un build
 Next ne demandent pas la même machine. Les chemins normaux qui installent,
 construisent ou lancent une suite de portes passent donc par
 `graphatom build-quota -- <commande>` : `scripts/portes.sh`,
-`scripts/front-env.sh` et les constructions de rapprochement de
-`scripts/release.sh`. La réflexion du modèle reste hors quota.
+`scripts/front-env.sh`, le crash-test backend, les constructions de
+rapprochement de `scripts/release.sh` et le build du déploiement. La
+réflexion du modèle reste hors quota.
 
 Le quota vaut `max(1, cœurs // 6)`, soit **2 sur 12 cœurs**. Une construction
 Next utilise déjà plusieurs cœurs. `GRAPHATOM_MAX_BUILDS` surcharge cette
