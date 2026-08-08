@@ -54,6 +54,8 @@ def depot(tmp: Path) -> Path:
     """Un dépôt jetable avec le worktree d'un item, comme en produirait le rail."""
     repo = tmp / "repo"
     repo.mkdir()
+    (repo / "scripts").mkdir()
+    shutil.copy2(ROOT / "scripts" / "cleanup.sh", repo / "scripts" / "cleanup.sh")
     subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
     git(repo, "config", "user.email", "hermetic@test.invalid")
     git(repo, "config", "user.name", "hermetic")
@@ -69,13 +71,16 @@ def cleanup(repo: Path, workspace: Path, subject: str) -> dict:
     """Le cmd de cleanup du graph, joué tel quel. Rend son outcome.json."""
     bundle = json.loads((ROOT / "examples" / "code-task.json").read_text())
     cmd = bundle["nodes"]["cleanup"]["config"]["agent"]["cmd"]
-    subprocess.run(
+    outcome = workspace / "outcome.json"
+    outcome.unlink(missing_ok=True)
+    done = subprocess.run(
         cmd, shell=True, cwd=workspace, check=False,
         env=os.environ | {"GRAPHATOM_REPO_DIR": str(repo),
                           "GRAPHATOM_WORKSPACE": str(workspace),
                           "GRAPHATOM_SUBJECT_KEY": subject},
     )
-    return json.loads((workspace / "outcome.json").read_text())
+    assert done.returncode == 0, f"cleanup sorti en code {done.returncode}"
+    return json.loads(outcome.read_text())
 
 
 def main() -> None:
@@ -131,6 +136,9 @@ def main() -> None:
     # 6. le chemin n'est pas enregistré dans ce REPO_DIR-là : idem
     etranger = tmp / "etranger"
     (etranger / ".worktrees" / "rail-item-42").mkdir(parents=True)
+    (etranger / "scripts").mkdir()
+    shutil.copy2(ROOT / "scripts" / "cleanup.sh",
+                 etranger / "scripts" / "cleanup.sh")
     outcome = cleanup(etranger, workspace, "gh:Acid3croco/graphatom#77")
     assert outcome["outcome"] == "done", outcome
     assert (etranger / ".worktrees" / "rail-item-42").is_dir(), "chemin étranger détruit"

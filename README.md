@@ -1029,15 +1029,16 @@ dupliquée. Le worktree que la mère avait préparé n'a jamais servi, mais il
 existe : la sortie `split` passe par `cleanup_split` — le même shell que les
 deux autres retraits — avant son terminal.
 
-**Un modèle et un effort par atome.** Le `cmd` d'un nœud est une ligne de
-shell : il porte aussi le coût. Tous les nœuds ne font pas le même travail,
-donc ils ne paient pas le même tarif :
+**Un fournisseur explicite par atome.** Le `cmd` d'un nœud est une ligne de
+shell. Tous les nœuds qui demandent un modèle passent par l'adaptateur
+`agent-codex.sh`, sans `CODEX_MODEL` : la configuration locale de codex
+choisit donc le modèle par défaut. Les nœuds mécaniques restent du shell pur.
+Le seul mélange de fournisseurs est la course d'implémentation :
 
-| nœuds | modèle / effort | pourquoi |
+| nœuds | fournisseur | pourquoi |
 | --- | --- | --- |
-| `scope`, `implement` | défaut, `--effort high` | le jugement d'avant la construction, puis le seul vrai travail de conception |
-| `test_backend`, `test_frontend`, `validate` | `--model sonnet --effort medium` | procéduraux, mais avec du jugement — `validate` est du constat outillé, pas de la conception |
-| `release` | `--model haiku --effort low`, script-first | le script fait le nominal ; l'agent ne sert qu'à la panne |
+| `scope`, `test_backend`, `test_frontend`, `validate`, `judge`, `release` | codex, modèle par défaut de la session | une limite d'un autre fournisseur ne bloque aucune porte |
+| `implement` | quatre candidats opencode gratuits et un candidat codex par défaut | la diversité reste dans le fan-out, où la sélection la rend utile |
 | `worktree`, `deploy`, `verify_deploy`, `cleanup`, `cleanup_unresolved`, `cleanup_split` | pas d'agent | du shell pur, qui écrit son `outcome.json` |
 
 **Les nœuds mécaniques n'ont pas d'agent.** `worktree`, `deploy` et
@@ -1192,8 +1193,9 @@ Le rail a été conçu pour un agent cher et compétent par nœud. La direction
 change : on veut pouvoir lancer **des myriades de modèles bon marché,
 potentiellement stupides**, sur la même étape, et laisser la sélection
 produire la qualité que l'intelligence individuelle ne donne pas. Le premier
-étage est en place — `implement` court en fan-out de quatre candidats, dont
-un sur modèle gratuit, et chacun porte ses portes déterministes ; le reste
+étage est en place — `implement` court en fan-out de cinq candidats, quatre
+sur opencode gratuit et un sur codex par défaut, et chacun porte ses portes
+déterministes ; le reste
 de ce qui suit est la vision à laquelle les issues suivantes se réfèrent,
 écrite dans le dépôt parce qu'un principe non écrit se perd.
 
@@ -1312,13 +1314,13 @@ est renforcé : les candidats ne se voient jamais.
 **L'état du parc, au 2026-08-08.** La vision doit rester honnête sur ses
 moyens :
 
-- la machine hôte n'a **ni `opencode`, ni `ollama`, ni runtime d'inférence
-  local, ni poids de modèle** ;
-- ce qui existe : la CLI `claude` (abonnement) et la CLI `codex`
-  (`@openai/codex`, abonnement) ;
-- le tier « bon marché » démarre donc avec des variantes
-  `claude --model haiku` et une variante `codex`, qui apporte une vraie
-  diversité de fournisseur ;
+- la machine hôte a les CLI `opencode`, `codex` et `claude`, mais aucun
+  runtime d'inférence local ni poids de modèle ;
+- le rail nominal ne dépend plus du quota claude : ses nœuds à modèle
+  utilisent codex sans épingler de modèle ;
+- la course utilise quatre variantes
+  `opencode/deepseek-v4-flash-free` et une variante codex, qui apportent une
+  vraie diversité de fournisseur ;
 - un modèle local réellement gratuit demanderait d'installer un runtime et
   de télécharger des poids — c'est une option ouverte, pas un prérequis.
   **Le modèle est un paramètre de configuration : l'architecture ne doit
