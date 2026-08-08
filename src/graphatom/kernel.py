@@ -39,6 +39,12 @@ ramène à une seule issue avant que l'item n'avance, et c'est cette issue-là
 que `_route` traite comme celle d'un nœud ordinaire. L'item garde donc un
 seul état, une seule révision, une seule issue de nœud : rien ne fusionne,
 un candidat survit, les autres sont révoqués.
+
+Un candidat a aussi son atelier git, et la révocation ne s'arrête pas à son
+groupe de processus : le travail du gagnant est promu sur la branche de
+l'item, et les ateliers de tous les candidats sont détruits. Sur *tous* les
+chemins terminaux — la réduction, mais aussi un `wall_deadline` tombé en
+pleine course. Voir `worktree`.
 """
 
 import datetime as dt
@@ -48,6 +54,7 @@ from collections import Counter
 
 import psycopg
 
+from . import worktree
 from .blocks import agent_alive, lease_autopsy, revoke_orphan
 from .graph import KERNEL_OUTCOMES, GraphError, fanout_variants, load_bundle
 
@@ -241,11 +248,19 @@ def apply(conn: psycopg.Connection, run_id: int, submitted: dict) -> str:
     # hors transaction : la grâce du SIGTERM ne tient pas les verrous
     for loser in losers:
         revoke_orphan(item["id"], loser)
+    _ateliers(conn, item, run)
     return "applied"
 
 
 def apply_item(conn: psycopg.Connection, item_id: int, outcome: str, kind: str) -> None:
-    """Transition sans run : réponse humaine, échéance de WAIT, wall_deadline."""
+    """Transition sans run : réponse humaine, échéance de WAIT, wall_deadline.
+
+    Rien ici n'est une réduction : l'item quitte son nœud sans qu'aucun
+    candidat ait gagné. Ceux qui couraient encore n'ont donc plus rien à
+    garder — leurs ateliers sont détruits, comme après une réduction. C'est
+    ce qui tient la promesse sur *tous* les chemins terminaux, et pas
+    seulement quand la course va jusqu'au bout.
+    """
     with conn.transaction():
         item = conn.execute(
             "SELECT * FROM work_item WHERE id = %s FOR UPDATE", (item_id,)
@@ -255,6 +270,7 @@ def apply_item(conn: psycopg.Connection, item_id: int, outcome: str, kind: str) 
         bundle = load_bundle(conn, item["revision"])
         run = {"node": item["state"], "id": None, "attempt": 0}
         _route(conn, item, bundle, run, outcome, kind=kind)
+    worktree.discard(item_id)  # hors transaction : git ne tient pas les verrous
 
 
 def _settle(conn, item, bundle, run, outcome: str, kind: str) -> list[int]:
@@ -342,6 +358,36 @@ def _revoke_losers(conn, item, winner) -> list[int]:
         "UPDATE work_item SET fence = fence + 1 WHERE id = %s", (item["id"],)
     )
     return [r["id"] for r in losers]
+
+
+def _ateliers(conn, item, run) -> None:
+    """La course finie : le gagnant promu, les ateliers des candidats détruits.
+
+    Le prédicat est celui de la réduction, lu sur les mêmes lignes : tant
+    qu'un frère court, rien n'est tranché et rien ne bouge. Une fois la
+    tentative close, le travail du gagnant rejoint la branche de l'item, et
+    tous les ateliers de candidats disparaissent — celui du gagnant compris,
+    puisqu'il n'a plus rien d'unique.
+
+    Un nœud sans fan-out n'a pas de candidat : rien de tout ceci ne le
+    concerne, et son atelier d'item reste celui du shell du graph.
+
+    Hors transaction, toujours : un `git merge` n'a rien à faire sous le
+    verrou d'un item.
+    """
+    if run["candidate"] is None:
+        return
+    batch = conn.execute(
+        "SELECT candidate, status FROM node_run WHERE item_id = %s AND node = %s "
+        "AND cycle = %s AND attempt = %s",
+        (item["id"], run["node"], run["cycle"], run["attempt"]),
+    ).fetchall()
+    if any(r["status"] == "running" for r in batch):
+        return
+    gagnant = next((r["candidate"] for r in batch if r["status"] == "applied"), None)
+    if gagnant is not None:
+        worktree.promote(item["id"], gagnant)
+    worktree.discard(item["id"])
 
 
 def _boucle(conn, item, nodes: dict, target: str, cycle: int) -> bool:
@@ -486,4 +532,5 @@ def reap(conn: psycopg.Connection) -> int:
         # hors transaction : la grâce du SIGTERM ne tient pas les verrous
         for orphan in (run["id"], *losers):
             revoke_orphan(item["id"], orphan)
+        _ateliers(conn, item, run)
     return len(expired)
