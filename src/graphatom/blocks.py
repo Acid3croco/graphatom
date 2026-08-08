@@ -27,6 +27,11 @@ jetable de son item — une par item, créée à la volée —, jamais celle du
 rail ni celle du voisin. Sa clé de sujet est dans l'environnement : le
 cleanup s'en sert pour reconnaître son propre worktree.
 
+Un candidat de fan-out, lui, a son propre workspace sous celui de l'item —
+`data/item-<N>/c<k>/`. Rien d'autre ne le distingue de son voisin, sinon la
+variante que sa config porte : c'est elle qui s'interpole dans son prompt et
+dans sa commande.
+
 L'agent tourne dans son propre groupe de processus : au timeout, c'est
 tout le groupe qui est révoqué — un descendant ne survit pas au bail.
 Le pgid est aussi persisté dans le workspace : si c'est le worker qui
@@ -51,6 +56,11 @@ comme une autre, que le noyau relance sur place.
 Et une relance est une reprise, jamais une répétition : le prompt de la
 tentative suivante porte l'état déjà là — le `git diff` du worktree et les
 fichiers du workspace. Repartir à l'aveugle, c'est payer le trajet deux fois.
+La question n'est pas « est-ce la première tentative ? » mais « y a-t-il
+quelque chose à reprendre ? » : une tentative 1 d'un passage neuf, ouverte
+par un `retry` d'escalade, hérite du travail que le passage précédent a
+laissé, et son prompt le porte comme n'importe quelle relance. Le motif est
+nommé : un budget dépassé et une pendaison ne laissent pas la même chose.
 """
 
 import json
@@ -80,11 +90,26 @@ POLL_S = 0.2  # granularité de l'attente du process : ce qui borne le budget to
 PRUNED_DIRS = {".git", "node_modules", ".next", "__pycache__", ".venv"}
 GIT_CHARS = 8000  # l'état du worktree cité dans le prompt d'une reprise
 GIT_TIMEOUT_S = 20
+BASE_REF = "origin/main"  # la base des worktrees d'item : ce qui est commité s'y compare
 
 
 def item_workspace(item_id: int) -> Path:
     """Le répertoire de travail d'un item — connu du bloc comme du faucheur."""
     return DATA_DIR / f"item-{item_id}"
+
+
+def run_workspace(item_id: int, run: dict) -> Path:
+    """Le répertoire de travail d'un run : celui de l'item, ou celui du candidat.
+
+    Un candidat de fan-out a le sien à l'intérieur, `data/item-<N>/c<k>/` :
+    sans ça, les journaux, les fichiers d'issue et les traces de pgid des K
+    candidats s'écraseraient, et une révocation viserait le mauvais groupe de
+    processus. Un run sans fan-out n'a pas de numéro de candidat, et son
+    workspace reste celui de l'item — exactement comme avant.
+    """
+    workspace = item_workspace(item_id)
+    candidate = run.get("candidate")
+    return workspace if candidate is None else workspace / f"c{candidate}"
 
 
 def item_worktree(item_id: int) -> Path | None:
@@ -122,7 +147,7 @@ class Context:
         self.node = node
         self.bundle = bundle
         self.config = node.get("config") or {}
-        self.workspace = item_workspace(item["id"])
+        self.workspace = run_workspace(item["id"], run)
         self.workspace.mkdir(parents=True, exist_ok=True)
 
     def simulate_work(self) -> None:
@@ -173,12 +198,32 @@ def _archive(workspace: Path, name: str) -> None:
             path.replace(path.with_stem(f"{path.stem}-{name}"))
 
 
+VARIANT_TOKENS = ("label", "strategy")  # ce qu'une variante de fan-out interpole
+
+
+def _fill(ctx: Context, text: str, subject: str) -> str:
+    """Interpole le sujet et la variante du candidat — dans un prompt, ou une commande.
+
+    `{subject_key}` est là depuis toujours. `{label}` et `{strategy}` viennent
+    de la variante, que la matérialisation a posée dans la config du nœud :
+    c'est ce qui donne à N candidats des angles différents plutôt que N fois
+    la même erreur. Un jeton dont la config ne dit rien reste littéral — un
+    nœud sans fan-out ne voit donc aucune différence.
+    """
+    text = text.replace("{subject_key}", subject)
+    for token in VARIANT_TOKENS:
+        value = ctx.config.get(token)
+        if value is not None:
+            text = text.replace("{" + token + "}", str(value))
+    return text
+
+
 def _prompt(ctx: Context, workspace: Path, subject: str) -> str:
     """Le prompt de la tentative : celui du nœud, le contrat, et la reprise."""
     outcomes = sorted(ctx.node.get("edges") or {})
     outcome_path = workspace / OUTCOME_NAME
     return os.path.expandvars(
-        ctx.config["agent"]["prompt"].replace("{subject_key}", subject)
+        _fill(ctx, ctx.config["agent"]["prompt"], subject)
     ) + (
         "\n\n--- Contrat GraphAtom ---\n"
         f"Tu es le bloc « {ctx.run['node']} » d'un rail d'exécution. "
@@ -189,54 +234,159 @@ def _prompt(ctx: Context, workspace: Path, subject: str) -> str:
     ) + _reprise(ctx, workspace)
 
 
-def _reprise(ctx: Context, workspace: Path) -> str:
-    """L'état laissé par la tentative précédente — jamais une répétition.
+DEATHS = {  # ce qui a tué la tentative précédente, dit en clair au repreneur
+    "timed_out": "a dépassé son budget : le couperet l'a coupée en plein travail, "
+                 "et ce qu'elle avait fait est resté là",
+    "stalled": "est restée pendue : le chien de garde l'a coupée sans qu'elle ait "
+               "produit un octet — ce qui suit vient donc d'avant elle",
+    "crashed": "s'est arrêtée sans rendre d'issue lisible, et ce qu'elle avait "
+               "fait est resté là",
+}
 
-    Une tentative relancée sur place hérite d'un worktree et d'un workspace
-    déjà entamés. Redémarrer à l'aveugle, c'est repayer le trajet depuis
-    zéro : le prompt porte donc le `git diff` du worktree et la liste des
-    fichiers du workspace. Rien à la première tentative — il n'y a alors
-    rien à reprendre.
 
-    La règle vaut pour toutes les relances, quelle que soit la mort de la
-    précédente : une pendaison (`stalled`) laisse peu de chose, une panne en
-    plein travail laisse beaucoup, et dans les deux cas c'est ce qui est là
-    qui compte, pas ce qui l'a tuée.
+def _last_attempt(ctx: Context) -> dict | None:
+    """La dernière tentative achevée de ce nœud, tous passages confondus.
+
+    Elle dit deux choses : qu'il y a bien eu quelque chose avant — un nœud
+    qui n'a jamais tourné n'a rien à reprendre —, et de quoi elle est morte,
+    ce que le prompt de la reprise nomme. La tentative en cours n'a pas
+    encore d'issue : `outcome IS NOT NULL` l'écarte sans avoir à connaître
+    son numéro.
+
+    Le passage ne filtre pas : un `retry` d'escalade ouvre un passage neuf,
+    donc une tentative 1, sur un worktree que le passage précédent a rempli.
+    C'est exactement le cas qu'une reprise doit couvrir.
     """
-    if ctx.run["attempt"] <= 1:
+    return ctx.conn.execute(
+        "SELECT cycle, attempt, outcome FROM node_run "
+        "WHERE item_id = %s AND node = %s AND outcome IS NOT NULL "
+        "ORDER BY cycle DESC, attempt DESC LIMIT 1",
+        (ctx.item["id"], ctx.run["node"]),
+    ).fetchone()
+
+
+def _work_files(workspace: Path) -> list[str]:
+    """Les fichiers du workspace qu'un agent a écrits — pas les traces du rail.
+
+    Le rail écrit lui-même le journal, le prompt et l'usage de chaque
+    tentative, puis les range sous le nom de celle-ci : ces fichiers-là
+    existent même après une tentative qui n'a rien fait. Les compter comme du
+    travail rendrait toute relance « reprise », y compris celle d'un agent
+    pendu qui n'a laissé qu'un journal vide — et une reprise inventée est
+    pire que pas de reprise du tout.
+    """
+    traces = {PGID_FILE, OUTCOME_NAME, PROMPT_NAME, USAGE_NAME}
+    return sorted(p.name for p in workspace.iterdir()
+                  if p.is_file() and p.name not in traces
+                  and not p.name.startswith(("agent-", "prompt-", "usage-")))
+
+
+def _git(worktree: Path, *args: str) -> tuple[int, str]:
+    """Une commande git dans le worktree de l'item : son code et sa sortie.
+
+    Un git qui rate n'est pas un échec de la tentative. Le code dit à
+    l'appelant s'il peut croire la sortie ; la plainte, elle, part telle
+    quelle dans le prompt plutôt que de faire tomber le bloc.
+    """
+    try:
+        done = subprocess.run(["git", "-C", str(worktree), *args],
+                              capture_output=True, text=True, timeout=GIT_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 1, f"[git illisible : {exc}]"
+    return done.returncode, (done.stdout + done.stderr).strip()
+
+
+def _committed(worktree: Path) -> str:
+    """Les commits de la branche de l'item qu'`origin/main` n'a pas encore.
+
+    Depuis qu'on demande aux agents de commiter au fil de l'eau, un worktree
+    propre n'est plus un worktree vide : le travail d'une tentative coupée
+    peut tenir entier dans ses commits. Pas d'`origin/main` sous la main — un
+    dépôt de test, un fetch jamais fait : rien, et le statut reste seul juge.
+    """
+    if _git(worktree, "rev-parse", "--verify", "--quiet", BASE_REF)[0] != 0:
+        return ""
+    code, out = _git(worktree, "log", "--oneline", f"{BASE_REF}..HEAD")
+    return out if code == 0 else ""
+
+
+def _worktree_work(worktree: Path | None) -> bool:
+    """Le worktree porte-t-il du travail à reprendre ?
+
+    Deux formes, et une seule suffit : ce qui n'est pas commité, que
+    `git status` montre du modifié comme du neuf, et ce qui l'est déjà sans
+    être fusionné. C'est le signal mécanique de l'issue, sans jugement ni
+    modèle. Pas de worktree, ou un git qui rate : faux — le workspace reste
+    alors le seul signal, et une reprise sans rien à reprendre ne se pose pas.
+    """
+    if worktree is None:
+        return False
+    code, out = _git(worktree, "status", "--short")
+    return (code == 0 and bool(out)) or bool(_committed(worktree))
+
+
+def _reprise(ctx: Context, workspace: Path) -> str:
+    """L'état laissé par une tentative antérieure — jamais une répétition.
+
+    Une tentative qui démarre derrière une autre hérite d'un worktree et d'un
+    workspace déjà entamés. Redémarrer à l'aveugle, c'est repayer le trajet
+    depuis zéro : le prompt porte donc le `git diff` du worktree et la liste
+    des fichiers du workspace.
+
+    Deux conditions, toutes deux mécaniques. Il faut une tentative antérieure
+    du même nœud — quel que soit son passage, un `retry` d'escalade en ouvre
+    un neuf sans rien effacer. Et il faut quelque chose à reprendre : du
+    travail dans le worktree, ou un fichier d'agent dans le workspace. Sans
+    l'un ni l'autre, aucun bloc — un agent qui recommence vraiment de zéro ne
+    doit pas lire un état imaginaire.
+
+    Le motif est nommé, parce qu'un état sans provenance passe pour du
+    travail étranger : un budget dépassé, une pendaison et une panne ne
+    laissent pas la même chose derrière elles.
+    """
+    previous = _last_attempt(ctx)
+    if previous is None:  # ce nœud n'a jamais tourné sur cet item
         return ""
     worktree = item_worktree(ctx.item["id"])
+    if not _work_files(workspace) and not _worktree_work(worktree):
+        return ""  # rien à reprendre : pas de reprise inventée
+    # la liste, elle, ne cache rien : les traces des tentatives passées se
+    # lisent aussi, et leur journal dit souvent où celle d'avant s'est arrêtée
     files = sorted(p.name for p in workspace.iterdir() if p.is_file())
+    death = DEATHS.get(previous["outcome"],
+                       f"a rendu « {previous['outcome']} », et ce qu'elle a "
+                       "laissé est toujours là")
     return (
-        f"\n\n--- Reprise de la tentative {ctx.run['attempt'] - 1} ---\n"
-        f"La tentative précédente de « {ctx.run['node']} » n'est pas allée au "
-        "bout. Tu la reprends : lis l'état ci-dessous, et continue là où elle "
-        "s'est arrêtée — ne recommence pas de zéro.\n\n"
+        f"\n\n--- Reprise de la tentative {previous['attempt']} du passage "
+        f"{previous['cycle']} ---\n"
+        f"La tentative précédente de « {ctx.run['node']} » {death}. Lis l'état "
+        "ci-dessous et continue là où le travail s'est arrêté — ne recommence "
+        "pas de zéro.\n\n"
         f"État du worktree {worktree or '(aucun)'} :\n\n"
         f"```\n{_git_state(worktree)}\n```\n\n"
         "Fichiers déjà écrits dans ton workspace :\n"
-        + ("\n".join(f"- {name}" for name in files) or "- (aucun)")
+        + "\n".join(f"- {name}" for name in files or ["(aucun)"])
     )
 
 
 def _git_state(worktree: Path | None) -> str:
-    """`git status` et `git diff` du worktree de l'item, bornés en taille.
+    """L'état git du worktree de l'item, borné en taille.
 
-    Le statut dit les fichiers neufs que le diff ne montre pas encore ; le
-    diff dit ce qui a changé. Un git qui rate n'est pas un échec de la
-    tentative : sa plainte part dans le prompt telle quelle.
+    Trois vues, dans l'ordre où on les lit : le statut dit les fichiers neufs
+    que le diff ne montre pas encore, le diff dit ce qui a changé, et le
+    journal face à `origin/main` dit ce que la tentative d'avant a déjà
+    commité — sans lui, un worktree commité au fil de l'eau se lirait vide.
+    Un git qui rate n'est pas un échec de la tentative : sa plainte part dans
+    le prompt telle quelle.
     """
     if worktree is None:
         return "aucun worktree pour cet item"
     parts = []
     for args in (["status", "--short"], ["diff", "HEAD"]):
-        try:
-            done = subprocess.run(["git", "-C", str(worktree), *args],
-                                  capture_output=True, text=True, timeout=GIT_TIMEOUT_S)
-            out = (done.stdout + done.stderr).strip()
-        except (OSError, subprocess.SubprocessError) as exc:
-            out = f"[git illisible : {exc}]"
-        parts.append(f"$ git {' '.join(args)}\n{out or '(rien)'}")
+        parts.append(f"$ git {' '.join(args)}\n{_git(worktree, *args)[1] or '(rien)'}")
+    commits = _committed(worktree)
+    if commits:
+        parts.append(f"$ git log --oneline {BASE_REF}..HEAD\n{commits}")
     state = "\n\n".join(parts)
     return state if len(state) <= GIT_CHARS else state[:GIT_CHARS] + "\n… (tronqué)"
 
@@ -346,14 +496,15 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
     log = attempt_log(workspace, ctx.run)
     pgid_file = workspace / PGID_FILE
     watched = (log, workspace, item_worktree(ctx.item["id"]))
+    cmd = _fill(ctx, cfg["cmd"], subject)  # une variante joue sa propre commande
     with log.open("w") as out:
         # session dédiée : l'agent est chef de son groupe, ses descendants aussi
         proc = subprocess.Popen(
-            cfg["cmd"], shell=True, cwd=workspace, env=env, start_new_session=True,
+            cmd, shell=True, cwd=workspace, env=env, start_new_session=True,
             stdout=out, stderr=subprocess.STDOUT,
         )
         try:
-            _write_pgid(pgid_file, proc, cfg["cmd"], ctx.run["id"])
+            _write_pgid(pgid_file, proc, cmd, ctx.run["id"])
             mark = _mark(*watched)  # nos traces sont écrites : la suite est de l'agent
             _wait(proc, watched, mark,
                   float(cfg.get("timeout_s", AGENT_TIMEOUT_S)),
@@ -418,7 +569,7 @@ def lease_autopsy(item_id: int, run: dict, alive: bool) -> dict:
     return {"outcome": "timed_out" if alive else "crashed",
             "error": "bail expiré, agent " + ("encore vivant" if alive else "déjà mort"),
             "timeout": alive, "exit_code": None,
-            "log_tail": _tail(attempt_log(item_workspace(item_id), run))}
+            "log_tail": _tail(attempt_log(run_workspace(item_id, run), run))}
 
 
 def _tail(log: Path) -> str:
@@ -488,6 +639,26 @@ def _identity(pid: int) -> dict | None:
     return {"boot": boot, "starttime": int(fields[19])}  # champ 22 de proc(5)
 
 
+def _trace(item_id: int, run_id: int) -> tuple[Path, dict] | None:
+    """La trace de pgid de ce run, et où elle est. None si elle n'y est pas.
+
+    Le workspace de l'item porte la sienne, et chaque candidat de fan-out la
+    sienne dans son sous-répertoire : le faucheur n'a qu'un numéro de run, il
+    les regarde donc toutes et suit celle qui le nomme. Une trace illisible
+    ou amputée n'en est pas une — elle ne fait tomber personne.
+    """
+    workspace = item_workspace(item_id)
+    for path in (workspace / PGID_FILE, *sorted(workspace.glob(f"c*/{PGID_FILE}"))):
+        try:
+            trace = json.loads(path.read_text())
+            run, _, _ = trace["run"], trace["pgid"], trace["identity"]
+        except (OSError, ValueError, KeyError):
+            continue
+        if run == run_id:
+            return path, trace
+    return None
+
+
 def agent_alive(item_id: int, run_id: int) -> bool:
     """L'agent de ce run travaille-t-il encore ? La lecture de `revoke_orphan`,
     sans rien tuer.
@@ -499,12 +670,12 @@ def agent_alive(item_id: int, run_id: int) -> bool:
     Pas de trace, trace d'un autre run, identité périmée : plus personne au
     travail.
     """
-    try:
-        trace = json.loads((item_workspace(item_id) / PGID_FILE).read_text())
-        run, pgid, who = trace["run"], trace["pgid"], trace["identity"]
-    except (OSError, ValueError, KeyError):
+    found = _trace(item_id, run_id)
+    if found is None:
         return False
-    return run == run_id and who is not None and _identity(pgid) == who
+    trace = found[1]
+    who = trace["identity"]
+    return who is not None and _identity(trace["pgid"]) == who
 
 
 def revoke_orphan(item_id: int, run_id: int) -> int | None:
@@ -515,18 +686,16 @@ def revoke_orphan(item_id: int, run_id: int) -> int | None:
     l'orphelin continue d'écrire dans le checkout et le workspace.
 
     Trois garde-fous, parce que tuer un innocent est pire qu'un orphelin :
-    la trace doit être celle du run fauché (une tentative suivante l'écrase),
-    le chef du groupe doit toujours être celui qu'on a lancé — un pid se
-    recycle, pas une identité — et le faucheur ne se fauche jamais lui-même.
+    la trace doit être celle du run fauché (une tentative suivante l'écrase,
+    et un candidat voisin a la sienne), le chef du groupe doit toujours être
+    celui qu'on a lancé — un pid se recycle, pas une identité — et le
+    faucheur ne se fauche jamais lui-même.
     """
-    path = item_workspace(item_id) / PGID_FILE
-    try:
-        trace = json.loads(path.read_text())
-        run, pgid, who = trace["run"], trace["pgid"], trace["identity"]
-    except (OSError, ValueError, KeyError):  # pas d'agent en vol, ou trace illisible
+    found = _trace(item_id, run_id)
+    if found is None:  # pas d'agent en vol, trace illisible, ou trace d'un autre run
         return None
-    if run != run_id:  # trace d'une tentative plus fraîche : pas la nôtre
-        return None
+    path, trace = found
+    pgid, who = trace["pgid"], trace["identity"]
     path.unlink(missing_ok=True)  # une trace ne sert qu'à une révocation
 
     if who is None or _identity(pgid) != who:

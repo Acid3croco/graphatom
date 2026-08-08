@@ -12,7 +12,9 @@ le dit à sa place : voir `heartbeat`.
 
 Chaque bloc s'exécute dans son propre thread avec sa propre connexion :
 un agent qui travaille dix minutes ne bloque ni le faucheur ni les
-autres items. claim() garantit qu'un item n'a qu'un run à la fois.
+autres items. claim() garantit qu'un item n'a qu'une tentative à la
+fois — un seul run, ou les K candidats concurrents d'un nœud en fan-out,
+lancés ensemble et réduits à une seule issue avant que l'item n'avance.
 
 Tuer ce processus n'importe quand est un cas nominal, pas une panne :
 c'est le contrat que le crash-test vérifie. Perdre la base l'est aussi :
@@ -26,7 +28,7 @@ import psycopg
 
 from . import heartbeat, kernel
 from .blocks import BLOCKS, Context
-from .graph import load_bundle
+from .graph import candidate_node, load_bundle
 
 RECONNECT_MAX_S = 30.0  # plafond du backoff : une base absente n'est jamais abandonnée
 
@@ -111,6 +113,8 @@ def _execute(run_id: int, item_id: int) -> None:
         item = conn.execute("SELECT * FROM work_item WHERE id = %s", (item_id,)).fetchone()
         bundle = load_bundle(conn, item["revision"])
         node = bundle["nodes"][run["node"]]
+        if run["candidate"] is not None:  # un candidat joue sa variante du nœud
+            node = candidate_node(node, run["candidate"])
         try:
             result = BLOCKS[node["block"]](Context(conn, run, item, node, bundle))
         except Exception as exc:  # le bloc a le droit d'échouer, pas de router
@@ -124,11 +128,11 @@ def _dispatch(conn: psycopg.Connection) -> int:
     ).fetchall()
     n = 0
     for row in items:
-        run = kernel.claim(conn, row["id"])
-        if run is None:
-            continue
-        n += 1
-        threading.Thread(
-            target=_execute, args=(run["id"], row["id"]), daemon=True
-        ).start()
+        # un nœud en fan-out se réserve candidat par candidat : on rappelle
+        # tant qu'il en reste, et les K blocs partent concurremment
+        while (run := kernel.claim(conn, row["id"])) is not None:
+            n += 1
+            threading.Thread(
+                target=_execute, args=(run["id"], row["id"]), daemon=True
+            ).start()
     return n

@@ -37,10 +37,12 @@ CREATE TABLE IF NOT EXISTS node_run (
     node             TEXT   NOT NULL,
     cycle            INT    NOT NULL DEFAULT 1,  -- le passage dont la tentative fait partie
     attempt          INT    NOT NULL,         -- tentative dans ce passage, repart à 1
+    candidate        INT,                     -- candidat du fan-out ; NULL hors fan-out
     status           TEXT   NOT NULL,         -- running | applied | superseded | stale | faulted
     fence            INT    NOT NULL,
     expected_version INT    NOT NULL,
     lease_expires_at TIMESTAMPTZ NOT NULL,
+    finished_at      TIMESTAMPTZ,             -- fin du run : elle départage les candidats
     outcome          TEXT,
     result           JSONB
     -- unicité d'une tentative : voir l'index du passage, tout en bas
@@ -103,8 +105,9 @@ ALTER TABLE subject   ADD COLUMN IF NOT EXISTS title TEXT;
 ALTER TABLE work_item ADD COLUMN IF NOT EXISTS cycle INT NOT NULL DEFAULT 1;
 ALTER TABLE node_run  ADD COLUMN IF NOT EXISTS cycle INT NOT NULL DEFAULT 1;
 ALTER TABLE node_run  DROP CONSTRAINT IF EXISTS node_run_item_id_node_attempt_key;
-CREATE UNIQUE INDEX IF NOT EXISTS node_run_attempt_key
-    ON node_run (item_id, node, cycle, attempt);
+-- l'unicité d'une tentative a suivi le fan-out : voir `node_run_candidate_key`,
+-- plus bas. Le passage se rejoue en entier à chaque déploiement — recréer ici
+-- l'index d'avant échouerait sur la première base qui porte des candidats.
 -- Le battement prend l'identité de son batteur : la ligne unique `id = 1`
 -- devient une ligne par producteur, et celle du worker devient `rail` — sans
 -- perte, elle garde son horodatage. `id` part avec sa clé primaire ; l'unicité
@@ -114,3 +117,13 @@ UPDATE      heartbeat SET who = 'rail' WHERE who IS NULL;
 ALTER TABLE heartbeat DROP COLUMN IF EXISTS id;
 ALTER TABLE heartbeat ALTER COLUMN who SET NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS heartbeat_who_key ON heartbeat (who);
+-- Le fan-out : une tentative n'est plus un run mais K candidats concurrents,
+-- numérotés de 0 à K-1. Un nœud sans fan-out garde son run unique, et son
+-- candidat reste NULL — d'où `NULLS NOT DISTINCT`, sans quoi l'unicité d'une
+-- tentative ordinaire ne serait plus contrainte du tout. La date de fin,
+-- elle, départage les candidats à égalité : le premier terminé tranche.
+ALTER TABLE node_run  ADD COLUMN IF NOT EXISTS candidate INT;
+ALTER TABLE node_run  ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ;
+DROP INDEX IF EXISTS node_run_attempt_key;
+CREATE UNIQUE INDEX IF NOT EXISTS node_run_candidate_key
+    ON node_run (item_id, node, cycle, attempt, candidate) NULLS NOT DISTINCT;

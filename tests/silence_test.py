@@ -13,8 +13,10 @@ couperet jusqu'au commentaire qui pose la question à l'humain :
      place jusqu'à MAX_ATTEMPTS, puis escalade
   4. coupé après avoir produit : `timed_out`, et le noyau escalade tout de
      suite — aucune relance, quel que soit le compteur
-  5. le prompt d'une relance porte l'état déjà là : le `git diff` du worktree
-     de l'item et la liste des fichiers de son workspace
+  5. le prompt d'une reprise porte l'état déjà là — le `git diff` du worktree
+     de l'item et la liste des fichiers de son workspace —, y compris à la
+     tentative 1 d'un passage neuf ; sans rien à reprendre, aucun bloc, et le
+     bloc nomme la mort dont il reprend le travail
   6. la question d'escalade dit laquelle des deux morts s'est produite
   7. `error`, `exit_code` et `log_tail` restent au post-mortem des deux côtés
 
@@ -50,6 +52,7 @@ BAVARD = "while :; do echo tic; sleep 0.4; done"    # au travail, et qui le mont
 PRECOCE = "echo 'un mot, puis plus rien'; sleep 60"  # a produit, puis s'est tu
 NOEUD = "travail"
 ITEM_FACTICE = 0      # l'item des contextes de bloc : jamais un item de la base
+ITEM_PROPRE = 1       # l'item du worktree sans travail dedans : rien à reprendre
 REPO = f"test-{uuid.uuid4().hex[:8]}/silence"  # le dépôt du canal, à ce test seul
 LIGNE = "l'agent en était là quand le couperet est tombé"
 JOURNAL = f"avant-dernière ligne\n{LIGNE}\n"
@@ -91,25 +94,34 @@ class FauxProc:
 
 
 class FauxConn:
-    """Le bloc n'interroge la base que pour la clé du sujet."""
+    """Le bloc interroge la base pour la clé du sujet, et pour la tentative
+    antérieure dont il reprendrait le travail — que le test lui donne."""
 
-    def execute(self, *args):
+    def __init__(self, precedente: dict | None = None):
+        self.precedente = precedente
+        self.sql = ""
+
+    def execute(self, sql, *args):
+        self.sql = sql
         return self
 
-    def fetchone(self) -> dict:
-        return {"subject_key": f"gh:{REPO}#112"}
+    def fetchone(self) -> dict | None:
+        if "FROM subject" in self.sql:
+            return {"subject_key": f"gh:{REPO}#112"}
+        return self.precedente
 
 
 def contexte(workdir: Path, cmd: str, node: str, budget_s: float = BUDGET_S,
-             attempt: int = 1) -> blocks.Context:
+             attempt: int = 1, cycle: int = 1, item_id: int = ITEM_FACTICE,
+             precedente: dict | None = None) -> blocks.Context:
     blocks.DATA_DIR = workdir
     spec = {"block": "ACT", "edges": {"ok": "fini"},
             "config": {"agent": {"cmd": cmd, "prompt": "fais le travail",
                                  "timeout_s": budget_s, "silence_s": SILENCE_S}}}
     return blocks.Context(
-        FauxConn(),
-        {"id": 1, "node": node, "cycle": 1, "attempt": attempt},
-        {"id": ITEM_FACTICE, "subject_id": 1},
+        FauxConn(precedente),
+        {"id": 1, "node": node, "cycle": cycle, "attempt": attempt},
+        {"id": item_id, "subject_id": 1},
         spec,
         {"name": "silence"},
     )
@@ -141,6 +153,25 @@ def worktree_factice(tmp: Path) -> Path:
     (worktree / "socle.txt").write_text("la ligne réécrite par la tentative\n")
     (worktree / "neuf.txt").write_text("un fichier que la tentative a créé\n")
     os.environ["GRAPHATOM_REPO_DIR"] = str(repo)
+    worktree_propre(repo)
+    return worktree
+
+
+def worktree_propre(repo: Path) -> Path:
+    """Le worktree d'un autre item, celui-là sans rien dedans.
+
+    Même dépôt de référence, même convention de nom : un worktree commité et
+    propre, dont le workspace n'a jamais rien reçu. C'est le cas où il n'y a
+    rien à reprendre, et où aucun bloc ne doit être posé.
+    """
+    worktree = repo / ".worktrees" / f"rail-item-{ITEM_PROPRE}"
+    worktree.mkdir(parents=True)
+    git(worktree, "init", "-q", "-b", "main")
+    git(worktree, "config", "user.email", "silence@test.invalid")
+    git(worktree, "config", "user.name", "silence")
+    (worktree / "socle.txt").write_text("la ligne d'origine\n")
+    git(worktree, "add", "-A")
+    git(worktree, "commit", "-qm", "socle")
     return worktree
 
 
@@ -301,30 +332,54 @@ def relances_et_escalade(conn, revision: str) -> tuple[int, int]:
 
 
 def prompt_de_reprise(workdir: Path, worktree: Path) -> None:
-    """5. la relance repart de l'état laissé, jamais d'une page blanche."""
-    ctx = contexte(workdir, "true", node=NOEUD, attempt=2)
+    """5. une reprise repart de l'état laissé, jamais d'une page blanche.
+
+    La reprise ne se décide pas sur le numéro de la tentative : un `retry`
+    d'escalade ouvre un passage neuf, donc une tentative 1, sur le worktree
+    que le passage d'avant a rempli. Ce qui se demande, c'est s'il y a
+    quelque chose à reprendre.
+    """
+    ctx = contexte(workdir, "true", node=NOEUD, attempt=1, cycle=2,
+                   precedente={"cycle": 1, "attempt": 1, "outcome": "timed_out"})
     workspace = ctx.workspace.resolve()
     (workspace / "implementation.md").write_text("ce que la tentative 1 a écrit\n")
-    texte = blocks._prompt(ctx, workspace, f"gh:{REPO}#112")
+    debordee = blocks._prompt(ctx, workspace, f"gh:{REPO}#112")
 
-    assert "Reprise de la tentative 1" in texte, texte
-    assert "ne recommence pas de zéro" in texte, texte
+    assert "Reprise de la tentative 1 du passage 1" in debordee, debordee
+    assert "ne recommence pas de zéro" in debordee, debordee
     # le git diff du worktree : le fichier modifié, sa ligne, et le fichier neuf
-    assert str(worktree) in texte, texte
-    assert "$ git diff HEAD" in texte, texte
-    assert "-la ligne d'origine" in texte, texte
-    assert "+la ligne réécrite par la tentative" in texte, texte
-    assert "?? neuf.txt" in texte, texte
+    assert str(worktree) in debordee, debordee
+    assert "$ git status --short" in debordee, debordee
+    assert "$ git diff HEAD" in debordee, debordee
+    assert "-la ligne d'origine" in debordee, debordee
+    assert "+la ligne réécrite par la tentative" in debordee, debordee
+    assert "?? neuf.txt" in debordee, debordee
     # et la liste des fichiers déjà écrits dans le workspace
-    assert "- implementation.md" in texte, texte
-    print("5. prompt de reprise : git status, git diff du worktree et fichiers "
-          "du workspace ✓")
+    assert "- implementation.md" in debordee, debordee
+    print("5. tentative 1 d'un passage neuf, worktree sale : le prompt porte "
+          "git status, git diff et les fichiers du workspace ✓")
 
-    # la première tentative, elle, n'a rien à reprendre
-    premier = blocks._prompt(contexte(workdir, "true", node=NOEUD, attempt=1),
-                             workspace, f"gh:{REPO}#112")
-    assert "Reprise" not in premier, premier
-    print("5 bis. tentative 1 : aucun bloc de reprise — il n'y a rien derrière ✓")
+    # rien dans le worktree, rien dans le workspace : rien à reprendre
+    vierge = contexte(workdir, "true", node=NOEUD, attempt=1, cycle=2,
+                      item_id=ITEM_PROPRE,
+                      precedente={"cycle": 1, "attempt": 1, "outcome": "timed_out"})
+    rien = blocks._prompt(vierge, vierge.workspace.resolve(), f"gh:{REPO}#112")
+    assert "Reprise" not in rien, rien
+    print("5 bis. worktree propre et workspace vide : aucun bloc de reprise — "
+          "une reprise ne s'invente pas ✓")
+
+    # la mort d'avant est nommée, et les deux morts ne se disent pas pareil
+    pendue = blocks._prompt(
+        contexte(workdir, "true", node=NOEUD, attempt=2, cycle=2,
+                 precedente={"cycle": 2, "attempt": 1, "outcome": "stalled"}),
+        workspace, f"gh:{REPO}#112")
+    assert "dépassé son budget" in debordee, debordee
+    assert "pendue" not in debordee, debordee
+    assert "est restée pendue" in pendue, pendue
+    assert "dépassé son budget" not in pendue, pendue
+    assert pendue != debordee, "les deux morts donnent le même prompt"
+    print("5 ter. le motif est nommé : budget dépassé d'un côté, pendaison de "
+          "l'autre — deux textes distincts ✓")
 
 
 def questions_d_escalade(conn, pendu: int, deborde: int) -> None:

@@ -1,0 +1,420 @@
+"""Le test du fan-out : K candidats concurrents sur un nœud, une seule issue.
+
+Ce que le noyau doit tenir : l'item garde un seul état, une seule révision,
+une seule issue de nœud. Ce qui se multiplie, ce sont les runs.
+
+Scénario, sur la base — claim/apply, l'exécuteur de l'ordonnanceur pour la
+course réelle, et de vrais agents factices pour les candidats :
+
+  0. non-régression : un nœud sans `fanout` garde son run unique, sans
+     numéro de candidat, dans le workspace de l'item
+  1. un nœud à `variants` × `repeat` réserve K runs concurrents : même
+     `(item, nœud, passage, tentative)`, un bail et un numéro chacun, et la
+     barrière de la tentative qu'ils partagent
+  2. chaque candidat écrit dans son propre workspace `data/item-<N>/c<k>/` —
+     journal, prompt, `outcome.json` et trace de pgid, rien d'écrasé
+  3. une variante surcharge les clés qu'elle nomme et hérite des autres ;
+     `label` et `strategy` s'interpolent dans le prompt et dans la commande
+  4. `first_pass` : le premier succès gagne, l'item est routé sur son arête,
+     et les groupes de processus des perdants sont morts
+  5. les jetons de tous les candidats sont enregistrés, et le total de
+     l'item est bien la somme des K — pas celui du seul gagnant
+  6. un résultat de perdant appliqué après la décision ne bouge ni l'état,
+     ni la révision, ni le passage : il est classé, jamais routé
+  7. tous en échec : l'issue majoritaire est routée comme une issue de nœud
+     ordinaire ; à égalité, celle du run terminé en premier
+
+Le test ne détruit rien : il crée son sujet, ses items, et laisse la base
+en place — il peut tourner à côté d'un rail vivant.
+
+Usage : uv run python tests/fanout_test.py
+"""
+
+import json
+import os
+import shutil
+import sys
+import tempfile
+import threading
+import time
+import uuid
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from graphatom import blocks, db, graph, kernel, scheduler, web  # noqa: E402
+
+# hermétisme : sans instance jetable dans l'environnement, le bloc ne dérive
+# aucune base — les agents factices d'ici n'en ont pas besoin
+os.environ.pop("GRAPHATOM_AGENT_DSN", None)
+
+# Chaque candidat déclare sa consommation à partir du nom de son workspace :
+# c0 → 100 jetons, c1 → 101, et ainsi de suite. Le total de l'item doit être
+# leur somme, et aucun candidat seul ne peut la produire.
+JETONS_BASE = 100
+PREAMBULE = """
+k=$(basename "$(pwd)"); k=${k#c}
+printf '{"input_tokens": %d, "total_cost_usd": 0.25}' $((JETONS + k)) > usage.json
+printf '%s' '{label}' > label.txt
+""".replace("JETONS", str(JETONS_BASE))
+
+# le candidat lent ne rendra jamais son issue : la réduction le tue avant
+LENT = PREAMBULE + "sleep 60\n" + """printf '{"outcome": "ok"}' > outcome.json"""
+# le rapide joue sa propre commande — celle que sa variante surcharge
+RAPIDE = PREAMBULE + """
+printf '%s' 'commande surchargée' > surcharge.txt
+printf '{"outcome": "ok", "summary": "%s"}' '{label}' > outcome.json
+"""
+
+PROMPT = "Tu travailles sur {subject_key}. Stratégie : {strategy}."
+LABELS = {0: "lent", 1: "lent", 2: "rapide", 3: "rapide"}  # variants × repeat = 4
+
+
+def bundle_agent() -> dict:
+    """Le graph de la course : un ACT en fan-out, quatre candidats réels.
+
+    Deux variantes jouées deux fois. La lente hérite de tout le nœud ; la
+    rapide ne surcharge que sa commande — son prompt, ses budgets et ses
+    arêtes restent ceux du nœud.
+    """
+    return {
+        "name": "fanout-agent-test",
+        "entry": "travail",
+        "budgets": {"escalations": 2, "wall_deadline_hours": 1},
+        "on_kernel": {"escalate_to": "escalate", "exhausted_to": "abandon"},
+        "nodes": {
+            "travail": {
+                "block": "ACT",
+                "config": {
+                    "agent": {"cmd": LENT, "prompt": PROMPT,
+                              "timeout_s": 60, "silence_s": 60},
+                    "fanout": {
+                        "variants": [
+                            {"label": "lent", "strategy": "prends ton temps"},
+                            {"label": "rapide", "strategy": "va droit au but",
+                             "agent": {"cmd": RAPIDE}},
+                        ],
+                        "repeat": 2,
+                        "reduce": "first_pass",
+                    },
+                },
+                "edges": {"ok": "fini"},
+            },
+            "escalate": {
+                "block": "WAIT", "escalade": True,
+                "config": {"question": "On retente ?", "options": ["retry"],
+                           "owner": "test", "deadline_minutes": 60},
+                "edges": {"retry": "travail", "expired": "abandon"},
+            },
+            "fini": {"terminal": True},
+            "abandon": {"terminal": True},
+        },
+    }
+
+
+def bundle_stub(k: int | None) -> dict:
+    """Le même graph en stub : pas d'agent, K candidats, ou aucun fan-out.
+
+    `k` à None, c'est le nœud d'avant le fan-out — il sert la non-régression.
+    """
+    config: dict = {"duration_s": 0}
+    if k is not None:
+        config["fanout"] = {"variants": [{"label": f"v{i}"} for i in range(k)],
+                            "reduce": "first_pass"}
+    return {
+        "name": f"fanout-stub-{k}",
+        "entry": "travail",
+        "budgets": {"escalations": 2, "wall_deadline_hours": 1},
+        "on_kernel": {"escalate_to": "escalate", "exhausted_to": "abandon"},
+        "nodes": {
+            "travail": {"block": "ACT", "config": config, "edges": {"ok": "fini"}},
+            "escalate": {
+                "block": "WAIT", "escalade": True,
+                "config": {"question": "On retente ?", "options": ["retry"],
+                           "owner": "test", "deadline_minutes": 60},
+                "edges": {"retry": "travail", "expired": "abandon"},
+            },
+            "fini": {"terminal": True},
+            "abandon": {"terminal": True},
+        },
+    }
+
+
+# ------------------------------------------------------------------ outillage
+
+
+def attendre(predicat, seconds: float = 15.0) -> bool:
+    """Attend qu'un fait devienne vrai — une course n'est pas synchrone."""
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if predicat():
+            return True
+        time.sleep(0.05)
+    return predicat()
+
+
+def vivant(pgid: int) -> bool:
+    """Reste-t-il quelqu'un dans ce groupe de processus ?"""
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def etat(conn, item_id: int) -> dict:
+    return conn.execute(
+        "SELECT * FROM work_item WHERE id = %s", (item_id,)
+    ).fetchone()
+
+
+def runs_de(conn, item_id: int) -> list[dict]:
+    return conn.execute(
+        "SELECT * FROM node_run WHERE item_id = %s ORDER BY id", (item_id,)
+    ).fetchall()
+
+
+def evenements(conn, item_id: int) -> list[dict]:
+    return conn.execute(
+        "SELECT * FROM event WHERE item_id = %s ORDER BY item_version", (item_id,)
+    ).fetchall()
+
+
+def reserve_tout(conn, item_id: int) -> list[dict]:
+    """Réserve la tentative entière — comme l'ordonnanceur, candidat par candidat."""
+    runs = []
+    while (run := kernel.claim(conn, item_id)) is not None:
+        runs.append(run)
+        assert len(runs) <= graph.FANOUT_MAX_CANDIDATES, "claim ne s'arrête plus"
+    return runs
+
+
+def nouvel_item(conn, bundle: dict) -> int:
+    rev = graph.publish(conn, bundle)
+    return kernel.admit(conn, rev, f"{bundle['name']}:{uuid.uuid4().hex[:8]}")
+
+
+# -------------------------------------------------------------------- épreuves
+
+
+def sans_fanout(conn) -> None:
+    """0. un nœud sans `fanout` : un run, sans numéro, dans le workspace de l'item."""
+    item_id = nouvel_item(conn, bundle_stub(None))
+    runs = reserve_tout(conn, item_id)
+    assert len(runs) == 1, f"un nœud sans fan-out réserve un seul run : {runs}"
+    run = runs[0]
+    assert run["candidate"] is None, run["candidate"]
+    assert blocks.run_workspace(item_id, run) == blocks.item_workspace(item_id)
+    kernel.apply(conn, run["id"], {"outcome": "ok"})
+    item = etat(conn, item_id)
+    assert item["state"] == "fini", item["state"]
+    assert item["version"] == 2, item["version"]
+    print(f"0. item {item_id} sans fan-out : un run sans candidat, "
+          "workspace de l'item, routage inchangé ✓")
+
+
+def course(conn, workdir: Path) -> int:
+    """1 à 5 : la course réelle des quatre candidats, et sa réduction."""
+    item_id = nouvel_item(conn, bundle_agent())
+
+    # 1. la tentative entière se réserve : K runs concurrents
+    runs = reserve_tout(conn, item_id)
+    assert len(runs) == 4, f"quatre candidats attendus, vu {len(runs)}"
+    cles = {(r["item_id"], r["node"], r["cycle"], r["attempt"]) for r in runs}
+    assert cles == {(item_id, "travail", 1, 1)}, cles
+    assert sorted(r["candidate"] for r in runs) == [0, 1, 2, 3], runs
+    assert len({r["id"] for r in runs}) == 4, "quatre lignes node_run distinctes"
+    assert all(r["lease_expires_at"] is not None for r in runs), "un bail chacun"
+    assert all(r["status"] == "running" for r in runs), runs
+    # la barrière est celle de la tentative : les candidats la partagent, sinon
+    # le premier réservé serait dépassé par le suivant avant même de courir
+    fences = {r["fence"] for r in runs}
+    assert len(fences) == 1, f"les candidats d'une tentative partagent la barrière : {fences}"
+    assert fences.pop() == etat(conn, item_id)["fence"], "la barrière est celle de l'item"
+    print(f"1. item {item_id} : 4 node_run pour (travail, passage 1, tentative 1), "
+          "candidats 0-3, un bail chacun, barrière partagée ✓")
+
+    par_candidat = {r["candidate"]: r for r in runs}
+    workspace = workdir / f"item-{item_id}"
+
+    # les lents partent d'abord : leurs groupes doivent être en vol quand la
+    # réduction tranche, sinon il n'y aurait rien à révoquer
+    fils = []
+    for k in (0, 1):
+        fil = threading.Thread(target=scheduler._execute,
+                               args=(par_candidat[k]["id"], item_id), daemon=True)
+        fil.start()
+        fils.append(fil)
+    traces = [workspace / f"c{k}" / blocks.PGID_FILE for k in (0, 1)]
+    assert attendre(lambda: all(t.is_file() for t in traces)), \
+        f"les candidats lents n'ont pas laissé leur trace : {traces}"
+    pgids = {k: json.loads(trace.read_text())["pgid"]
+             for k, trace in zip((0, 1), traces)}
+    assert len(set(pgids.values())) == 2, f"un groupe par candidat : {pgids}"
+    print(f"2. traces de pgid distinctes, une par candidat : {pgids} ✓")
+
+    for k in (2, 3):
+        fil = threading.Thread(target=scheduler._execute,
+                               args=(par_candidat[k]["id"], item_id), daemon=True)
+        fil.start()
+        fils.append(fil)
+    for fil in fils:
+        fil.join(timeout=60)
+        assert not fil.is_alive(), "un candidat n'est jamais revenu"
+
+    # 3. chaque candidat a son propre workspace, et rien n'y est écrasé
+    for k in range(4):
+        cw = workspace / f"c{k}"
+        assert cw.is_dir(), f"workspace du candidat {k} absent : {cw}"
+        assert (cw / "agent-travail-1-1.log").is_file(), f"journal du candidat {k}"
+        assert (cw / "prompt-travail-1-1.md").is_file(), f"prompt du candidat {k}"
+        assert (cw / "usage-travail-1-1.json").is_file(), f"usage du candidat {k}"
+    for fixe in ("agent-travail-1-1.log", "label.txt", blocks.OUTCOME_NAME):
+        assert not (workspace / fixe).exists(), \
+            f"{fixe} ne doit pas être écrit dans le workspace de l'item"
+    fichiers = {k: sorted(p.name for p in (workspace / f"c{k}").iterdir())
+                for k in range(4)}
+    print("3. quatre workspaces distincts :\n" + "\n".join(
+        f"   c{k} : {', '.join(noms)}" for k, noms in fichiers.items()) + " ✓")
+
+    # 4. la variante s'interpole, surcharge ce qu'elle nomme et hérite du reste
+    for k, label in LABELS.items():
+        cw = workspace / f"c{k}"
+        assert (cw / "label.txt").read_text() == label, \
+            f"candidat {k} : le label reçu dans sa commande"
+        prompt = (cw / "prompt-travail-1-1.md").read_text()
+        strategie = "prends ton temps" if label == "lent" else "va droit au but"
+        assert f"Stratégie : {strategie}." in prompt, f"candidat {k} : {prompt[:200]}"
+        assert "Tu travailles sur fanout-agent-test:" in prompt, \
+            f"candidat {k} : le prompt du nœud est hérité"
+        assert str(cw) in prompt, f"candidat {k} : le contrat nomme son workspace"
+        # seule la variante rapide surcharge `cmd` : elle seule laisse ce fichier
+        surcharge = (cw / "surcharge.txt").is_file()
+        assert surcharge == (label == "rapide"), f"candidat {k} : cmd surchargée ?"
+    print("4. label et stratégie interpolés dans la commande et le prompt ; "
+          "la variante à `cmd` surchargé joue bien la sienne, l'autre hérite ✓")
+
+    # 5. first_pass : un seul gagnant, l'item routé sur son arête, perdants morts
+    finaux = {r["candidate"]: r for r in runs_de(conn, item_id)}
+    gagnants = [r for r in finaux.values() if r["status"] == "applied"]
+    assert len(gagnants) == 1, f"un seul candidat survit : {gagnants}"
+    gagnant = gagnants[0]
+    assert gagnant["outcome"] == "ok", gagnant["outcome"]
+    assert LABELS[gagnant["candidate"]] == "rapide", gagnant["candidate"]
+    assert all(finaux[k]["status"] == "superseded" for k in range(4)
+               if k != gagnant["candidate"]), finaux
+    item = etat(conn, item_id)
+    assert item["state"] == "fini", item["state"]
+    assert item["terminal_at"] is not None, "l'arête du gagnant mène au terminal"
+    routages = [e for e in evenements(conn, item_id) if e["kind"] == "result"]
+    assert len(routages) == 1, f"une seule issue de nœud : {routages}"
+    assert routages[0]["run_id"] == gagnant["id"], routages[0]
+    print(f"5. candidat c{gagnant['candidate']} gagne, item routé travail → fini "
+          f"par le seul run {gagnant['id']} ✓")
+
+    for k, pgid in pgids.items():
+        assert attendre(lambda p=pgid: not vivant(p), 15.0), \
+            f"le groupe {pgid} du perdant c{k} a survécu à la réduction"
+    print(f"   groupes {sorted(pgids.values())} des perdants morts "
+          "(os.killpg lève ProcessLookupError) ✓")
+
+    # 6. la comptabilité est celle de l'étape, pas celle du gagnant
+    usages = {r["candidate"]: (r["result"] or {}).get("usage") for r in finaux.values()}
+    for k in range(4):
+        assert usages[k] == {"input_tokens": JETONS_BASE + k, "total_cost_usd": 0.25}, \
+            f"candidat {k} : son usage doit être en base — {usages[k]}"
+    total = web._totals(list(finaux.values()))
+    attendu = sum(JETONS_BASE + k for k in range(4))
+    assert total["input_tokens"] == attendu, (total, attendu)
+    par_noeud = web._totals([r for r in finaux.values() if r["node"] == "travail"])
+    assert par_noeud == total, "le nœud en fan-out porte tout le prix de l'étape"
+    # la table des runs distingue les candidats : sans leur numéro, K lignes
+    # identiques — un run sans fan-out, lui, s'affiche comme avant
+    assert web._candidate(gagnant) == f" · <small>c{gagnant['candidate']}</small>"
+    assert web._candidate({"candidate": None}) == ""
+    assert total["total_cost_usd"] == 1.0, total
+    assert total["input_tokens"] > max(u["input_tokens"] for u in usages.values()), \
+        "le total doit être la somme des K, pas celui du gagnant"
+    print(f"6. jetons des 4 candidats en base, total de l'item {attendu} "
+          f"= somme des K (gagnant seul : {usages[gagnant['candidate']]['input_tokens']}) ✓")
+    return item_id
+
+
+def resultat_tardif(conn) -> None:
+    """7. un résultat de perdant arrivé après la décision est classé, jamais routé."""
+    item_id = nouvel_item(conn, bundle_stub(3))
+    runs = reserve_tout(conn, item_id)
+    assert len(runs) == 3, runs
+    assert kernel.apply(conn, runs[0]["id"], {"outcome": "ok"}) == "applied"
+    apres = etat(conn, item_id)
+    assert apres["state"] == "fini", apres["state"]
+
+    perdant = runs[1]
+    statut = kernel.apply(conn, perdant["id"], {"outcome": "ok", "usage": {"t": 1}})
+    assert statut == "superseded", statut
+    encore = etat(conn, item_id)
+    for cle in ("version", "state", "cycle", "fence", "terminal_at"):
+        assert encore[cle] == apres[cle], f"{cle} a bougé : {apres[cle]} → {encore[cle]}"
+    assert not [e for e in evenements(conn, item_id) if e["run_id"] == perdant["id"]], \
+        "le perdant ne route rien"
+    classe = conn.execute(
+        "SELECT * FROM node_run WHERE id = %s", (perdant["id"],)
+    ).fetchone()
+    assert classe["status"] == "superseded", classe["status"]
+    assert (classe["result"] or {}).get("usage") == {"t": 1}, \
+        "ce qu'il rapporte est classé — ses jetons comptent quand même"
+    print(f"7. item {item_id} : résultat tardif du run {perdant['id']} classé "
+          f"« {statut} », item inchangé (version {encore['version']}, "
+          f"état {encore['state']}, passage {encore['cycle']}) ✓")
+
+
+def tous_en_echec(conn) -> None:
+    """8. tous les candidats échouent : l'issue majoritaire est routée."""
+    item_id = nouvel_item(conn, bundle_stub(3))
+    runs = reserve_tout(conn, item_id)
+    depart = etat(conn, item_id)
+    for run, issue in zip(runs, ("crashed", "stalled", "crashed")):
+        kernel.apply(conn, run["id"], {"outcome": issue})
+        item = etat(conn, item_id)
+        if run is not runs[-1]:  # un échec seul n'emporte rien : la course continue
+            assert item["version"] == depart["version"], \
+                "un candidat en échec ne route pas tant qu'un frère court"
+    assert item["state"] == "travail", item["state"]
+    assert item["version"] == depart["version"] + 1, "une seule issue de nœud"
+    dernier = evenements(conn, item_id)[-1]
+    assert dernier["outcome"] == "crashed", dernier["outcome"]
+    print(f"8. item {item_id} : crashed ×2 contre stalled ×1 → « crashed » routé "
+          "comme une issue de nœud ordinaire, retour sur `travail` ✓")
+
+    # égalité : c'est le run terminé en premier qui tranche, pas l'ordre des noms
+    for premier, second in (("crashed", "stalled"), ("stalled", "crashed")):
+        item_id = nouvel_item(conn, bundle_stub(2))
+        runs = reserve_tout(conn, item_id)
+        assert len(runs) == 2, runs
+        kernel.apply(conn, runs[0]["id"], {"outcome": premier})
+        kernel.apply(conn, runs[1]["id"], {"outcome": second})
+        dernier = evenements(conn, item_id)[-1]
+        assert dernier["outcome"] == premier, (dernier["outcome"], premier)
+        print(f"   item {item_id} : {premier} et {second} à égalité → "
+              f"« {premier} », celle du run terminé en premier ✓")
+
+
+def main() -> None:
+    db.init_db()  # idempotent : ne détruit rien, rattrape juste le schéma
+    workdir = Path(tempfile.mkdtemp(prefix="graphatom-fanout-"))
+    blocks.DATA_DIR = workdir
+    try:
+        with db.connect() as conn:
+            sans_fanout(conn)
+            course(conn, workdir)
+            resultat_tardif(conn)
+            tous_en_echec(conn)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+    print("\nfan-out : OK — K candidats courent, un seul survit, "
+          "et l'item n'a jamais eu qu'une issue")
+
+
+if __name__ == "__main__":
+    main()

@@ -34,6 +34,7 @@ WS="${GRAPHATOM_WORKSPACE:-}"
 REPO="${GRAPHATOM_REPO_DIR:-}"
 SUJET="${GRAPHATOM_SUBJECT_KEY:-}"
 MD=""            # release.md, connu dès que le workspace l'est
+TITRE=""         # le titre de l'issue, lu au plus tard : le commit et la PR le portent
 ATTENTES=8       # relectures du merge, une toutes les 15 s : deux minutes
 
 dit() {  # une ligne de journal, à l'écran et dans le compte rendu
@@ -52,6 +53,13 @@ lance() {  # exécute, journalise la commande et sa sortie, rend son code
 echoue() {  # dernier mot du script : le pas qui a lâché, puis son code
     dit "ÉCHEC — pas « $1 » → code $2"
     exit "$2"
+}
+
+lis_titre() {  # le titre de l'issue dans TITRE, une seule fois
+    if [ -z "$TITRE" ]; then
+        TITRE=$(gh issue view "$NUM" --repo "$DEPOT" --json title -q .title)
+    fi
+    [ -n "$TITRE" ]
 }
 
 # 0. l'environnement du bloc : sans lui, rien n'est identifiable
@@ -106,10 +114,11 @@ else
     echoue "rapprochement d'origin/main ($AMONT) impossible sans jugement" 9
 fi
 
-# 3. le commit — titre de l'issue, ligne vide, `Closes #<num>`
+# 3. le commit — titre de l'issue, ligne vide, `Closes #<num>`. Un agent qui
+#    commite au fil de l'eau laisse un worktree propre : il n'y a alors rien
+#    à committer, et ce n'est pas une erreur — c'est le cas nominal.
 if [ -n "$(git -C "$WT" status --porcelain)" ]; then
-    TITRE=$(gh issue view "$NUM" --repo "$DEPOT" --json title -q .title) \
-        || echoue "titre de l'issue #$NUM introuvable" 4
+    lis_titre || echoue "titre de l'issue #$NUM introuvable" 4
     lance git -C "$WT" add -A || echoue "git add" 4
     lance git -C "$WT" commit -qm "$TITRE" -m "Closes #$NUM" || echoue "git commit" 4
     dit "commit $(git -C "$WT" rev-parse --short HEAD) — $TITRE"
@@ -124,13 +133,18 @@ lance git -C "$WT" push -u origin "$BR" || echoue "push de $BR" 5
 #    réutilise d'un cycle à l'autre, et `gh pr view <branche>` rend alors
 #    volontiers la PR mergée du cycle précédent — c'est `gh pr list`, filtré
 #    sur la tête et sur l'état, qui ne rend que celle qui compte.
+#    Le corps est écrit, jamais déduit des commits : depuis que l'agent
+#    d'implémentation commite au fil de l'eau, aucun de ses messages ne porte
+#    `Closes #<num>`, et c'est cette ligne-là qui ferme l'issue au merge.
 ouverte() {
     gh pr list --repo "$DEPOT" --head "$BR" --state open \
         --json number -q '.[0].number // empty' 2>/dev/null
 }
 PR=$(ouverte)
 if [ -z "$PR" ]; then
-    lance gh pr create --repo "$DEPOT" --head "$BR" --fill || echoue "création de la PR" 6
+    lis_titre || echoue "titre de l'issue #$NUM introuvable" 6
+    lance gh pr create --repo "$DEPOT" --head "$BR" --title "$TITRE" \
+        --body "Closes #$NUM" || echoue "création de la PR" 6
     PR=$(ouverte)
     if [ -z "$PR" ]; then echoue "PR créée mais introuvable sur $BR" 6; fi
 fi

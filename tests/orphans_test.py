@@ -53,13 +53,15 @@ NODE = "travail"  # le nœud du contexte de test : il les nomme aussi
 
 
 class FakeConn:
-    """Le bloc n'interroge la base que pour la clé du sujet."""
+    """Le bloc interroge la base pour la clé du sujet, et pour la tentative
+    antérieure dont il reprendrait le travail — ici, il n'y en a aucune."""
 
-    def execute(self, *args):
+    def execute(self, sql, *args):
+        self.sql = sql
         return self
 
-    def fetchone(self) -> dict:
-        return {"subject_key": "orphelins:test"}
+    def fetchone(self) -> dict | None:
+        return {"subject_key": "orphelins:test"} if "FROM subject" in self.sql else None
 
 
 def context(workdir: Path, cmd: str, attempt: int,
