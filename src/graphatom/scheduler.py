@@ -98,12 +98,22 @@ def run_forever(poll_s: float = 0.5) -> None:
     Ces deux-là seulement sont rattrapées. Toute autre exception fait crasher
     le processus, bruyamment : elle n'était pas attendue.
     """
-    from .db import connect
+    from .db import connect, incarnation
 
     wait_s = 1.0
+    previous_incarnation = None
     while True:
         try:
             with connect() as conn:
+                current_incarnation = incarnation(conn)
+                if (previous_incarnation is not None
+                        and current_incarnation != previous_incarnation):
+                    print(
+                        "base reprise après un arrêt PostgreSQL "
+                        f"— serveur démarré à {current_incarnation[1].isoformat()}",
+                        flush=True,
+                    )
+                previous_incarnation = current_incarnation
                 while True:
                     did = tick(conn)
                     wait_s = 1.0  # un tick passé : la base répond, on repart de 1 s
