@@ -20,7 +20,7 @@ from graphatom import executors, graph  # noqa: E402
 # adaptateurs gardent l'invocation, le prompt et l'extraction d'usage.
 LEGACY = {
     ("code-task", "scope"): ("codex", "gpt-5.6-sol", "high"),
-    ("code-task", "implement"): ("codex", "gpt-5.6-luna", "medium"),
+    ("code-task", "implement"): ("codex", "gpt-5.6-sol", "high"),
     ("code-task", "implement[0]"): ("codex", "gpt-5.6-luna", "medium"),
     ("code-task", "implement[1]"): ("codex", "gpt-5.6-sol", "high"),
     ("code-task", "implement[2]"): (

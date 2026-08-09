@@ -51,7 +51,8 @@ def declaration() -> None:
     assert "release-node.sh" in cmd("release"), cmd("release")
 
     variants = BUNDLE["nodes"]["implement"]["config"]["fanout"]["variants"]
-    assert [v["label"] for v in variants] == ["minimal", "test d'abord", "gratuit"]
+    assert [v["label"] for v in variants] == [
+        "minimal Luna", "minimal Sol", "gratuit libre"]
     assert len(variants) == 3
     spec = BUNDLE["nodes"]["implement"]
     luna, sol, gratuit = [executors.resolve(BUNDLE, graph.candidate_node(spec, i))
@@ -62,10 +63,17 @@ def declaration() -> None:
         "codex", "gpt-5.6-sol", "high")
     assert (gratuit.cli, gratuit.model, gratuit.effort) == (
         "opencode", "opencode/deepseek-v4-flash-free", None)
+    minimal = "le diff minimal"
+    assert minimal in variants[0]["strategy"]
+    assert minimal in variants[1]["strategy"]
+    assert "aucune méthode de construction ne t'est imposée" in variants[2]["strategy"]
+    implement = executors.resolve(BUNDLE, BUNDLE["nodes"]["implement"])
+    assert (implement.cli, implement.model, implement.effort) == (
+        "codex", "gpt-5.6-sol", "high")
     assert variants[2]["agent"]["silence_s"] == 300
     assert "claude " not in json.dumps(BUNDLE)
-    print("1. scope et judge Sol high ; course Luna medium + Sol high + "
-          "DeepSeek gratuit ; portes légères sur Luna ✓")
+    print("1. scope, judge et implement seul Sol high ; course minimale "
+          "Luna medium + Sol high + DeepSeek gratuit libre ; portes Luna ✓")
 
 
 def prompts_synchrones() -> None:
