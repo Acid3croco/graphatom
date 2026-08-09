@@ -38,10 +38,14 @@ class FakeConn:
     """La base : seulement ce que le canal lui demande — l'issue est-elle
     connue, et le titre du sujet qu'on lui range."""
 
-    def __init__(self, terminals: dict[str, int] | None = None):
+    def __init__(self, terminals: dict[str, int] | None = None,
+                 items: list[dict] | None = None,
+                 events: list[dict] | None = None):
         self.known: set[str] = set()
         self.updated: list[tuple] = []
         self.terminals = terminals or {}
+        self.items = items or []
+        self.events = events or []
 
     def execute(self, sql: str, params: tuple = ()):
         if "FROM subject s JOIN work_item" in sql:
@@ -52,6 +56,10 @@ class FakeConn:
         if "w.terminal_at IS NOT NULL" in sql:
             item_id = self.terminals.get(params[1])
             return FakeCursor([{"id": item_id}] if item_id else [])
+        if "SELECT * FROM event" in sql:
+            return FakeCursor(self.events)
+        if "FROM work_item w" in sql:
+            return FakeCursor(self.items)
         return FakeCursor([])   # _gh_items : aucun item actif
 
 
@@ -74,10 +82,16 @@ class FakeGitHub:
 
     def comments(self, number: int) -> list[dict]:
         self.reads += 1
-        return [{"body": body} for n, body in self.posted if n == number]
+        return [{"id": index, "body": body}
+                for index, (n, body) in enumerate(self.posted, start=1)
+                if n == number]
 
     def post_comment(self, number: int, body: str) -> None:
         self.posted.append((number, body))
+
+    def edit_comment(self, comment_id: int, body: str) -> None:
+        number, _ = self.posted[comment_id - 1]
+        self.posted[comment_id - 1] = (number, body)
 
     def create_label(self, name: str) -> None:
         pass
@@ -218,6 +232,21 @@ def main() -> None:
     ack = gs._ack_body(
         {"id": 1, "graph": "code-task", "generation": 1}, retries[1])
     assert "reprise de #40 (item 7)" in ack, ack
+
+    # La peinture du journal garde la filiation, dans le même tick puis après
+    # un redémarrage où la table temporaire `retries` n'existe plus.
+    item = {"id": 1, "graph": "code-task", "generation": 1, "version": 1,
+            "subject_key": "gh:o/r#50"}
+    event = {"item_version": 1, "at": gs.dt.datetime(2026, 1, 1, 12, 0),
+             "kind": "admitted", "from_state": None, "to_state": "ingest",
+             "outcome": None}
+    marker = f"<!-- graphatom:{gs._ack_key(item)} -->"
+    gh.post_comment(50, f"{marker}\n{ack}")
+    paint_conn = FakeConn(items=[item], events=[event])
+    gs._paint_trajectories(paint_conn, gh, {})
+    assert "reprise de #40 (item 7)" in gh.posted[-1][1], gh.posted[-1]
+    gs._paint_trajectories(paint_conn, gh, {})
+    assert "reprise de #40 (item 7)" in gh.posted[-1][1], gh.posted[-1]
     print("5. reprise valide : pièces existantes copiées, filiation dans l'accusé ✓")
 
     # 6. cible absente, sans terminal ou soi-même : commentaire et admission normale

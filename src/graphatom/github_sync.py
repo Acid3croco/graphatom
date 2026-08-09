@@ -539,6 +539,24 @@ def _ack_body(item: dict, retry: tuple[int, int] | None = None) -> str:
             f"Trajectoire et artefacts : {_web()}/item/{item['id']}")
 
 
+def _ack_retry(item: dict, body: str) -> tuple[int, int] | None:
+    """Relit la filiation dans l'accusé que le rail va mettre à jour.
+
+    Le corps de l'issue n'est jamais relu. La filiation reste dans sa seule
+    projection durable, le commentaire d'accusé, avec une forme fermée qui
+    empêche de prendre une prose humaine pour un état du rail.
+    """
+    header = _ack_body(item).splitlines()[0]
+    prefix = f"{header.removesuffix('.')}, reprise de #"
+    for line in body.splitlines():
+        if not (line.startswith(prefix) and line.endswith(").")):
+            continue
+        source, separator, previous = line[len(prefix):-2].partition(" (item ")
+        if separator and source.isdigit() and previous.isdigit():
+            return int(source), int(previous)
+    return None
+
+
 def _acknowledge(conn: Connection, gh: GitHub,
                  retries: dict[int, tuple[int, int]] | None = None) -> None:
     """Accusé de prise en charge : entre l'admission et la première question,
@@ -852,14 +870,15 @@ def _paint_trajectories(conn: Connection, gh: GitHub, drawn: dict[int, int]) -> 
             "SELECT * FROM event WHERE item_id = %s ORDER BY item_version",
             (item["id"],),
         ).fetchall()
-        body = (f"{marker}\n{_ack_body(item)}\n\n"
-                f"**Trajectoire** (v{item['version']}, {len(events)} transitions)\n\n"
-                f"```\n{_journal(events)}\n```")
         try:
             comment = next(
                 (c for c in gh.comments(number) if marker in c["body"]), None)
             if comment is None:
                 continue  # l'accusé n'est pas encore posté — au prochain tick
+            retry = _ack_retry(item, comment["body"])
+            body = (f"{marker}\n{_ack_body(item, retry)}\n\n"
+                    f"**Trajectoire** (v{item['version']}, {len(events)} transitions)\n\n"
+                    f"```\n{_journal(events)}\n```")
             if comment["body"] != body:
                 gh.edit_comment(comment["id"], body)
                 print(f"#{number} ✎ trajectoire v{item['version']}", flush=True)
