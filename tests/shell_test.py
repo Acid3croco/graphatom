@@ -211,12 +211,19 @@ def faux_docker(tmp: Path, nom: str, services: str, log: str = "sync au repos\n"
     faux.write_text(
         "#!/bin/sh\n"
         f"ICI={binaires}\n"
-        'for MOT in "$@"; do\n'
-        '  case "$MOT" in\n'
-        '    ps) cat "$ICI/services.txt"; exit 0 ;;\n'
-        '    logs) cat "$ICI/log.txt"; exit 0 ;;\n'
-        '  esac\n'
-        "done\n"
+        'for MOT in "$@"; do DERNIER="$MOT"; done\n'
+        'if [ "$1" = inspect ]; then\n'
+        '  if [ "${GRAPHATOM_TEST_BAD_SERVICE:-}" = "${DERNIER#id-}" ]; then\n'
+        '    echo mauvais-sha\n'
+        '  else printf "%s\\n" "$GRAPHATOM_WORKER_SHA"; fi\n'
+        '  exit 0\n'
+        'fi\n'
+        'if [ "$2" = ps ]; then\n'
+        '  case " $* " in *" -q "*) printf "id-%s\\n" "$DERNIER" ;;\n'
+        '    *) cat "$ICI/services.txt" ;; esac\n'
+        '  exit 0\n'
+        'fi\n'
+        'if [ "$2" = logs ]; then cat "$ICI/log.txt"; exit 0; fi\n'
         'echo "commande inconnue : $*" >&2\n'
         "exit 1\n"
     )
@@ -717,25 +724,67 @@ def main() -> None:
     #    arriver au lieu de conclure sur le refus de connexion
     portes = tmp / "portes"
     portes.mkdir()
+    cible_portes = depot(tmp / "cible-portes")
+    sha_portes = git(cible_portes, "rev-parse", "HEAD")
+    with db.connect() as conn:
+        conn.execute(
+            "INSERT INTO heartbeat (who, at, worker_sha, worker_started_at) "
+            "VALUES ('rail', now(), %s, now()) ON CONFLICT (who) DO UPDATE "
+            "SET at = now(), worker_sha = EXCLUDED.worker_sha, "
+            "worker_started_at = EXCLUDED.worker_started_at",
+            (sha_portes,),
+        )
     docker = faux_docker(tmp, "docker-en-marche", "github-sync\npricing-sync\nweb\nfront\n")
     lent, secours = Serveur(delai=4.0), Serveur(corps="{}")
     lent.start()
     secours.start()
-    outcome = joue("verify_deploy", tmp, portes, plus={
+    outcome = joue("verify_deploy", cible_portes, portes, plus={
         "PATH": docker, "GRAPHATOM_FRONT_URL": lent.url,
-        "GRAPHATOM_WEB_URL": secours.url, "GRAPHATOM_PORTES_DELAI_S": "30"})
+        "GRAPHATOM_WEB_URL": secours.url, "GRAPHATOM_PORTES_DELAI_S": "30",
+        "GRAPHATOM_HEARTBEAT_DSN": VERROU_DSN})
     assert outcome["outcome"] == "pass", outcome
     rapport = (portes / "verify_deploy.md").read_text()
     assert attente(rapport, 2) >= 3, rapport  # elle a bien attendu le front
+
+    with db.connect() as conn:
+        conn.execute("DELETE FROM heartbeat WHERE who = 'rail'")
+    outcome = joue("verify_deploy", cible_portes, portes, plus={
+        "PATH": docker, "GRAPHATOM_FRONT_URL": lent.url,
+        "GRAPHATOM_WEB_URL": secours.url,
+        "GRAPHATOM_HEARTBEAT_DSN": VERROU_DSN})
+    assert outcome["outcome"] == "fail" and "worker" in outcome["summary"], outcome
+    with db.connect() as conn:
+        conn.execute(
+            "INSERT INTO heartbeat (who, at, worker_sha, worker_started_at) "
+            "VALUES ('rail', now(), 'mauvais-sha', now())"
+        )
+    outcome = joue("verify_deploy", cible_portes, portes, plus={
+        "PATH": docker, "GRAPHATOM_FRONT_URL": lent.url,
+        "GRAPHATOM_WEB_URL": secours.url,
+        "GRAPHATOM_HEARTBEAT_DSN": VERROU_DSN})
+    assert outcome["outcome"] == "fail" and "worker" in outcome["summary"], outcome
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE heartbeat SET worker_sha = %s WHERE who = 'rail'", (sha_portes,)
+        )
+    for service in ("github-sync", "pricing-sync", "web", "front"):
+        outcome = joue("verify_deploy", cible_portes, portes, plus={
+            "PATH": docker, "GRAPHATOM_FRONT_URL": lent.url,
+            "GRAPHATOM_WEB_URL": secours.url,
+            "GRAPHATOM_HEARTBEAT_DSN": VERROU_DSN,
+            "GRAPHATOM_TEST_BAD_SERVICE": service})
+        assert outcome["outcome"] == "fail" and service in outcome["summary"], outcome
     lent.stop()
-    print(f"11. {outcome['summary']} ✓")
+    print("11. concordance complète, worker absent ou faux et quatre étiquettes "
+          "discordantes contrôlés ✓")
 
     # 12. le service qui ne répond jamais : la porte échoue, mais après avoir
     #    épuisé le budget, et elle dit combien de temps elle a tenu
     sourd = Serveur()  # jamais démarré : le port est réservé, rien n'écoute
-    outcome = joue("verify_deploy", tmp, portes, plus={
+    outcome = joue("verify_deploy", cible_portes, portes, plus={
         "PATH": docker, "GRAPHATOM_FRONT_URL": sourd.url,
-        "GRAPHATOM_WEB_URL": secours.url, "GRAPHATOM_PORTES_DELAI_S": "6"})
+        "GRAPHATOM_WEB_URL": secours.url, "GRAPHATOM_PORTES_DELAI_S": "6",
+        "GRAPHATOM_HEARTBEAT_DSN": VERROU_DSN})
     assert outcome["outcome"] == "fail", outcome
     assert "porte 2" in outcome["summary"], outcome
     tenu = re.search(r"après (\d+) s d'attente", outcome["summary"])
@@ -752,9 +801,10 @@ def main() -> None:
             ("le stdlib", Serveur(corps="<html>le web stdlib</html>"), "_next")):
         serveur.start()
         depart = time.monotonic()
-        outcome = joue("verify_deploy", tmp, portes, plus={
+        outcome = joue("verify_deploy", cible_portes, portes, plus={
             "PATH": docker, "GRAPHATOM_FRONT_URL": serveur.url,
-            "GRAPHATOM_WEB_URL": secours.url, "GRAPHATOM_PORTES_DELAI_S": "60"})
+            "GRAPHATOM_WEB_URL": secours.url, "GRAPHATOM_PORTES_DELAI_S": "60",
+            "GRAPHATOM_HEARTBEAT_DSN": VERROU_DSN})
         ecoule = time.monotonic() - depart
         assert outcome["outcome"] == "fail", outcome
         assert "porte 2" in outcome["summary"] and marque in outcome["summary"], outcome
@@ -972,9 +1022,20 @@ def main() -> None:
             (workspace / "deploy.md").write_text("résultat du shell rendu\n")
             run = kernel.claim(conn, item_id)
             assert run is not None
-            assert kernel.apply(conn, run["id"], {
-                "outcome": "done", "deploy_sha": wanted,
-            }) == "applied"
+            item = conn.execute(
+                "SELECT * FROM work_item WHERE id = %s", (item_id,)
+            ).fetchone()
+            node = bundle["nodes"]["deploy"] | {"config": {"agent": {
+                "passation": False,
+                "prompt": "déploie",
+                "cmd": ("printf '%s' '{\"outcome\":\"done\","
+                        f"\"deploy_sha\":\"{wanted}\"}}' > outcome.json"),
+            }}}
+            result = blocks._attempt(
+                blocks.Context(conn, run, item, node, bundle), workspace
+            )
+            assert result["deploy_sha"] == wanted, result
+            assert kernel.apply(conn, run["id"], result) == "applied"
             event = conn.execute(
                 "SELECT kind FROM event WHERE run_id = %s", (run["id"],)
             ).fetchone()

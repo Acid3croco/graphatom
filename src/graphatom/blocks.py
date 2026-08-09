@@ -944,7 +944,10 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
             and not is_failure_outcome(outcome)):
         if erreur := _passation_invalide(handoff_path):
             return _autopsy(proc, log, ValueError(erreur), timeout=False)
-    return {"outcome": outcome, "summary": summary}
+    result = {"outcome": outcome, "summary": summary}
+    if "deploy_sha" in data:
+        result["deploy_sha"] = data["deploy_sha"]
+    return result
 
 
 def _starved(path: Path) -> dict | None:
