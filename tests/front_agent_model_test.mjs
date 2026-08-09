@@ -62,6 +62,33 @@ assert.deepEqual(
     effort: "medium",
   },
 );
+
+const historiques = [
+  {
+    cli: "codex", model: "gpt-5.6-luna", effort: "medium",
+    cmd: "CODEX_MODEL=gpt-5.6-luna CODEX_REASONING_EFFORT=medium "
+      + "bash \"${GRAPHATOM_WORKTREE:-.}/scripts/agent-codex.sh\"",
+    cmd_uses_executor: true,
+  },
+  {
+    cli: "codex", model: "gpt-5.6-sol", effort: "high",
+    cmd: "CODEX_MODEL=gpt-5.6-sol CODEX_REASONING_EFFORT=high "
+      + "bash \"${GRAPHATOM_WORKTREE:-.}/scripts/agent-codex.sh\"",
+    cmd_uses_executor: true,
+  },
+  {
+    cli: "opencode", model: "deepseek-v4-flash-free",
+    cmd: "bash \"${GRAPHATOM_WORKTREE:-.}/scripts/agent-opencode.sh\" "
+      + "opencode/deepseek-v4-flash-free",
+    cmd_uses_executor: true,
+  },
+];
+assert.deepEqual(historiques.map(agent => execution(undefined, agent)), [
+  { kind: "composed", cli: "codex", model: "gpt-5.6-luna", effort: "medium" },
+  { kind: "composed", cli: "codex", model: "gpt-5.6-sol", effort: "high" },
+  { kind: "composed", cli: "opencode", model: "deepseek-v4-flash-free", effort: null },
+]);
+assert.deepEqual(execution(undefined, { cmd: "printf ordinaire" }), { kind: "shell" });
 assert.deepEqual(execution(undefined, undefined, undefined), { kind: "none" });
 assert.deepEqual(execution({ cli: "claude" }), {
   kind: "model",
