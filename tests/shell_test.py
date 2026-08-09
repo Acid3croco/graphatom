@@ -675,7 +675,8 @@ def main() -> None:
 
     # 10. la frontière du bundle, relue à chaque tour : les nœuds mécaniques
     #    n'appellent aucun modèle, les jugements chers restent sur Sol high,
-    #    les portes simples passent sur Luna, et la course tient en trois runs
+    #    les deux harnais de test sont du shell sans modèle, et la course
+    #    d'implémentation tient en trois runs
     for nom in ("worktree", "deploy", "verify_deploy",
                 "cleanup", "cleanup_unresolved", "cleanup_split"):
         cmd = BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
@@ -684,8 +685,6 @@ def main() -> None:
     attendus = {
         "scope": ("gpt-5.6-sol", "high"),
         "implement": ("gpt-5.6-sol", "high"),
-        "test_backend": ("gpt-5.6-luna", "low"),
-        "test_frontend": ("gpt-5.6-luna", "medium"),
         "validate": ("gpt-5.6-luna", "low"),
         "judge": ("gpt-5.6-sol", "high"),
     }
@@ -694,6 +693,10 @@ def main() -> None:
         assert resolu.cli == "codex", f"{nom} n'est pas sur codex"
         assert (resolu.model, resolu.effort) == attendu, \
             f"{nom} : modèle ou effort inattendu {resolu}"
+    for nom in ("test_backend", "test_frontend"):
+        resolu = executors.resolve(BUNDLE, BUNDLE["nodes"][nom])
+        assert (resolu.cli, resolu.model, resolu.effort) == (None, None, None)
+        assert resolu.cmd is not None and "test_harness.py" in resolu.cmd
     assert "release-node.sh" in BUNDLE["nodes"]["release"]["config"]["agent"]["cmd"], \
         "release ne prend pas sa voie shell avant Luna"
     assert "claude " not in json.dumps(BUNDLE), "le bundle dépend encore de claude"
