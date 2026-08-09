@@ -5,9 +5,9 @@ Il ne touche jamais la base : le noyau réserve avant, applique après.
 Les stubs simulent le travail via la config du nœud.
 
 Un nœud ACT / CHECK / JUDGE peut déclarer `config.agent` : un vrai agent
-CLI fait alors le travail. Le contrat est minuscule et agnostique — le
-bloc écrit `prompt.md` dans le workspace, lance la commande configurée
-(claude, codex, pi, n'importe quoi), et lit `outcome.json`. Pas de
+CLI fait alors le travail. Le contrat est minuscule — le bloc écrit
+`prompt.md` dans le workspace, résout l'adaptateur configuré ou la commande
+explicite, puis lit `outcome.json`. Pas de
 fichier d'issue valide = crashed, et le noyau route comme d'habitude.
 
 Une extension optionnelle : si la tentative laisse un `usage.json`, le
@@ -81,7 +81,7 @@ from pathlib import Path
 
 import psycopg
 
-from . import db, effects, worktree
+from . import db, effects, executors, worktree
 from .graph import KERNEL_OUTCOMES, judge_source
 from .worktree import run_git, run_worktree
 
@@ -577,8 +577,11 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
     log = attempt_log(workspace, ctx.run)
     pgid_file = workspace / PGID_FILE
     watched = (log, workspace, ctx.worktree)
-    cmd = _fill(ctx, cfg["cmd"], subject)  # une variante joue sa propre commande
+    resolved = executors.resolve(ctx.bundle, ctx.node)
+    cmd = _fill(ctx, executors.command(resolved), subject)
     with log.open("w") as out:
+        out.write(f"$ {cmd}\n")
+        out.flush()
         # session dédiée : l'agent est chef de son groupe, ses descendants aussi
         proc = subprocess.Popen(
             cmd, shell=True, cwd=workspace, env=env, start_new_session=True,

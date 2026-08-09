@@ -539,22 +539,47 @@ is already in use` nomme le coupable : le shell le retire et rejoue le
 
 ## De vrais agents dans les blocs (milestone 3b)
 
-Un nœud ACT / CHECK / JUDGE peut déclarer `config.agent` — le bloc écrit
-alors `prompt.md` dans le workspace, lance la commande configurée, et lit
-`outcome.json` :
+Un graph peut déclarer la CLI et le modèle par défaut. Un nœud ACT / CHECK /
+JUDGE qui porte `config.agent` hérite de chaque valeur séparément :
 
 ```json
-"agent": {
-  "cmd": "claude --dangerously-skip-permissions -p \"$(cat prompt.md)\"",
-  "timeout_s": 540,
-  "prompt": "Agent de test frontend… chromium --headless=new…"
+"agent": {"cli": "codex", "model": "gpt-5.6-luna"},
+"nodes": {
+  "test": {
+    "block": "CHECK",
+    "config": {
+      "agent": {
+        "model": "gpt-5.6-sol",
+        "timeout_s": 540,
+        "prompt": "Agent de test frontend… chromium --headless=new…"
+      }
+    }
+  }
 }
 ```
 
-Le contrat est minuscule et agnostique : n'importe quel agent CLI (claude,
-codex, pi…) fait l'affaire ; le kernel n'en connaît aucun. Pas
-d'`outcome.json` valide → `crashed`, retenté puis escaladé — comme
-n'importe quel bloc.
+Ici, `test` garde la CLI `codex` du graph et surcharge seulement son modèle.
+Une variante de fan-out peut poser le même fragment `agent` : les autres
+variantes gardent leurs valeurs héritées. Les trois CLI reconnues sont
+`claude`, `codex` et `opencode`. Leurs adaptateurs construisent l'invocation,
+passent `prompt.md` et produisent `usage.json` quand la CLI rapporte un usage.
+
+Une commande shell reste possible pour un cas spécial :
+
+```json
+"agent": {
+  "cmd": "bash scripts/operation-deterministe.sh",
+  "timeout_s": 540,
+  "prompt": "Contrat de cette opération…"
+}
+```
+
+`cmd` a toujours priorité sur `cli` et `model`. Cette règle conserve les
+opérations shell existantes et ne dépend pas d'un choix implicite. Une CLI
+inconnue, ou une clé autre que `cli` et `model` dans les valeurs par défaut,
+est refusée à la publication. Aucun secret ni identifiant d'accès ne fait
+partie de ce schéma. Pas d'`outcome.json` valide → `crashed`, retenté puis
+escaladé — comme n'importe quel bloc.
 
 ### Le contrat d'un bloc agent, noir sur blanc
 
