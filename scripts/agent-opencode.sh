@@ -49,6 +49,7 @@ BORNE="${OPENCODE_TIMEOUT_S:-300}"
 OC="${OPENCODE_BIN:-opencode}"
 DIR="${OPENCODE_DIR:-$PWD}"
 EVENTS="opencode-events.jsonl"   # la sortie brute d'opencode, dans le workspace
+ERRORS="opencode-errors.log"     # stderr séparé : rejoué dans le journal ensuite
 
 [ -f prompt.md ] || {
     echo "agent-opencode: pas de prompt.md dans $PWD — rien à donner au modèle" >&2
@@ -82,6 +83,33 @@ texte() {  # le texte du modèle, extrait du flux d'événements d'opencode
     jq -r 'select(.type == "text") | .part.text' "$EVENTS" 2>/dev/null
 }
 
+messages() {  # toutes les chaînes du fournisseur, JSON ou stderr brut
+    jq -r '.. | strings' "$EVENTS" 2>/dev/null
+    cat "$ERRORS" 2>/dev/null
+}
+
+starvation() {  # motifs fermés d'opencode : crédits, quota, authentification
+    [ -f outcome.json ] && return
+    for MOTIF in \
+        "Insufficient Balance" \
+        "Insufficient balance" \
+        "Insufficient credits" \
+        "Quota exceeded" \
+        "quota has been exhausted" \
+        "Authentication failed" \
+        "authentication failed" \
+        "Unauthorized" \
+        "API key is invalid"
+    do
+        REASON=$(messages | grep -F "$MOTIF" | head -1)
+        [ -n "$REASON" ] || continue
+        jq -n --arg provider "opencode" --arg reason "$REASON" \
+            '{provider: $provider, reason: $reason}' > starved.json
+        echo "agent-opencode: fournisseur affamé — $REASON" >&2
+        return
+    done
+}
+
 usage() {  # la consommation, telle qu'opencode la rapporte : personne ne l'interprète
     jq -se '[.[] | select(.type == "step_finish") | .part] | select(length > 0) | {
         input_tokens: (map(.tokens.input // 0) | add),
@@ -112,11 +140,14 @@ recopie() {  # l'issue dictée dans le texte, quand le modèle a parlé au lieu 
 # worktree de son item et sur sa base jetable, jamais sur la production.
 echo "agent-opencode: modèle $MODELE — répertoire $DIR — base $OPENCODE_DB — borne ${BORNE} s"
 timeout -k 5 "$BORNE" \
-    "$OC" run -m "$MODELE" --format json --auto --dir "$DIR" "$(cat prompt.md)" > "$EVENTS"
+    "$OC" run -m "$MODELE" --format json --auto --dir "$DIR" "$(cat prompt.md)" \
+    > "$EVENTS" 2> "$ERRORS"
 RC=$?
 
+cat "$ERRORS" >&2
 texte || cat "$EVENTS"   # le texte du modèle part dans le journal de la tentative
 usage
+starvation
 
 case $RC in 124 | 137)
     echo "agent-opencode: le modèle « $MODELE » n'a rien rendu en ${BORNE} s —" >&2
