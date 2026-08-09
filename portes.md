@@ -1,4 +1,4 @@
-portes du candidat — atelier /home/jack/projects/graphatom/.claude/worktrees/imperative-crunching-conway/.worktrees/fix-portes
+portes du candidat — atelier /home/jack/projects/graphatom/.worktrees/fix-keep-n-early
 $ uv run python -c import graphatom.blocks, graphatom.channel, graphatom.cli, graphatom.db, graphatom.github_sync, graphatom.graph, graphatom.heartbeat, graphatom.kernel, graphatom.scheduler, graphatom.web, graphatom.worktree
 porte « import » passée en 0 s
 $ uv run python tests/validate_test.py
@@ -10,9 +10,9 @@ $ uv run python tests/validate_test.py
    boucle longue par la file refusée : cycle hors escalade via verify_deploy → deploy ✓
 
 validation : OK — une cible on_kernel fantôme ne se publie plus
-porte « tests/validate_test.py » passée en 1 s
+porte « tests/validate_test.py » passée en 0 s
 $ uv run python tests/fanout_config_test.py
-1. fan-out bien formé sur `implement` publié : révision 21ab4c8d7d09… ✓
+1. fan-out bien formé sur `implement` publié : révision 7c8e60e3e63b… ✓
 2. fan-out sur un WAIT refusé : clarify : un nœud WAIT ne peut pas être en fan-out ✓
 3. table bloc → réductions : ['first_pass', 'keep_n'] livrées, keep_n sur ACT seul, WAIT au jeu vide ✓
    réduction 'vote' refusée : implement : réduction 'vote' refusée sur un bloc ACT — permises : ['first_pass', 'keep_n'] ✓
@@ -81,7 +81,7 @@ $ uv run python tests/api_test.py
 9. /api/graph/<rév> : le bundle entier, l'inconnue rend None ✓
 
 api : OK — les pages se lisent en JSON, sans dépendance ni écriture
-porte « tests/api_test.py » passée en 0 s
+porte « tests/api_test.py » passée en 1 s
 $ uv run python tests/checklist_test.py
 1. test_frontend → validate → review / implement, cycle borné ✓
 #60 ← q5
@@ -127,7 +127,7 @@ $ uv run python tests/depends_test.py
 4. dépendance fermée : admission au tick suivant, label retiré ✓
 
 dépendances : OK — l'admission attend, puis part toute seule
-porte « tests/depends_test.py » passée en 1 s
+porte « tests/depends_test.py » passée en 0 s
 $ uv run python tests/split_deps_test.py
 1. seule la ligne `Depends-on: #<mère>` est réécrite ✓
 #20 ← reparent-10
@@ -179,16 +179,28 @@ $ uv run python tests/live_test.py
 4. onglet caché et focus respectés, conteneur remplacé, aucun canal ✓
 
 rafraîchissement : OK — la page se suit sans se recharger
-porte « tests/live_test.py » passée en 0 s
+porte « tests/live_test.py » passée en 1 s
+$ uv run python tests/failure_trace_test.py
+1. agent Codex : échec rendu relu dans failure.json, quatre champs bornés ✓
+2. shell sans issue : crashed au même chemin, qui ne porte que ce dernier échec ✓
+3. règle explicite vérifiée ; item neuf et réussite sans trace inventée ✓
+porte « tests/failure_trace_test.py » passée en 0 s
+$ uv run python tests/codex_routing_test.py
+1. scope et judge Sol high ; course Luna medium + Sol high + DeepSeek gratuit ; portes légères sur Luna ✓
+2. agent-codex transmet gpt-5.6-luna et effort medium à la CLI ✓
+3. release nominale sans modèle ; panne confiée à Luna low ✓
+
+routage codex : OK — modèle et effort explicites, release script-first
+porte « tests/codex_routing_test.py » passée en 0 s
 $ uv run python tests/orphans_test.py
 1. agent fauché au timeout après 2.0s, autopsie -15 ✓
-2. groupe 4017100 entièrement révoqué ✓
+2. groupe 1818450 entièrement révoqué ✓
 3. traces agent-travail-1-1.log et prompt-travail-1-1.md écrites ✓
 4. agent nominal appliqué, usage fusionné : {'outcome': 'ok', 'summary': 'fait', 'usage': {'input_tokens': 12, 'output_tokens': 3456}} ✓
 4 bis. agent sans usage.json : résultat inchangé ✓
 5. autopsie du crash : sortie 42, queue « Execution error » ✓
-6. worker tué, agent orphelin toujours vivant : groupe 4017556 ✓
-orphelin révoqué : groupe 4017556 (ps -o pgid= -p $$ > pgid.txt; sleep 300 & sleep 300)
+6. worker tué, agent orphelin toujours vivant : groupe 1819445 ✓
+orphelin révoqué : groupe 1819445 (ps -o pgid= -p $$ > pgid.txt; sleep 300 & sleep 300)
 7. orphelin révoqué par le faucheur, trace effacée ✓
 8. trace d'une autre tentative : ni suivie ni effacée ✓
 9. identité périmée (naissance, boot) : le faucheur ne tue personne ✓
@@ -209,7 +221,7 @@ porte « tests/timeout_marge_test.py » passée en 0 s
 $ uv run python tests/timeout_test.py
 1. 1 appel sortant, borné par TIMEOUT_S = 30.0 s ✓
 2. timeout à 2.0 s : appel rendu en 2.0 s — timed out ✓
-3. tick rendu en 30.1 s, jamais gelé (< 60 s) ✓
+3. tick rendu en 30.0 s, jamais gelé (< 60 s) ✓
 4. incident réseau nominal, aucun traceback : github injoignable : timed out — on réessaie ✓
 
 timeout : OK — un serveur muet coûte un tick, plus l'éternité
