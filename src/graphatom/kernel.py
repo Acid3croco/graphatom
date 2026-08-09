@@ -366,8 +366,20 @@ def apply(conn: psycopg.Connection, run_id: int, submitted: dict) -> str:
     return statut
 
 
-def apply_item(conn: psycopg.Connection, item_id: int, outcome: str, kind: str) -> None:
+def apply_item(
+    conn: psycopg.Connection,
+    item_id: int,
+    outcome: str,
+    kind: str,
+    *,
+    before_route: Callable[[], object] | None = None,
+) -> None:
     """Transition sans run : réponse humaine, échéance de WAIT, wall_deadline.
+
+    Cette entrée doit ouvrir la transaction de plus haut niveau. L'appelant
+    peut lui donner `before_route` pour y joindre une mutation connexe, par
+    exemple fermer la question d'un WAIT. Le ménage ne commence ainsi
+    qu'après la validation de l'ensemble par PostgreSQL.
 
     Rien ici n'est une réduction : l'item quitte son nœud sans qu'aucun
     candidat ait gagné. Ceux qui couraient encore n'ont donc plus rien à
@@ -375,10 +387,15 @@ def apply_item(conn: psycopg.Connection, item_id: int, outcome: str, kind: str) 
     ce qui tient la promesse sur *tous* les chemins terminaux, et pas
     seulement quand la course va jusqu'au bout.
     """
+    if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+        raise RuntimeError("apply_item exige une connexion hors transaction")
+
     with conn.transaction():
         item = conn.execute(
             "SELECT * FROM work_item WHERE id = %s FOR UPDATE", (item_id,)
         ).fetchone()
+        if before_route is not None:
+            before_route()
         if item["terminal_at"] is not None:
             return
         revoked = conn.execute(

@@ -42,6 +42,8 @@ import threading
 import uuid
 from pathlib import Path
 
+from psycopg.pq import TransactionStatus
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, graph, kernel, scheduler, web  # noqa: E402
@@ -142,6 +144,32 @@ def bundle_stub(k: int | None, keep: int | None = None) -> dict:
                 "config": {"question": "On retente ?", "options": ["retry"],
                            "owner": "test", "deadline_minutes": 60},
                 "edges": {"retry": "travail", "expired": "abandon"},
+            },
+            "fini": {"terminal": True},
+            "abandon": {"terminal": True},
+        },
+    }
+
+
+def bundle_wait() -> dict:
+    """Un travail qui entre dans un WAIT, puis expire au terminal."""
+    return {
+        "name": "wait-expiry-stale-run",
+        "entry": "travail",
+        "budgets": {"escalations": 2, "wall_deadline_hours": 1},
+        "on_kernel": {"escalate_to": "attente", "exhausted_to": "abandon"},
+        "nodes": {
+            "travail": {
+                "block": "ACT", "config": {"duration_s": 0},
+                "edges": {"ok": "attente"},
+            },
+            "attente": {
+                "block": "WAIT",
+                "config": {
+                    "question": "On continue ?", "options": ["continue"],
+                    "owner": "test", "deadline_minutes": 60,
+                },
+                "edges": {"continue": "fini", "expired": "abandon"},
             },
             "fini": {"terminal": True},
             "abandon": {"terminal": True},
@@ -379,6 +407,15 @@ def transition_sans_run(conn) -> None:
     assert all(run["finished_at"] is not None for run in classes), classes
     assert not any(run["id"] in kernel.CLAIMED for run in runs)
 
+    conn.execute(
+        "UPDATE node_run SET lease_expires_at = now() - interval '1 hour' "
+        "WHERE item_id = %s", (item_id,),
+    )
+    assert kernel.reap(conn) == 0, "le faucheur ne doit pas reprendre un run révoqué"
+    stable = etat(conn, item_id)
+    assert stable["version"] == version and stable["state"] == "abandon", stable
+    assert len(evenements(conn, item_id)) == events
+
     for run in runs:
         statut = kernel.apply(
             conn, run["id"],
@@ -392,6 +429,67 @@ def transition_sans_run(conn) -> None:
                for run in runs_de(conn, item_id))
     print(f"7 bis. item {item_id} : wall_deadline révoque {len(runs)} runs ; "
           "leurs résultats tardifs sont classés sans nouveau routage ✓")
+
+
+def expiration_wait(conn) -> None:
+    """7 ter. WAIT expire atomiquement, puis le ménage se fait hors transaction."""
+    item_id = nouvel_item(conn, bundle_wait())
+    run = kernel.claim(conn, item_id)
+    assert run is not None
+    kernel.apply(conn, run["id"], {"outcome": "ok"})
+    avant = etat(conn, item_id)
+    assert avant["state"] == "attente" and avant["terminal_at"] is None, avant
+    events = len(evenements(conn, item_id))
+
+    # Reproduit le résidu observé en production : un ancien run reste en vol
+    # alors que l'item attend déjà une réponse.
+    conn.execute(
+        "UPDATE node_run SET status = 'running', outcome = NULL, result = NULL, "
+        "finished_at = NULL, lease_expires_at = now() - interval '1 hour' "
+        "WHERE id = %s", (run["id"],),
+    )
+    kernel.CLAIMED.add(run["id"])
+    conn.execute(
+        "UPDATE question SET deadline = now() - interval '1 minute' "
+        "WHERE item_id = %s AND state = 'open'", (item_id,),
+    )
+
+    transactions = []
+    vrai_menage = kernel._menage
+
+    def observe(item: int, run_ids: list[int], ranger: bool) -> None:
+        transactions.append(conn.info.transaction_status)
+        vrai_menage(item, run_ids, ranger)
+
+    kernel._menage = observe
+    try:
+        assert scheduler._settle_waits(conn) == 1
+    finally:
+        kernel._menage = vrai_menage
+
+    apres = etat(conn, item_id)
+    question = conn.execute(
+        "SELECT state FROM question WHERE item_id = %s", (item_id,)
+    ).fetchone()
+    dernier = evenements(conn, item_id)[-1]
+    classe = runs_de(conn, item_id)[0]
+    assert question["state"] == "expired", question
+    assert dernier["kind"] == "deadline" and dernier["outcome"] == "expired", dernier
+    assert apres["state"] == "abandon" and apres["terminal_at"] is not None, apres
+    assert apres["version"] == avant["version"] + 1
+    assert len(evenements(conn, item_id)) == events + 1
+    assert classe["status"] == "superseded" and classe["finished_at"] is not None, classe
+    assert transactions == [TransactionStatus.IDLE], transactions
+
+    version = apres["version"]
+    assert kernel.apply(
+        conn, run["id"], {"outcome": "ok", "usage": {"input_tokens": 1}}
+    ) == "superseded"
+    stable = etat(conn, item_id)
+    assert stable["version"] == version and stable["state"] == "abandon", stable
+    assert len(evenements(conn, item_id)) == events + 1
+    print(f"7 ter. item {item_id} : WAIT expiré et run révoqué dans une seule "
+          "transaction ; ménage après commit ✓")
 
 
 def tous_en_echec(conn) -> None:
@@ -533,6 +631,7 @@ def main() -> None:
             course(conn, workdir)
             resultat_tardif(conn)
             transition_sans_run(conn)
+            expiration_wait(conn)
             tous_en_echec(conn)
             keep_n(conn)
     finally:
