@@ -101,6 +101,7 @@ OUTCOME_NAME = "outcome.json"  # transitoire : purgé avant chaque tentative
 STARVED_NAME = "starved.json"  # idem — une panne de crédits nommée par l'adaptateur
 PROMPT_NAME = "prompt.md"  # l'interface avec le cmd, archivée après la tentative
 USAGE_NAME = "usage.json"  # idem — ce que l'agent veut bien dire de sa consommation
+EVENT_NAMES = ("codex.jsonl", "opencode-events.jsonl")  # flux brut du fournisseur
 FAILURE_NAME = "failure.json"  # emplacement stable du dernier échec de l'item
 TAIL_LINES = 20  # queue du log rendue dans l'autopsie d'une tentative crashée
 TAIL_CHARS = 2000
@@ -245,13 +246,13 @@ def _usage(workspace: Path) -> dict:
 def _archive(workspace: Path, name: str) -> None:
     """Range les traces de nom fixe sous le nom de la tentative.
 
-    `prompt.md` et `usage.json` sont l'interface avec le `cmd` : des noms
-    fixes, que le nœud suivant écraserait. La tentative finie, ils
+    Le prompt, l'usage et les événements du fournisseur sont l'interface avec
+    le `cmd` : des noms fixes, que le nœud suivant écraserait. La tentative finie, ils
     deviennent des pièces d'archive — `prompt-<nœud>-<passage>-<tentative>.md`,
     `usage-…json`, à côté du journal déjà nommé ainsi. L'histoire complète
     d'un item se lit alors dans son workspace, sans rien de réécrit.
     """
-    for fixed in (PROMPT_NAME, USAGE_NAME):
+    for fixed in (PROMPT_NAME, USAGE_NAME, *EVENT_NAMES):
         path = workspace / fixed
         if path.is_file():
             path.replace(path.with_stem(f"{path.stem}-{name}"))
