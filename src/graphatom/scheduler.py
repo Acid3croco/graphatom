@@ -39,7 +39,8 @@ import datetime as dt
 import psycopg
 
 from . import heartbeat, kernel
-from .blocks import BLOCKS, Context, item_workspace
+from .blocks import (BLOCKS, Context, DEPLOYED_SERVICES,
+                     deployed_service_shas, item_workspace)
 from .graph import FANOUT_MAX_CANDIDATES, candidate_node, fanout_variants, load_bundle
 
 RECONNECT_MAX_S = 30.0  # plafond du backoff : une base absente n'est jamais abandonnée
@@ -81,74 +82,138 @@ def _worker_sha() -> str:
     return result.stdout.strip() if result.returncode == 0 else "inconnu"
 
 
-WORKER_SHA = _worker_sha()
+WORKER_SHA = os.environ.get("GRAPHATOM_WORKER_SHA") or _worker_sha()
 os.environ.setdefault("GRAPHATOM_WORKER_SHA", WORKER_SHA)
 os.environ.setdefault("GRAPHATOM_WORKER_STARTED_AT", WORKER_STARTED_AT.isoformat())
 
 
-def _activation_worker(conn: psycopg.Connection) -> int:
-    """Réconcilie la dernière demande durable d'activation du worker."""
+def _activation_request(conn: psycopg.Connection) -> dict | None:
+    """Rend la dernière release appliquée qui demande un SHA de worker."""
+    return conn.execute(
+        "SELECT id, item_id, result FROM node_run "
+        "WHERE node = 'deploy' AND status = 'applied' AND outcome = 'done' "
+        "AND result->>'deploy_sha' IS NOT NULL "
+        "ORDER BY finished_at DESC, id DESC LIMIT 1"
+    ).fetchone()
+
+
+def _activation_state(conn: psycopg.Connection, request: dict, state: dict) -> None:
+    conn.execute(
+        "UPDATE node_run SET result = jsonb_set(result, "
+        "'{worker_activation}', %s::jsonb) WHERE id = %s",
+        (psycopg.types.json.Jsonb(state), request["id"]),
+    )
+
+
+def _activation_report(item_id: int, *lines: str) -> None:
+    """Ajoute un état au rapport encore présent, sans casser le worker nettoyé."""
+    report = item_workspace(item_id) / "deploy.md"
+    try:
+        with report.open("a") as out:
+            for line in lines:
+                out.write(line + "\n")
+    except OSError as exc:
+        print(f"rapport d'activation indisponible pour l'item {item_id} : {exc}",
+              flush=True)
+
+
+def _activation_worker(conn: psycopg.Connection) -> bool:
+    """Réconcilie la dernière demande durable et dit si elle reste en attente."""
+    request = _activation_request(conn)
+    if request is None:
+        return False
+    wanted = request["result"]["deploy_sha"]
+    previous = request["result"].get("worker_activation") or {}
+    if wanted == WORKER_SHA:
+        state = {"status": "active", "worker_sha": WORKER_SHA}
+        if previous != state:
+            _activation_state(conn, request, state)
+            _activation_report(request["item_id"],
+                               f"worker actif sur le SHA voulu {wanted}")
+        return False
+
     repo = Path(os.environ.get("GRAPHATOM_REPO_DIR", Path(__file__).resolve().parents[2]))
+    checkout = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=False,
+    ).stdout.strip()
+    if checkout != wanted:
+        state = {"status": "error", "worker_sha": WORKER_SHA,
+                 "wanted_sha": wanted,
+                 "error": f"checkout {checkout or 'inconnu'} différent"}
+        if previous != state:
+            _activation_state(conn, request, state)
+            _activation_report(request["item_id"],
+                               f"worker porte {WORKER_SHA} - voulu {wanted}",
+                               f"activation en attente - {state['error']}")
+        return False  # verify_deploy doit router cette discordance
+
     checksum = subprocess.run(
         ["cksum"], input=str(repo), capture_output=True, text=True, check=False,
     )
-    if checksum.returncode:
-        return 0
-    lock = int(checksum.stdout.split()[0])
+    try:
+        lock = int(checksum.stdout.split()[0]) if checksum.returncode == 0 else None
+    except (IndexError, ValueError):
+        lock = None
+    if lock is None:
+        state = {"status": "error", "worker_sha": WORKER_SHA,
+                 "wanted_sha": wanted, "error": "cksum indisponible"}
+        if previous != state:
+            _activation_state(conn, request, state)
+            _activation_report(request["item_id"],
+                               "activation du worker échouée - cksum indisponible")
+        print("activation du worker échouée - cksum indisponible", flush=True)
+        return True
     if not conn.execute(
             "SELECT pg_try_advisory_lock(%s) AS pris", (lock,)).fetchone()["pris"]:
-        return 0
+        return True
     try:
-        request = conn.execute(
-            "SELECT id, item_id, result FROM node_run "
-            "WHERE node = 'deploy' AND status = 'applied' AND outcome = 'done' "
-            "AND result->>'deploy_sha' IS NOT NULL "
-            "ORDER BY finished_at DESC, id DESC LIMIT 1"
-        ).fetchone()
-        if request is None:
-            return 0
-        wanted = request["result"]["deploy_sha"]
-        checkout = subprocess.run(
+        current = _activation_request(conn)
+        if current is None or current["id"] != request["id"]:
+            return True
+        current_checkout = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
             capture_output=True, text=True, check=False,
         ).stdout.strip()
-        report = item_workspace(request["item_id"]) / "deploy.md"
+        if current_checkout != wanted:
+            return False
 
-        if wanted == WORKER_SHA:
-            state = {"status": "active", "worker_sha": WORKER_SHA}
-            if request["result"].get("worker_activation") != state:
-                conn.execute(
-                    "UPDATE node_run SET result = jsonb_set(result, "
-                    "'{worker_activation}', %s::jsonb) WHERE id = %s",
-                    (psycopg.types.json.Jsonb(state), request["id"]),
-                )
-                with report.open("a") as out:
-                    out.write(f"worker actif sur le SHA voulu {wanted}\n")
-            return 0
+        attempted = previous.get("attempted_at")
+        if attempted:
+            try:
+                age = (kernel.now() - dt.datetime.fromisoformat(attempted)).total_seconds()
+            except (TypeError, ValueError):
+                age = float("inf")
+            retry_s = float(os.environ.get("GRAPHATOM_ACTIVATION_RETRY_S", "5"))
+            if age < retry_s:
+                return True
+
+        services = deployed_service_shas(repo)
+        wrong = [name for name in DEPLOYED_SERVICES if services[name] != wanted]
+        if wrong:
+            state = {"status": "error", "worker_sha": WORKER_SHA,
+                     "wanted_sha": wanted,
+                     "service_shas": services,
+                     "error": "services discordants : " + ", ".join(wrong)}
+            if previous != state:
+                _activation_state(conn, request, state)
+                _activation_report(request["item_id"], *(
+                    f"{name} porte finalement {services[name] or 'aucun SHA'} - voulu {wanted}"
+                    for name in DEPLOYED_SERVICES
+                ), f"activation en attente - {state['error']}")
+            return False
+
+        _activation_report(request["item_id"], *(
+            f"{name} porte finalement {services[name]} - voulu {wanted}"
+            for name in DEPLOYED_SERVICES
+        ))
 
         state = {"status": "pending", "worker_sha": WORKER_SHA,
-                 "wanted_sha": wanted}
-        if checkout != wanted:
-            state["error"] = f"checkout {checkout or 'inconnu'} différent"
-            conn.execute(
-                "UPDATE node_run SET result = jsonb_set(result, "
-                "'{worker_activation}', %s::jsonb) WHERE id = %s",
-                (psycopg.types.json.Jsonb(state), request["id"]),
-            )
-            if request["result"].get("worker_activation") != state:
-                with report.open("a") as out:
-                    out.write(f"worker porte {WORKER_SHA} - voulu {wanted}\n")
-                    out.write(f"activation en attente - {state['error']}\n")
-            return 0
-
-        conn.execute(
-            "UPDATE node_run SET result = jsonb_set(result, "
-            "'{worker_activation}', %s::jsonb) WHERE id = %s",
-            (psycopg.types.json.Jsonb(state), request["id"]),
-        )
-        with report.open("a") as out:
-            out.write(f"worker porte {WORKER_SHA} - voulu {wanted}\n")
-            out.write("résultat appliqué - activation du worker demandée\n")
+                 "wanted_sha": wanted, "attempted_at": kernel.now().isoformat()}
+        _activation_state(conn, request, state)
+        _activation_report(request["item_id"],
+                           f"worker porte {WORKER_SHA} - voulu {wanted}",
+                           "résultat appliqué - activation du worker demandée")
         try:
             restarted = subprocess.run(
                 [os.environ.get("GRAPHATOM_SYSTEMCTL", "systemctl"), "--user", "restart",
@@ -160,25 +225,21 @@ def _activation_worker(conn: psycopg.Connection) -> int:
         if restarted.returncode:
             state["status"] = "error"
             state.setdefault("error", f"systemctl code {restarted.returncode}")
-            conn.execute(
-                "UPDATE node_run SET result = jsonb_set(result, "
-                "'{worker_activation}', %s::jsonb) WHERE id = %s",
-                (psycopg.types.json.Jsonb(state), request["id"]),
-            )
-            with report.open("a") as out:
-                out.write(f"activation du worker échouée - {state['error']}\n")
-        return 1
+            _activation_state(conn, request, state)
+            _activation_report(request["item_id"],
+                               f"activation du worker échouée - {state['error']}")
+        return True
     finally:
         conn.execute("SELECT pg_advisory_unlock(%s)", (lock,))
 
 
 def tick(conn: psycopg.Connection) -> int:
     heartbeat.beat(conn, heartbeat.RAIL, WORKER_SHA, WORKER_STARTED_AT)
-    did = _activation_worker(conn)
-    if did:
-        return did
-    did += kernel.reap(conn)
+    activation_pending = _activation_worker(conn)
+    did = kernel.reap(conn)
     did += _settle_waits(conn)
+    if activation_pending:
+        return did
     did += _dispatch(conn)
     return did
 

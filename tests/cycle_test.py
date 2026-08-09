@@ -32,6 +32,7 @@ Usage : uv run python tests/cycle_test.py
 
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -106,6 +107,13 @@ printf '{"outcome": "chosen", "elu": "A", "summary": "le diff le plus court"}' \
     > outcome.json
 """
 
+DEPLOIEMENT = f"""
+SHA=$(git -C "$GRAPHATOM_REPO_DIR" rev-parse HEAD)
+{PASSATION} > passation-deploy.md
+printf '{{"outcome": "done", "summary": "doublure de test", "deploy_sha": "%s"}}' \
+    "$SHA" > outcome.json
+"""
+
 
 def stub(node: str, outcome: str) -> str:
     """Un nœud qui rend sa passation et son issue — ni modèle, ni réseau."""
@@ -127,7 +135,7 @@ DOUBLURES = {
     "test_frontend": stub("test_frontend", "pass"),
     "validate": stub("validate", "pass"),
     "release": stub("release", "done"),
-    "deploy": stub("deploy", "done"),
+    "deploy": DEPLOIEMENT,
     "verify_deploy": stub("verify_deploy", "pass"),
     "cleanup": stub("cleanup", "done"),
 }
@@ -191,6 +199,23 @@ def ordonnanceur(work: Path) -> subprocess.Popen:
                             cwd=work, start_new_session=True)
 
 
+def services_deployes(tmp: Path, sha: str) -> tuple[Path, Path]:
+    """Deux outils étroits qui exposent quatre services sur le SHA du test."""
+    docker = tmp / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        "for ARG in \"$@\"; do LAST=\"$ARG\"; done\n"
+        "if [ \"$1\" = inspect ]; then printf '%s\\n' \"$GRAPHATOM_TEST_SHA\"; exit 0; fi\n"
+        "if [ \"$2\" = ps ]; then printf 'id-%s\\n' \"$LAST\"; exit 0; fi\n"
+        "exit 1\n"
+    )
+    docker.chmod(0o755)
+    gh = tmp / "gh"
+    gh.write_text("#!/bin/sh\nprintf 'jeton-de-test\\n'\n")
+    gh.chmod(0o755)
+    return docker, gh
+
+
 def tuer(proc: subprocess.Popen) -> None:
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
@@ -230,6 +255,17 @@ def main() -> None:
     work.mkdir()
     repo = depot(tmp)
     os.environ["GRAPHATOM_REPO_DIR"] = str(repo)
+    saved_worker_sha = os.environ.get("GRAPHATOM_WORKER_SHA")
+    worker_sha = git(repo, "rev-parse", "HEAD")
+    os.environ["GRAPHATOM_WORKER_SHA"] = worker_sha
+    docker, gh = services_deployes(tmp, worker_sha)
+    saved_deploy_env = {
+        name: os.environ.get(name) for name in
+        ("GRAPHATOM_DOCKER", "GRAPHATOM_GH", "GRAPHATOM_TEST_SHA")
+    }
+    os.environ["GRAPHATOM_DOCKER"] = str(docker)
+    os.environ["GRAPHATOM_GH"] = str(gh)
+    os.environ["GRAPHATOM_TEST_SHA"] = worker_sha
 
     saved_dsn = db.DSN
     saved_dsn_env = os.environ.get("GRAPHATOM_DSN")
@@ -281,6 +317,15 @@ def main() -> None:
             os.environ.pop("GRAPHATOM_AGENT_DSN", None)
         else:
             os.environ["GRAPHATOM_AGENT_DSN"] = ORIGINAL_AGENT_DSN
+        if saved_worker_sha is None:
+            os.environ.pop("GRAPHATOM_WORKER_SHA", None)
+        else:
+            os.environ["GRAPHATOM_WORKER_SHA"] = saved_worker_sha
+        for name, value in saved_deploy_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
         shutil.rmtree(tmp, ignore_errors=True)
 
     print("\ncycle : OK — le profil code-task traverse keep_n et judge, "
@@ -312,6 +357,16 @@ def verifier(conn, item_id: int, work: Path) -> None:
     arbitre = [r for r in runs if r["node"] == "judge"]
     assert len(arbitre) == 1 and arbitre[0]["outcome"] == "chosen", arbitre
     print("   l'arbitre a couru une fois et a élu ✓")
+
+    deploy = [r for r in runs if r["node"] == "deploy"]
+    assert len(deploy) == 1, deploy
+    deploy_result = deploy[0]["result"]
+    assert re.fullmatch(r"[0-9a-f]{40}", deploy_result["deploy_sha"])
+    assert deploy_result["worker_activation"] == {
+        "status": "active", "worker_sha": deploy_result["deploy_sha"],
+    }, deploy_result
+    print("   le vrai lecteur du bloc conserve deploy_sha jusqu'au résultat "
+          "appliqué et à l'acquittement du worker ✓")
 
     workspace = work / "data" / f"item-{item_id}"
     passations = [workspace / "passation-scope.md",

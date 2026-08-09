@@ -82,6 +82,7 @@ nommé : un budget dépassé et une pendaison ne laissent pas la même chose.
 import hashlib
 import json
 import os
+import re
 import signal
 import subprocess
 import time
@@ -129,6 +130,8 @@ POLL_S = 0.2  # granularité de l'attente du process : ce qui borne le budget to
 PRUNED_DIRS = {".git", "node_modules", ".next", "__pycache__", ".venv"}
 GIT_CHARS = 8000  # l'état du worktree cité dans le prompt d'une reprise
 GIT_TIMEOUT_S = 20
+DEPLOY_PROBE_TIMEOUT_S = 5
+DEPLOYED_SERVICES = ("github-sync", "pricing-sync", "web", "front")
 # la passation du prédécesseur citée dans le prompt. Resserrée à la mesure :
 # les 809 prompts déjà rendus par le rail pèsent 2 750 caractères en médiane,
 # et trois sections courtes tiennent largement dans 2 500 — au-delà, ce n'est
@@ -875,6 +878,16 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
                         # Copiée avant que la base jetable de l'item remplace
                         # GRAPHATOM_DSN : toutes les places vivent ici.
                         "GRAPHATOM_QUOTA_DSN": db.DSN}
+    if ctx.run["node"] == "verify_deploy":
+        deployed = ctx.conn.execute(
+            "SELECT result->>'deploy_sha' AS sha FROM node_run "
+            "WHERE item_id = %s AND node = 'deploy' AND status = 'applied' "
+            "AND outcome = 'done' AND result->>'deploy_sha' IS NOT NULL "
+            "ORDER BY finished_at DESC, id DESC LIMIT 1",
+            (ctx.item["id"],),
+        ).fetchone()
+        if deployed:
+            env["GRAPHATOM_DEPLOY_SHA"] = deployed["sha"]
     if ctx.worktree is not None:
         # le bloc ne devine pas son checkout : celui d'un candidat n'est pas
         # celui de son item, et aucune convention de nom ne l'en déduit
@@ -936,18 +949,115 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
             pgid_file.unlink(missing_ok=True)
 
     try:
-        data = json.loads(outcome_path.read_text())
-        outcome, summary = data["outcome"], data.get("summary", "")
+        result = read_outcome(outcome_path)
+        outcome = result["outcome"]
     except (OSError, ValueError, KeyError, TypeError) as exc:  # pas d'issue valide
         return _starved(starved_path) or _autopsy(proc, log, exc, timeout=False)
+    if ctx.run["node"] == "verify_deploy" and outcome == "pass":
+        repo = Path(os.environ.get(
+            "GRAPHATOM_REPO_DIR", Path(__file__).resolve().parents[2],
+        ))
+        if error := verify_deploy_error(ctx.conn, ctx.item["id"], repo):
+            result = {"outcome": "fail", "summary": error}
+            outcome = "fail"
+            try:
+                with (workspace / "verify_deploy.md").open("a") as report:
+                    report.write(f"porte du noyau - {error}\n")
+            except OSError:
+                pass  # le résultat durable porte déjà l'échec explicite
     if (ctx.config["agent"].get("passation") is not False
             and not is_failure_outcome(outcome)):
         if erreur := _passation_invalide(handoff_path):
             return _autopsy(proc, log, ValueError(erreur), timeout=False)
+    return result
+
+
+def read_outcome(path: Path) -> dict:
+    """Lit le contrat d'un bloc et conserve ses champs noyau explicites."""
+    data = json.loads(path.read_text())
+    outcome, summary = data["outcome"], data.get("summary", "")
+    if not isinstance(outcome, str) or not isinstance(summary, str):
+        raise TypeError("outcome et summary doivent être des chaînes")
     result = {"outcome": outcome, "summary": summary}
     if "deploy_sha" in data:
-        result["deploy_sha"] = data["deploy_sha"]
+        deploy_sha = data["deploy_sha"]
+        if not isinstance(deploy_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", deploy_sha):
+            raise ValueError("deploy_sha doit être un SHA git canonique complet")
+        result["deploy_sha"] = deploy_sha
     return result
+
+
+def verify_deploy_error(conn: psycopg.Connection, item_id: int,
+                        repo: Path) -> str | None:
+    """Refuse un faux succès si le code actif n'est pas la release demandée.
+
+    Le shell contrôle les services et les URLs. Cette porte du noyau contrôle
+    les deux identités qu'un shell ne doit jamais deviner : la demande durable
+    du run `deploy`, puis le SHA réellement chargé par le worker hôte.
+    """
+    deployed = conn.execute(
+        "SELECT result->>'deploy_sha' AS sha FROM node_run "
+        "WHERE item_id = %s AND node = 'deploy' AND status = 'applied' "
+        "AND outcome = 'done' AND result->>'deploy_sha' IS NOT NULL "
+        "ORDER BY finished_at DESC, id DESC LIMIT 1",
+        (item_id,),
+    ).fetchone()
+    expected = deployed["sha"] if deployed else ""
+    worker = conn.execute(
+        "SELECT worker_sha FROM heartbeat WHERE who = 'rail'"
+    ).fetchone()
+    worker_sha = worker["worker_sha"] if worker else ""
+    checkout_sha = _command_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], timeout=GIT_TIMEOUT_S,
+    )
+    service_shas = deployed_service_shas(repo)
+
+    errors = []
+    if not re.fullmatch(r"[0-9a-f]{40}", expected or ""):
+        errors.append("SHA de déploiement durable absent ou invalide")
+    if checkout_sha != expected:
+        errors.append(f"checkout {checkout_sha or 'inconnu'} différent de {expected or 'inconnu'}")
+    if worker_sha != expected:
+        errors.append(f"worker {worker_sha or 'inconnu'} différent de {expected or 'inconnu'}")
+    wrong = [name for name in DEPLOYED_SERVICES if service_shas[name] != expected]
+    if wrong:
+        errors.append("services discordants : " + ", ".join(wrong))
+    return "; ".join(errors) if errors else None
+
+
+def _command_output(args: list[str], *, cwd: Path | None = None,
+                    env: dict | None = None, timeout: float) -> str:
+    """Rend stdout, ou une valeur vide pour toute commande locale en échec."""
+    try:
+        result = subprocess.run(
+            args, cwd=cwd, env=env, capture_output=True, text=True,
+            check=False, timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def deployed_service_shas(repo: Path) -> dict[str, str]:
+    """Lit sans repli les labels des quatre services réellement lancés."""
+    gh = os.environ.get("GRAPHATOM_GH", "gh")
+    token = _command_output(
+        [gh, "auth", "token"], timeout=DEPLOY_PROBE_TIMEOUT_S,
+    )
+    env = os.environ | {"GITHUB_TOKEN": token}
+    docker = os.environ.get("GRAPHATOM_DOCKER", "docker")
+    seen = {}
+    for service in DEPLOYED_SERVICES:
+        containers = _command_output(
+            [docker, "compose", "ps", "-q", service], cwd=repo, env=env,
+            timeout=DEPLOY_PROBE_TIMEOUT_S,
+        ).splitlines()
+        seen[service] = (_command_output(
+            [docker, "inspect", "--format",
+             '{{ index .Config.Labels "com.graphatom.sha" }}', containers[0]],
+            timeout=DEPLOY_PROBE_TIMEOUT_S,
+        ) if containers else "")
+    return seen
 
 
 def _starved(path: Path) -> dict | None:
