@@ -97,6 +97,9 @@ DATA_DIR = Path("data")  # les tests le font pointer sur un répertoire temporai
 OUTBOX_NAME = "effects_outbox.log"  # sous DATA_DIR, résolu au moment de l'effet
 GRACE_S = 5.0  # entre le SIGTERM et le SIGKILL du groupe de l'agent
 PGID_FILE = "agent.pgid"  # la trace qui survit au worker, écrasée à chaque tentative
+AGENT_ALIVE = "alive"
+AGENT_DEAD = "dead"
+AGENT_UNKNOWN = "unknown"
 OUTCOME_NAME = "outcome.json"  # transitoire : purgé avant chaque tentative
 STARVED_NAME = "starved.json"  # idem — une panne de crédits nommée par l'adaptateur
 PROMPT_NAME = "prompt.md"  # l'interface avec le cmd, archivée après la tentative
@@ -1096,12 +1099,37 @@ def agent_alive(item_id: int, run_id: int) -> bool:
     Pas de trace, trace d'un autre run, identité périmée : plus personne au
     travail.
     """
+    return agent_state(item_id, run_id) == AGENT_ALIVE
+
+
+def agent_state(item_id: int, run_id: int) -> str:
+    """État certain de l'agent : vivant, mort, ou identité indécidable.
+
+    Une trace absente ou invalide ne prouve rien. Un `/proc` absent, ou une
+    identité différente pour le même pid, prouve au contraire que l'agent
+    enregistré n'existe plus.
+    """
     found = _trace(item_id, run_id)
     if found is None:
-        return False
+        return AGENT_UNKNOWN
     trace = found[1]
     who = trace["identity"]
-    return who is not None and _identity(trace["pgid"]) == who
+    if (not isinstance(who, dict) or not isinstance(who.get("boot"), str)
+            or not isinstance(who.get("starttime"), int)
+            or not isinstance(trace["pgid"], int)):
+        return AGENT_UNKNOWN
+    try:
+        fields = Path(f"/proc/{trace['pgid']}/stat").read_text().rsplit(") ", 1)[1].split()
+    except FileNotFoundError:
+        return AGENT_DEAD
+    except (OSError, IndexError):
+        return AGENT_UNKNOWN
+    try:
+        boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        current = {"boot": boot, "starttime": int(fields[19])}
+    except (OSError, IndexError, ValueError):
+        return AGENT_UNKNOWN
+    return AGENT_ALIVE if current == who else AGENT_DEAD
 
 
 def revoke_orphan(item_id: int, run_id: int) -> int | None:

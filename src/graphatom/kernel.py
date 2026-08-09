@@ -76,7 +76,8 @@ from collections.abc import Callable
 import psycopg
 
 from . import worktree
-from .blocks import agent_alive, lease_autopsy, revoke_orphan, write_failure_trace
+from .blocks import (AGENT_ALIVE, AGENT_DEAD, agent_state, lease_autopsy,
+                     revoke_orphan, write_failure_trace)
 from .graph import KERNEL_OUTCOMES, GraphError, fanout_variants, load_bundle
 
 LEASE_SECONDS = 30
@@ -719,7 +720,7 @@ def _route(conn, item, bundle, run, outcome: str, kind: str) -> None:
 
 
 def reap(conn: psycopg.Connection) -> int:
-    """Runs au bail expiré : révoque (fence++ et pgid), classe, route.
+    """Runs au bail expiré ou certainement orphelins : classe et route.
 
     La révocation a deux moitiés : l'autorité en base, et le processus. Un
     agent lancé par un worker mort ne peut plus rien appliquer, mais il
@@ -736,11 +737,15 @@ def reap(conn: psycopg.Connection) -> int:
     lire « bail expiré, agent déjà mort » ferait chercher un agent instable
     là où il n'y a qu'un processus qui a redémarré.
     """
-    expired = conn.execute(
-        "SELECT id FROM node_run WHERE status = 'running' AND lease_expires_at < %s",
-        (now(),),
+    running = conn.execute(
+        "SELECT id, item_id, lease_expires_at FROM node_run WHERE status = 'running'"
     ).fetchall()
-    for row in expired:
+    suspects = [row for row in running
+                if row["lease_expires_at"] < now()
+                or (row["id"] not in CLAIMED
+                    and agent_state(row["item_id"], row["id"]) == AGENT_DEAD)]
+    reaped = 0
+    for row in suspects:
         with conn.transaction():
             # l'item d'abord, son run ensuite : l'ordre des verrous d'`apply`,
             # sinon le faucheur et un candidat qui rend s'interbloquent
@@ -754,6 +759,10 @@ def reap(conn: psycopg.Connection) -> int:
                 "SELECT * FROM node_run WHERE id = %s FOR UPDATE", (row["id"],)
             ).fetchone()
             if run["status"] != "running":
+                continue
+            state = agent_state(item["id"], run["id"])
+            expired = run["lease_expires_at"] < now()
+            if not expired and (run["id"] in CLAIMED or state != AGENT_DEAD):
                 continue
             if run["candidate"] is None:
                 # révocation d'autorité : un zombie ne peut plus appliquer. En
@@ -770,7 +779,7 @@ def reap(conn: psycopg.Connection) -> int:
             orphaned = run["id"] not in CLAIMED
             CLAIMED.discard(run["id"])
             post = lease_autopsy(item["id"], run,
-                                 agent_alive(item["id"], run["id"]), orphaned)
+                                 state == AGENT_ALIVE, orphaned)
             conn.execute(
                 "UPDATE node_run SET status = 'faulted', outcome = %s, result = %s, "
                 "finished_at = %s WHERE id = %s",
@@ -780,4 +789,5 @@ def reap(conn: psycopg.Connection) -> int:
             revoques, ranger = _settle(conn, item, bundle, run, post["outcome"],
                                        kind="reaped")
         _menage(item["id"], [run["id"], *revoques], ranger)
-    return len(expired)
+        reaped += 1
+    return reaped
