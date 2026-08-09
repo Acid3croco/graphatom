@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import channel, db, graph, kernel, scheduler, web
+from . import channel, db, graph, kernel, quota, scheduler, web
 
 
 def main() -> None:
@@ -62,6 +62,11 @@ def main() -> None:
                     help="les filles dans l'ordre de la chaîne — la dernière "
                          "reprend les dépendances de la mère")
 
+    sp = sub.add_parser(
+        "build-quota",
+        help="exécuter une commande lourde sous le quota global")
+    sp.add_argument("command", nargs=argparse.REMAINDER)
+
     args = p.parse_args()
 
     if args.cmd == "init-db":
@@ -107,6 +112,11 @@ def main() -> None:
         github_sync.split_close(github_sync.from_env(args.repo),
                                 args.mother, args.children)
         return
+    if args.cmd == "build-quota":
+        command = args.command[1:] if args.command[:1] == ["--"] else args.command
+        if not command:
+            p.error("build-quota demande une commande après --")
+        raise SystemExit(quota.run(command))
 
     with db.connect() as conn:
         if args.cmd == "publish":
