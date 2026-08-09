@@ -79,8 +79,10 @@ if [ -z "$MODELE" ]; then
         "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null | head -1)
 fi
 
-usage() {  # la consommation, telle que codex la rapporte : personne ne l'interprète
-    jq -es '[.[] | select(.type == "turn.completed")] | .[-1] | .usage' \
+usage() {  # la consommation et le modèle exact, sans interpréter les tokens
+    jq -es --arg model "$MODELE" \
+        '[.[] | select(.type == "turn.completed")] | .[-1] | .usage
+         | if ($model | length) > 0 then . + {model: $model} else . end' \
         "$LOG" > usage.json 2>/dev/null || rm -f usage.json
     [ -s usage.json ] || rm -f usage.json  # pas de quoi le remplir : rien du tout
 }

@@ -35,9 +35,16 @@ export function duration(seconds: number | null | undefined): string {
 const TOKEN_LABELS: Record<string, string> = {
   input_tokens: "in",
   output_tokens: "out",
+  cached_input_tokens: "cache lu",
+  cache_write_input_tokens: "cache écrit",
+  reasoning_output_tokens: "raisonnement",
+  cache_read_tokens: "cache lu",
+  cache_write_tokens: "cache écrit",
+  reasoning_tokens: "raisonnement",
   cache_read_input_tokens: "cache lu",
   cache_creation_input_tokens: "cache écrit",
-  total_cost_usd: "$",
+  total_cost_usd: "$ rapportés",
+  estimated_cost_usd: "$ API estimés",
 };
 
 /** Un nombre de tokens en français — vide quand il n'y en a pas. */
