@@ -733,7 +733,7 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
     prompt = _prompt(ctx, workspace, subject)
     outcome_path = workspace / OUTCOME_NAME
     starved_path = workspace / STARVED_NAME
-    handoff_path = passation_path(ctx.item["id"], ctx.run)
+    handoff_path = workspace / f"passation-{ctx.run['node']}.md"
     for transient in (outcome_path, starved_path, workspace / USAGE_NAME,
                       handoff_path):
         transient.unlink(missing_ok=True)  # rien de la tentative précédente
