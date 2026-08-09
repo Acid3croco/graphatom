@@ -194,7 +194,31 @@ def main() -> None:
             assert key in item, key
         assert item["state"] == "closed" and item["status"] == "terminal", item
         assert item["issue_url"] == ISSUE_URL and item["pr_url"] == PR_URL, item
+        assert item["total_cost_usd"] == 0, item
         print("1. /api/items : id, titre, état, status, issue, PR ✓")
+
+        # tous les runs comptent, y compris les candidats et ceux que le rail
+        # n'a pas retenus ; chaque item garde son propre total
+        costs = FakeConn(
+            work_item=[item_row(14, ISSUE, True),
+                       item_row(15, "pipeline-x:sans-coût", False)],
+            node_run=[
+                {"item_id": 14, "status": "applied", "candidate": None,
+                 "result": {"usage": {"total_cost_usd": 0.0123}}},
+                {"item_id": 14, "status": "superseded", "candidate": 0,
+                 "result": {"usage": {"total_cost_usd": 0.0045}}},
+                {"item_id": 14, "status": "faulted", "candidate": 1,
+                 "result": {"usage": {"total_cost_usd": "inconnu"}}},
+                {"item_id": 15, "status": "applied", "candidate": None,
+                 "result": {"usage": {"input_tokens": 9}}},
+                {"item_id": 15, "status": "superseded", "candidate": 0,
+                 "result": None},
+            ],
+        )
+        totals = {entry["id"]: entry["total_cost_usd"]
+                  for entry in web._api_items(costs)}
+        assert totals == {14: 0.0168, 15: 0}, totals
+        print("   coûts : tous les runs, usages absents ignorés, items séparés ✓")
 
         # un sujet d'un autre canal n'a ni issue ni PR inventées
         plain = web._api_items(conn_of(99, "pipeline-x:oom", terminal=False))[0]

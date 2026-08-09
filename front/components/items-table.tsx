@@ -15,7 +15,7 @@
 import Link from "next/link";
 
 import type { Item } from "@/lib/api";
-import { issueNumber, moment } from "@/lib/format";
+import { cost, issueNumber, moment } from "@/lib/format";
 import { useItems } from "@/lib/live";
 import { Badge, tone } from "@/components/ui/badge";
 import {
@@ -45,6 +45,7 @@ export function ItemsTable({ initial }: { initial: Item[] }) {
           <TableHead>titre</TableHead>
           <TableHead>graph</TableHead>
           <TableHead>gén.</TableHead>
+          <TableHead>coût total $</TableHead>
           <TableHead>état</TableHead>
           <TableHead>version</TableHead>
           <TableHead>mis à jour</TableHead>
@@ -83,6 +84,9 @@ export function ItemsTable({ initial }: { initial: Item[] }) {
               </TableCell>
               <TableCell className="text-muted-foreground">
                 g{item.generation}
+              </TableCell>
+              <TableCell className="text-muted-foreground whitespace-nowrap">
+                {cost(item.total_cost_usd)}
               </TableCell>
               <TableCell>
                 <Badge variant={tone(item.status)}>{item.state}</Badge>
