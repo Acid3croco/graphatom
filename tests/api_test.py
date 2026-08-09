@@ -386,6 +386,41 @@ def main() -> None:
         assert web._api_graph_revision(FakeConn(graph_revision=[]), "inconnue") is None
         print("9. /api/graph/<rév> : le bundle entier, l'inconnue rend None ✓")
 
+        # la trace d'un run vient de son identité en base, jamais d'un chemin
+        run = {"id": 31, "item_id": 14, "node": "implement", "cycle": 2,
+               "attempt": 1, "candidate": None, "status": "running"}
+        traces = FakeConn(work_item=[{"id": 14}], node_run=[run])
+        (workspace / "codex.jsonl").write_text('{"type":"start"}\n')
+        blocks.attempt_log(workspace, run).write_text("début\n")
+        blocks.attempt_command(workspace, run).write_text('{"kind":"model"}\n')
+        first = web._api_run_trace(traces, 14, 31)
+        assert first["events"]["type"] == "codex", first
+        assert first["events"]["state"] == "available", first
+        assert first["log"]["type"] == "log" and first["command"]["type"] == "command"
+        with (workspace / "codex.jsonl").open("a") as stream:
+            stream.write('{"type":"done"}\n')
+        second = web._api_run_trace(traces, 14, 31, first["cursor"])
+        assert second["events"]["content"] == '{"type":"done"}\n', second
+        assert second["log"]["content"] == second["command"]["content"] == "", second
+
+        candidate = run | {"id": 32, "candidate": 2, "status": "applied"}
+        candidate_workspace = blocks.run_workspace(14, candidate)
+        candidate_workspace.mkdir()
+        (candidate_workspace / "opencode-events.jsonl").write_text('{"type":"text"}\n')
+        blocks._archive(candidate_workspace, blocks.attempt_name(candidate))
+        blocks.attempt_command(candidate_workspace, candidate).write_text("")
+        terminal = web._api_run_trace(
+            FakeConn(work_item=[{"id": 14}], node_run=[candidate]), 14, 32)
+        assert terminal["events"]["type"] == "opencode", terminal
+        assert terminal["command"]["state"] == "empty", terminal
+        assert terminal["log"]["state"] == "missing", terminal
+        assert web._api_run_trace(FakeConn(work_item=[]), 14, 31) is None
+        assert web._api_run_trace(FakeConn(work_item=[{"id": 14}], node_run=[]), 14, 999) is None
+        other = run | {"item_id": 15}
+        assert web._api_run_trace(
+            FakeConn(work_item=[{"id": 14}], node_run=[other]), 14, 31) is None
+        print("10. /api/item/<item>/run/<run>/trace : identité, sources et curseur ✓")
+
     print("\napi : OK — les pages se lisent en JSON, sans dépendance ni écriture")
 
 

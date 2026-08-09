@@ -66,7 +66,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote
 
 from . import channel, db, executors, heartbeat, scheduler
-from .blocks import item_workspace
+from .blocks import (attempt_command, attempt_log, attempt_name, item_workspace,
+                     run_workspace)
 from .graph import candidate_node, fanout_variants, judge_source, load_bundle
 
 STYLE = """
@@ -1081,6 +1082,65 @@ def _api_questions(conn, token: str) -> dict:
             "questions": [_api_question(q) for q in channel.open_questions(conn)]}
 
 
+def _api_run_trace(conn, item_id: int, run_id: int,
+                   cursor: dict[str, int] | None = None) -> dict | None:
+    """Les octets nouveaux des trois traces d'un run, sans chemin du client.
+
+    Le curseur garde une position par fichier : le journal et les événements
+    ne grandissent pas au même rythme. `None` refuse aussi bien un item ou un
+    run inconnu qu'un run qui appartient à un autre item.
+    """
+    item = conn.execute(
+        "SELECT id FROM work_item WHERE id = %s", (item_id,)
+    ).fetchone()
+    if item is None:
+        return None
+    run = conn.execute(
+        "SELECT id, item_id, node, cycle, attempt, candidate, status "
+        "FROM node_run WHERE id = %s", (run_id,)
+    ).fetchone()
+    if run is None or run["item_id"] != item_id:
+        return None
+
+    workspace = run_workspace(item_id, run)
+    name = attempt_name(run)
+    codex = workspace / f"codex-{name}.jsonl"
+    opencode = workspace / f"opencode-events-{name}.jsonl"
+    if not codex.is_file() and not opencode.is_file():  # le run est encore actif
+        codex = workspace / "codex.jsonl"
+        opencode = workspace / "opencode-events.jsonl"
+    events = codex if codex.is_file() else opencode
+    provider = ("codex" if codex.is_file()
+                else "opencode" if opencode.is_file() else None)
+    paths = {
+        "events": (events, provider, "application/x-ndjson"),
+        "log": (attempt_log(workspace, run), "log", "text/plain"),
+        "command": (attempt_command(workspace, run), "command", "application/json"),
+    }
+    positions = cursor or {}
+    sources = {}
+    next_cursor = {}
+    for name, (path, kind, media_type) in paths.items():
+        offset = positions.get(name, 0)
+        if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+            raise ValueError(f"curseur {name} invalide")
+        if not path.is_file():
+            sources[name] = {"type": kind, "state": "missing", "content": "",
+                             "offset": offset, "next_offset": offset,
+                             "media_type": media_type}
+            next_cursor[name] = offset
+            continue
+        data = path.read_bytes()
+        state = "empty" if not data else "available"
+        sources[name] = {"type": kind, "state": state,
+                         "content": data[offset:].decode(errors="replace"),
+                         "offset": offset, "next_offset": len(data),
+                         "media_type": media_type}
+        next_cursor[name] = len(data)
+    return {"item_id": item_id, "run_id": run_id, "status": run["status"],
+            **sources, "cursor": next_cursor}
+
+
 def _api_beat(at: dt.datetime | None) -> dict:
     """Un battement brut : son horodatage, son âge, et s'il est périmé."""
     return {"at": at, "ago_s": heartbeat.age_s(at), "stale": heartbeat.stalled(at)}
@@ -1171,7 +1231,7 @@ def serve(port: int = 8848, by: str = "web", notify_cmd: str | None = None,
         def _wants_json(self) -> bool:
             return "application/json" in self.headers.get("Accept", "")
 
-        def _api(self, path: str) -> None:
+        def _api(self, path: str, query: str = "") -> None:
             """Les routes JSON — un client qui demande du JSON en reçoit toujours.
 
             Y compris quand ça rate : une erreur ici est un objet à `error`,
@@ -1191,6 +1251,26 @@ def serve(port: int = 8848, by: str = "web", notify_cmd: str | None = None,
                         return self._json(200, _api_load(conn))
                     if path == "/api/graphs":
                         return self._json(200, _api_graphs(conn))
+                    if match := re.fullmatch(r"/api/item/(\d+)/run/(\d+)/trace", path):
+                        fields = parse_qs(query)
+                        try:
+                            raw_cursor = fields.get("cursor", ["{}"])[0]
+                            cursor = json.loads(raw_cursor)
+                            if "offset" in fields:
+                                cursor = {name: int(fields["offset"][0])
+                                          for name in ("events", "log", "command")}
+                            for name in ("events", "log", "command"):
+                                if f"{name}_offset" in fields:
+                                    cursor[name] = int(fields[f"{name}_offset"][0])
+                            if not isinstance(cursor, dict):
+                                raise ValueError("le curseur doit être un objet")
+                            payload = _api_run_trace(
+                                conn, int(match[1]), int(match[2]), cursor)
+                        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                            return self._json(400, {"error": f"curseur invalide : {exc}"})
+                        if payload is None:
+                            return self._json(404, {"error": "item ou run inconnu"})
+                        return self._json(200, payload)
                     if path.startswith("/api/item/") and path[10:].isdigit():
                         payload = _api_item(conn, int(path[10:]))
                         if payload is None:
@@ -1219,7 +1299,7 @@ def serve(port: int = 8848, by: str = "web", notify_cmd: str | None = None,
                 self.end_headers()
                 return self.wfile.write(data)
             if path.startswith("/api/"):
-                return self._api(path)
+                return self._api(path, query)
             try:
                 with db.connect() as conn:
                     # une ligne : l'en-tête de toute page, le battement du worker
