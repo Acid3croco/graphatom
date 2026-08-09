@@ -14,9 +14,8 @@ Deux items sur `examples/supervision.json` :
      `fix`, l'item s'arrête sur le WAIT `escalate` — une question
      ouverte, un item actif, un état courant à afficher
 
-Rien n'est détruit : la base est créée si absente, jamais droppée, et
-les sujets portent le pid — deux exécutions concurrentes ne se marchent
-pas dessus. L'ordonnanceur tourne dans un répertoire jetable : les
+La base jetable doit être préparée avec `graphatom drop-agent-db` avant
+ce script. L'ordonnanceur tourne dans un répertoire jetable : les
 workspaces qu'il crée ne touchent pas au `data/` du dépôt.
 
 Usage : uv run python tests/seed.py
@@ -82,13 +81,24 @@ def main() -> None:
     rev = sh("publish", "examples/supervision.json")
     done_id = int(sh("admit", rev, f"seed-nominal:{tag}"))
     rev_raise = sh("publish", str(variant_raise()))
-    waiting_id = int(sh("admit", rev_raise, f"seed-question:{tag}"))
-    print(f"items admis : #{done_id} (nominal), #{waiting_id} (question)")
+    print(f"item admis : #{done_id} (nominal)")
 
     proc = scheduler()
     deadline = time.time() + TIMEOUT_S
     try:
         with db.connect() as conn:
+            while time.time() < deadline:
+                done = conn.execute(
+                    "SELECT terminal_at FROM work_item WHERE id = %s", (done_id,)
+                ).fetchone()
+                if done["terminal_at"] is not None:
+                    break
+                time.sleep(0.5)
+            else:
+                sys.exit("ÉCHEC : l'item nominal n'est pas devenu terminal")
+
+            waiting_id = int(sh("admit", rev_raise, f"seed-question:{tag}"))
+            print(f"item admis : #{waiting_id} (question)")
             while time.time() < deadline:
                 if settled(conn, done_id, waiting_id):
                     break
