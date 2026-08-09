@@ -15,11 +15,12 @@ Usage : uv run python tests/depends_test.py
 """
 
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import github_sync as gs  # noqa: E402
+from graphatom import blocks, github_sync as gs  # noqa: E402
 
 
 class FakeCursor:
@@ -37,9 +38,10 @@ class FakeConn:
     """La base : seulement ce que le canal lui demande — l'issue est-elle
     connue, et le titre du sujet qu'on lui range."""
 
-    def __init__(self):
+    def __init__(self, terminals: dict[str, int] | None = None):
         self.known: set[str] = set()
         self.updated: list[tuple] = []
+        self.terminals = terminals or {}
 
     def execute(self, sql: str, params: tuple = ()):
         if "FROM subject s JOIN work_item" in sql:
@@ -47,6 +49,9 @@ class FakeConn:
         if "UPDATE subject SET title" in sql:
             self.updated.append((params[1], params[2], params[0]))
             return FakeCursor([])
+        if "w.terminal_at IS NOT NULL" in sql:
+            item_id = self.terminals.get(params[1])
+            return FakeCursor([{"id": item_id}] if item_id else [])
         return FakeCursor([])   # _gh_items : aucun item actif
 
 
@@ -95,10 +100,13 @@ class FakeKernel:
         self.titles: list[str | None] = []
 
     def admit(self, conn, revision: str, subject_key: str,
-              title: str | None = None) -> int:
+              title: str | None = None, prepare=None) -> int:
         self.admitted.append(subject_key)
         self.titles.append(title)
-        return len(self.admitted)
+        item_id = len(self.admitted)
+        if prepare:
+            prepare(item_id)
+        return item_id
 
 
 def deps(body, number=1, states=None, gh=None, said=None):
@@ -114,6 +122,8 @@ def main() -> None:
     assert gs._depends_on("Depends-on: #29") == ["#29"]
     assert gs._depends_on("- [ ] #29\ndepends-on: #30\nvoir #31") == []
     assert gs._depends_on(None) == [] and gs._depends_on("") == []
+    assert gs._retry_of("Retry-of: #29") == ["#29"]
+    assert gs._retry_of("- [ ] #29\nretry-of: #30\nvoir #31") == []
     gh, waiting = deps("bla\nDepends-on: #29\n- [ ] #30\nDepends-on: #31\nfin",
                        states={29: "open", 31: "closed"})
     assert waiting == [29] and gh.posted == [], (waiting, gh.posted)
@@ -177,6 +187,57 @@ def main() -> None:
     gs._paint_states(conn, gh, blocked, stalled=False)
     assert gh.labels == [("-", 41, gs.BLOCKED)], gh.labels
     print("4. dépendance fermée : admission au tick suivant, label retiré ✓")
+
+    # 5. reprise valide : dernier item terminal, trois noms fermés, accusé lisible
+    workspace = Path(tempfile.mkdtemp(prefix="graphatom-retry-"))
+    blocks.DATA_DIR = workspace
+    old = blocks.item_workspace(7)
+    old.mkdir(parents=True)
+    (old / "echec.md").write_text("trace de #40\n")
+    (old / "criteria.md").write_text("critères de #40\n")
+    (old / "hors-scope.md").write_text("ne doit pas suivre\n")
+    gs.kernel = FakeKernel()
+    kernel = gs.kernel
+    conn = FakeConn({"gh:o/r#40": 7})
+    gh = FakeGitHub(
+        [{"number": 50, "body": "Contexte\nRetry-of: #40", "labels": [],
+          "title": "Reprise de #40"}],
+        {40: "closed"},
+    )
+    retries: dict[int, tuple[int, int]] = {}
+    assert gs._admit_labeled(conn, gh, "rev", set(), retries) == set()
+    assert kernel.admitted == ["gh:o/r#50"], kernel.admitted
+    assert retries == {1: (40, 7)}, retries
+    new = blocks.item_workspace(1)
+    assert (new / "echec.md").read_text() == "trace de #40\n"
+    assert (new / "criteria.md").read_text() == "critères de #40\n"
+    assert not (new / "validate.md").exists()
+    assert not (new / "hors-scope.md").exists()
+    ack = gs._ack_body(
+        {"id": 1, "graph": "code-task", "generation": 1}, retries[1])
+    assert "reprise de #40 (item 7)" in ack, ack
+    print("5. reprise valide : pièces existantes copiées, filiation dans l'accusé ✓")
+
+    # 6. cible absente, sans terminal ou soi-même : commentaire et admission normale
+    for body, states, terminals, word in (
+        ("Retry-of: #99", {}, {}, "n'existe pas"),
+        ("Retry-of: #40", {40: "closed"}, {}, "aucun item terminal"),
+        ("Retry-of: #60", {60: "open"}, {}, "elle-même"),
+        ("Retry-of: #40\nRetry-of: #41", {40: "closed", 41: "closed"}, {},
+         "une seule ligne"),
+    ):
+        gs.kernel = FakeKernel()
+        gh = FakeGitHub(
+            [{"number": 60, "body": body, "labels": [], "title": "invalide"}],
+            states,
+        )
+        retries = {}
+        assert gs._admit_labeled(FakeConn(terminals), gh, "rev", set(), retries) == set()
+        assert gs.kernel.admitted == ["gh:o/r#60"], (body, gs.kernel.admitted)
+        assert retries == {} and len(gh.posted) == 1, (body, retries, gh.posted)
+        assert word in gh.posted[0][1], (body, gh.posted)
+        assert "graphatom:code-task-retry-invalid" in gh.posted[0][1]
+    print("6. reprise invalide : commentaire à clé logique, admission normale ✓")
 
     print("\ndépendances : OK — l'admission attend, puis part toute seule")
 

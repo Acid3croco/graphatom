@@ -71,6 +71,7 @@ import datetime as dt
 import json
 
 from collections import Counter
+from collections.abc import Callable
 
 import psycopg
 
@@ -122,12 +123,17 @@ def now() -> dt.datetime:
 
 
 def admit(conn: psycopg.Connection, revision: str, subject_key: str,
-          title: str | None = None) -> int:
+          title: str | None = None,
+          prepare: Callable[[int], None] | None = None) -> int:
     """Crée (ou retrouve) le sujet, ouvre une occurrence — si la lignée le permet.
 
     Le titre est celui que le canal a sous la main au moment de l'admission :
     il est stocké là, une fois, et personne n'ira le rechercher ailleurs. Un
     sujet sans titre — un autre canal, un autre format — reste sans titre.
+
+    `prepare`, s'il existe, prépare les ressources locales du nouvel item
+    avant le commit. Une erreur annule ainsi l'admission au lieu de laisser
+    un item admis sans les ressources dont son premier nœud a besoin.
     """
     with conn.transaction():
         bundle = load_bundle(conn, revision)
@@ -166,6 +172,8 @@ def admit(conn: psycopg.Connection, revision: str, subject_key: str,
             (subject["id"], generation, revision, bundle["entry"],
              budgets["escalations"], deadline),
         ).fetchone()
+        if prepare:
+            prepare(item["id"])
         conn.execute(
             "INSERT INTO event (item_id, item_version, kind, to_state) "
             "VALUES (%s, 1, 'admitted', %s)",
