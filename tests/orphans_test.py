@@ -15,8 +15,9 @@ par le faucheur sont en jeu :
   6. worker tué en plein vol : l'agent survit, et sa trace `agent.pgid` aussi
   7. `revoke_orphan` — ce que fait le faucheur — tue le groupe et efface la trace
   8. garde-fou : une trace d'une autre tentative n'est ni suivie ni effacée
-  9. garde-fou : une identité qui ne colle plus (naissance ou boot) ne tue personne
- 10. une trace illisible ou amputée ne fait pas tomber le faucheur
+ 9. garde-fou : une identité qui ne colle plus (naissance ou boot) ne tue personne
+10. une trace illisible ou amputée ne fait pas tomber le faucheur
+11. les trois adaptateurs gardent leur CLI dans le groupe suivi par le worker
 
 Usage : uv run python tests/orphans_test.py
 """
@@ -227,6 +228,30 @@ def main() -> None:
         trace_path.write_text(abime)
         assert blocks.revoke_orphan(ITEM_ID, RUN_ID) is None
     print("10. trace illisible ou amputée : le faucheur passe son chemin ✓")
+
+    # 11. GNU timeout crée sinon un groupe enfant que la trace agent.pgid ne
+    # voit pas. --foreground garde la CLI dans le groupe suivi et révoqué.
+    root = Path(__file__).resolve().parents[1]
+    for name in ("agent-claude.sh", "agent-codex.sh", "agent-opencode.sh"):
+        script = (root / "scripts" / name).read_text()
+        assert "timeout --foreground -k 5" in script, name
+    probe = workdir / "timeout-foreground"
+    probe.mkdir()
+    child_pgid = probe / "child.pgid"
+    command = (
+        "timeout --foreground -k 5 30 sh -c "
+        "'ps -o pgid= -p $$ > child.pgid; sleep 30'"
+    )
+    process = subprocess.Popen(["bash", "-c", command], cwd=probe,
+                               start_new_session=True)
+    deadline = time.time() + 5
+    while time.time() < deadline and not child_pgid.exists():
+        time.sleep(0.05)
+    assert child_pgid.exists(), "la CLI factice n'a pas écrit son groupe"
+    assert int(child_pgid.read_text().strip()) == os.getpgid(process.pid)
+    os.killpg(process.pid, signal.SIGTERM)
+    process.wait(timeout=5)
+    print("11. timeout --foreground : la CLI reste dans le groupe suivi ✓")
 
     shutil.rmtree(workdir, ignore_errors=True)
     print("\norphelins : OK — ni le bail ni la mort du worker ne laissent d'agent")
