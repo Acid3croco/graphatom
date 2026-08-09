@@ -17,10 +17,11 @@ Il se vérifie à la main, la commande est dans le README.
 Le test ne détruit rien : il publie son propre graph, crée son item, et
 laisse la base en place — il peut tourner à côté d'un rail vivant.
 
-Le test demande `opencode` sur la machine (ou `OPENCODE_BIN`) et le réseau.
-Sans lui, il le dit et se saute : rien n'est vérifié en silence.
+Le test demande `opencode` sur la machine (ou `OPENCODE_BIN`), le réseau et
+`GRAPHATOM_LIVE_OPENCODE=1`. Sans cet accord explicite, il se saute : une
+suite locale ne doit jamais attendre un fournisseur externe par accident.
 
-Usage : uv run python tests/opencode_test.py
+Usage : GRAPHATOM_LIVE_OPENCODE=1 uv run python tests/opencode_test.py
 """
 
 import os
@@ -139,6 +140,9 @@ def noeud_reel(conn, workdir: Path, binaire: str) -> None:
 
 
 def main() -> None:
+    if os.environ.get("GRAPHATOM_LIVE_OPENCODE") != "1":
+        print("GRAPHATOM_LIVE_OPENCODE=1 absent — test réseau OpenCode SAUTÉ.")
+        return
     binaire = opencode()
     if binaire is None:
         print("opencode introuvable sur cette machine — test SAUTÉ.")

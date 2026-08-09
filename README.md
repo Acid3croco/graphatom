@@ -125,7 +125,8 @@ uv run python tests/cycle_test.py                    # le profil code-task de bo
                                                      # bout : keep_n, puis judge, puis
                                                      # close — le vrai ordonnanceur,
                                                      # des doublures pour les modèles
-uv run python tests/opencode_test.py                 # l'adaptateur opencode : un
+GRAPHATOM_LIVE_OPENCODE=1 uv run python tests/opencode_test.py
+                                                     # l'adaptateur opencode : un
                                                      # nœud réel tourne sous un
                                                      # modèle gratuit (demande
                                                      # `opencode` et le réseau)
@@ -791,7 +792,8 @@ qui se tait est un adaptateur cassé. La borne du script est donc plus
 courte que le `timeout_s` du nœud : c'est l'adaptateur qui doit parler du
 modèle, pas le couperet.
 
-**La mesure, pas l'opinion.** `uv run python tests/opencode_test.py` fait
+**La mesure, pas l'opinion.**
+`GRAPHATOM_LIVE_OPENCODE=1 uv run python tests/opencode_test.py` fait
 tourner un nœud réel du graph sous `opencode/deepseek-v4-flash-free` et
 relit son issue en base : le modèle écrit son `outcome.json`, le noyau
 route, et l'`usage.json` de l'adaptateur rejoint le résultat du run. Le
