@@ -58,7 +58,8 @@ def contexte(workdir: Path, cmd: str, attempt: int) -> blocks.Context:
         "block": "ACT",
         "edges": {"ok": "fini"},
         "config": {"agent": {"cmd": cmd, "prompt": "fais le travail",
-                             "timeout_s": 5, "silence_s": 5}},
+                             "timeout_s": 5, "silence_s": 5,
+                             "passation": False}},
     }
     return blocks.Context(
         FauxConn(),
