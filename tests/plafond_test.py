@@ -35,7 +35,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import blocks, db, graph, kernel, scheduler, web  # noqa: E402
+from graphatom import blocks, db, graph, kernel, quota, scheduler, web  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 # l'instance jetable : celle de l'agent qui nous lance, sinon la nôtre
@@ -194,11 +194,10 @@ def plafond_par_item(conn) -> None:
     """4 : un fan-out large ne prend pas toute la place — l'autre item démarre.
 
     Et il ne part **jamais en morceaux** : une course se réserve entière ou
-    attend. Une course coupée en deux serait pire qu'une course différée —
-    `keep_n` attend « tout le monde » en constatant qu'aucun run du lot ne
-    tourne, or ce lot est ce qui existe en base et non ce qui devrait exister.
-    Deux candidats sur quatre finissent, plus rien ne tourne, la réduction
-    tranche sur une course amputée, et les deux autres ne naîtront jamais.
+    attend. Une course coupée en deux serait pire qu'une course différée :
+    une réduction ne voit que le lot qui existe en base, non celui qui devrait
+    exister. Deux candidats sur quatre pourraient suffire à `keep_n`, faire
+    avancer l'item, et empêcher les deux autres de naître.
     """
     scheduler.MAX_RUNS, scheduler.MAX_RUNS_PER_ITEM = 3, 2
     large = seme(conn, 4)   # K = 4, au-dessus de son plafond de 2
@@ -304,9 +303,10 @@ def api_load(conn) -> None:
             time.sleep(0.1)
     assert charge is not None, f"{url} n'a jamais répondu"
     assert charge == {"running": 2, "max_runs": 3, "max_runs_per_item": 2,
-                      "solo": {"running": 0, "waiting": 0}}, charge
-    print(f"5. GET /api/load → {charge} : les runs en vol et le plafond "
-          "effectif, hors de la base ✓")
+                      "solo": {"running": 0, "waiting": 0},
+                      "builds": 0, "max_builds": quota.MAX_BUILDS}, charge
+    print(f"5. GET /api/load → {charge} : runs et constructions en vol, "
+          "avec leurs plafonds effectifs ✓")
 
     rendre(conn)
     for _ in range(10):

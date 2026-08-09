@@ -98,12 +98,22 @@ def run_forever(poll_s: float = 0.5) -> None:
     Ces deux-là seulement sont rattrapées. Toute autre exception fait crasher
     le processus, bruyamment : elle n'était pas attendue.
     """
-    from .db import connect
+    from .db import connect, incarnation
 
     wait_s = 1.0
+    previous_incarnation = None
     while True:
         try:
             with connect() as conn:
+                current_incarnation = incarnation(conn)
+                if (previous_incarnation is not None
+                        and current_incarnation != previous_incarnation):
+                    print(
+                        "base reprise après un arrêt PostgreSQL "
+                        f"— serveur démarré à {current_incarnation[1].isoformat()}",
+                        flush=True,
+                    )
+                previous_incarnation = current_incarnation
                 while True:
                     did = tick(conn)
                     wait_s = 1.0  # un tick passé : la base répond, on repart de 1 s
@@ -248,12 +258,11 @@ def _dispatch(conn: psycopg.Connection) -> int:
     suivant le prendra, exactement comme la file du déploiement.
 
     **Une course se réserve entière, ou pas du tout.** Un fan-out coupé en
-    deux par un plafond serait pire qu'un fan-out différé : `keep_n` attend
-    « tout le monde » en constatant qu'aucun run du lot ne tourne, or ce lot
-    est ce qui *existe en base*, pas ce qui *devrait* exister. Deux candidats
-    réservés sur quatre finissent, plus rien ne tourne, et la réduction
-    tranche sur une course amputée — les deux autres ne naîtront jamais. On
-    ne réserve donc les K candidats que si la place les accueille tous.
+    deux par un plafond serait pire qu'un fan-out différé : une réduction ne
+    voit que le lot qui *existe en base*, pas celui qui *devrait* exister.
+    Deux candidats réservés sur quatre pourraient donc suffire à `keep_n`,
+    puis faire avancer l'item avant que les deux autres ne naissent. On ne
+    réserve les K candidats que si la place les accueille tous.
     """
     # Le verrou est symétrique. Un solo en vol ferme immédiatement le rail ;
     # un solo qui arrive ne passe que sur un rail vide. Dans les deux cas,

@@ -1,4 +1,4 @@
--- GraphAtom — milestone 1. Huit tables, rien de volumineux en base.
+-- GraphAtom — milestone 1. Neuf tables, rien de volumineux en base.
 
 CREATE TABLE IF NOT EXISTS graph_revision (
     id           TEXT PRIMARY KEY,            -- sha256 du bundle canonique
@@ -95,6 +95,14 @@ CREATE TABLE IF NOT EXISTS heartbeat (
     who TEXT       NOT NULL,                  -- rail | github-sync : le batteur
     at  TIMESTAMPTZ NOT NULL DEFAULT now()
     -- unicité d'un batteur : voir l'index du passage, tout en bas
+);
+
+-- Une table UNLOGGED est vidée par Postgres pendant une récupération après
+-- crash, mais pas pendant une coupure réseau. Le worker y pose un jeton pour
+-- distinguer une reprise de base d'une reconnexion au même serveur.
+CREATE UNLOGGED TABLE IF NOT EXISTS database_incarnation (
+    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+    token     TEXT NOT NULL
 );
 
 -- Le passage. `graphatom init-db` rejoue ce fichier à chaque déploiement, et

@@ -25,8 +25,16 @@
 
 set -u
 
-FRONT="$(cd "$(dirname "$0")/../front" 2>/dev/null && pwd)"
+ROOT="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)"
+FRONT="$ROOT/front"
 [ -n "$FRONT" ] || { echo "front-env: front/ introuvable depuis $0" >&2; exit 2; }
+
+# L'installation et le build forment une seule dépense. Le second passage
+# est lancé par le fournisseur de quota et ne tente pas de reprendre une
+# autre place.
+if [ "${1:-}" != "--sous-quota" ]; then
+    exec uv run --project "$ROOT" graphatom build-quota -- "$0" --sous-quota
+fi
 
 export npm_config_cache="${GRAPHATOM_NPM_CACHE:-$HOME/.npm}"
 export NEXT_TELEMETRY_DISABLED=1
