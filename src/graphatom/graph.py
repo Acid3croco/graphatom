@@ -10,9 +10,11 @@ import json
 
 import psycopg
 
+from .executors import SUPPORTED_CLIS
+
 BLOCK_KINDS = {"FETCH", "JUDGE", "ACT", "CHECK", "EFFECT", "WAIT"}
 
-KERNEL_OUTCOMES = {"crashed", "stalled", "timed_out", "invalid_result",
+KERNEL_OUTCOMES = {"crashed", "starved", "stalled", "timed_out", "invalid_result",
                    "budget_exhausted", "wall_deadline"}
 
 # Le fan-out de candidats : un nœud déclare des variantes de sa propre config,
@@ -65,6 +67,50 @@ JUDGE_OUTCOMES = ("sole", "chosen", "none")
 
 class GraphError(Exception):
     pass
+
+
+GRAPH_AGENT_KEYS = {"cli", "model"}
+NODE_AGENT_KEYS = {"cli", "model", "cmd", "prompt", "timeout_s", "silence_s"}
+
+
+def _validate_agent_values(place: str, agent: dict, allowed: set[str]) -> None:
+    """Valide les réglages déclaratifs, sans accepter de clé sensible cachée."""
+    if not isinstance(agent, dict):
+        raise GraphError(f"{place} : agent n'est pas un objet")
+    unknown = set(agent) - allowed
+    if unknown:
+        raise GraphError(f"{place} : réglage agent inconnu {sorted(unknown)}")
+    if "cli" in agent:
+        cli = agent["cli"]
+        if not isinstance(cli, str) or cli not in SUPPORTED_CLIS:
+            raise GraphError(f"{place} : CLI d'agent inconnue {cli!r}")
+    if "model" in agent and (not isinstance(agent["model"], str)
+                             or not agent["model"].strip()):
+        raise GraphError(f"{place} : modèle d'agent invalide {agent['model']!r}")
+
+
+def _validate_agents(bundle: dict) -> None:
+    """Valide les défauts du graph et les surcharges de tous ses nœuds."""
+    defaults = bundle.get("agent")
+    if defaults is not None:
+        _validate_agent_values("graph", defaults, GRAPH_AGENT_KEYS)
+
+    for name, spec in bundle["nodes"].items():
+        if spec.get("terminal"):
+            continue
+        local = (spec.get("config") or {}).get("agent")
+        fanout = (spec.get("config") or {}).get("fanout")
+        variants = fanout.get("variants") or [] if isinstance(fanout, dict) else []
+        for index, variant in enumerate(variants):
+            override = variant.get("agent") if isinstance(variant, dict) else None
+            if override is not None:
+                _validate_agent_values(f"{name}.fanout.variants[{index}]", override,
+                                       NODE_AGENT_KEYS)
+        if local is None:
+            continue
+        _validate_agent_values(name, local, NODE_AGENT_KEYS)
+        if "cmd" not in local and "cli" not in local and not (defaults or {}).get("cli"):
+            raise GraphError(f"{name} : agent sans cmd ni CLI structurée")
 
 
 def canonical(bundle: dict) -> str:
@@ -120,6 +166,18 @@ def _validate_fanout(name: str, spec: dict) -> None:
         raise GraphError(f"{name} : {len(variants)} variantes × {repeat} = {candidats} "
                          f"candidats, au-delà de la limite dure "
                          f"FANOUT_MAX_CANDIDATES = {FANOUT_MAX_CANDIDATES}")
+
+
+def _validate_solo(name: str, spec: dict) -> None:
+    """Le drapeau d'exclusion d'un nœud : un booléen, jamais sur un WAIT."""
+    config = spec.get("config") or {}
+    if "solo" not in config:
+        return
+    solo = config["solo"]
+    if not isinstance(solo, bool):
+        raise GraphError(f"{name} : solo doit être un booléen, vu {solo!r}")
+    if solo and spec["block"] == "WAIT":
+        raise GraphError(f"{name} : un nœud WAIT ne peut pas être solo")
 
 
 def _validate_keep_n(name: str, fanout: dict) -> None:
@@ -224,6 +282,7 @@ def validate(bundle: dict) -> None:
             raise GraphError(f"champ manquant : {key}")
 
     nodes = bundle["nodes"]
+    _validate_agents(bundle)
     if bundle["entry"] not in nodes:
         raise GraphError(f"entry inconnu : {bundle['entry']}")
 
@@ -248,6 +307,7 @@ def validate(bundle: dict) -> None:
             continue
         if spec.get("block") not in BLOCK_KINDS:
             raise GraphError(f"{name} : bloc inconnu {spec.get('block')}")
+        _validate_solo(name, spec)
         _validate_fanout(name, spec)
         _validate_judge(name, spec, nodes)
         edges = spec.get("edges") or {}

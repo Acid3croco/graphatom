@@ -31,7 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import blocks, scheduler, web  # noqa: E402
+from graphatom import blocks, quota, scheduler, web  # noqa: E402
 
 T0 = dt.datetime(2026, 8, 7, 10, 0, tzinfo=dt.timezone.utc)
 ISSUE = "gh:Acid3croco/graphatom#66"
@@ -107,13 +107,28 @@ class FakeConn:
 
 
 class CountConn:
-    """La base qui compte : `/api/load` ne lit qu'un `count(*)` de runs."""
+    """La base qui compte les runs et les places de construction."""
 
-    def __init__(self, running: int):
+    def __init__(self, running: int, builds: int = 0,
+                 solo_running: int = 0, solo_waiting: int = 0):
         self.running = running
+        self.builds = builds
+        self.solo_running = solo_running
+        self.solo_waiting = solo_waiting
 
     def execute(self, sql: str, params: tuple = ()):
-        return FakeCursor([{"n": self.running}])
+        if "FROM work_item" in sql:
+            return FakeCursor([
+                {"id": i, "state": "travail", "revision": "solo-rev"}
+                for i in range(1, self.solo_running + self.solo_waiting + 1)
+            ])
+        if "SELECT DISTINCT item_id" in sql:
+            return FakeCursor([{"item_id": i}
+                               for i in range(1, self.solo_running + 1)])
+        if "FROM graph_revision" in sql:
+            return FakeCursor([{"bundle": {"nodes": {"travail": {
+                "block": "ACT", "config": {"solo": True}}}}}])
+        return FakeCursor([{"n": self.builds if "pg_locks" in sql else self.running}])
 
 
 def item_row(item_id: int, subject_key: str, terminal: bool) -> dict:
@@ -256,9 +271,12 @@ def main() -> None:
         print("7. /api/heartbeat, et le payload sérialisable en ISO 8601 ✓")
 
         # la charge du rail : les runs en vol, et les plafonds qui les bornent
-        charge = web._api_load(CountConn(4))
+        charge = web._api_load(CountConn(
+            4, builds=1, solo_running=1, solo_waiting=2))
         assert charge == {"running": 4, "max_runs": scheduler.MAX_RUNS,
-                          "max_runs_per_item": scheduler.MAX_RUNS_PER_ITEM}, charge
+                           "max_runs_per_item": scheduler.MAX_RUNS_PER_ITEM,
+                          "solo": {"running": 1, "waiting": 2},
+                          "builds": 1, "max_builds": quota.MAX_BUILDS}, charge
         # Le plafond par item reste sous le global dès que la machine a de
         # quoi. Sur une petite machine les deux tombent sur le plancher de
         # `FANOUT_MAX_CANDIDATES` : une course se réserve entière, donc
@@ -266,8 +284,9 @@ def main() -> None:
         # interdire la course elle-même.
         assert charge["max_runs_per_item"] <= charge["max_runs"], \
             "un item pourrait dépasser la capacité globale"
-        print(f"7b. /api/load : {charge['running']} runs en vol pour un plafond "
-              f"de {charge['max_runs']} ({charge['max_runs_per_item']} par item) ✓")
+        print(f"7b. /api/load : {charge['running']} runs et {charge['builds']} "
+              f"construction en vol ; plafonds {charge['max_runs']} et "
+              f"{charge['max_builds']} ✓")
 
         # 6. les graphs publiés : la liste des révisions, avec leurs items
         published = [

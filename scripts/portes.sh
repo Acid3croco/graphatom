@@ -13,7 +13,7 @@
 #
 # Deux portes, dans cet ordre :
 #
-#   1. le projet s'importe — les onze modules du paquet, depuis l'atelier
+#   1. le projet s'importe — tous les modules du paquet, depuis l'atelier
 #      du candidat ;
 #   2. les tests sans base concernés par son diff passent.
 #
@@ -51,11 +51,12 @@ WT="${GRAPHATOM_WORKTREE:-}"
 WS="${GRAPHATOM_WORKSPACE:-$PWD}"
 MD=""            # portes.md, connu dès que le workspace l'est
 
-# Les onze modules du paquet : une erreur de syntaxe n'importe où dans
+# Les douze modules du paquet : une erreur de syntaxe n'importe où dans
 # `src/` tombe ici, avant même qu'un test soit choisi.
 MODULES="import graphatom.blocks, graphatom.channel, graphatom.cli, \
 graphatom.db, graphatom.github_sync, graphatom.graph, graphatom.heartbeat, \
-graphatom.kernel, graphatom.scheduler, graphatom.web, graphatom.worktree"
+graphatom.kernel, graphatom.quota, graphatom.scheduler, graphatom.executors, graphatom.web, \
+graphatom.worktree"
 
 # Ce qui rend la suite concernée : le diff du candidat touche du code, un
 # bundle, le schéma ou la déclaration du projet. Un diff qui n'a que de la
@@ -85,11 +86,14 @@ tests/criteria_test.py
 tests/depends_test.py
 tests/split_deps_test.py
 tests/heartbeat_test.py
+tests/postgres_recovery_test.py
 tests/links_test.py
 tests/live_test.py
 tests/failure_trace_test.py
+tests/agent_executor_test.py
 tests/codex_routing_test.py
 tests/orphans_test.py
+tests/starved_test.py
 tests/timeout_marge_test.py
 tests/timeout_test.py"
 
@@ -121,6 +125,9 @@ MD="$WS/portes.md"
 : > "$MD"
 dit "portes du candidat — atelier $WT"
 
+# Le quota vit sur la base commune. On conserve son adresse avant de couper
+# les deux DSN que les tests ne doivent jamais voir.
+export GRAPHATOM_QUOTA_DSN="${GRAPHATOM_QUOTA_DSN:-${GRAPHATOM_AGENT_DSN:-${GRAPHATOM_DSN:-}}}"
 unset GRAPHATOM_DSN GRAPHATOM_AGENT_DSN
 export GRAPHATOM_REPO_DIR="$WT"
 cd "$WT" || echoue "atelier" 2
@@ -131,10 +138,12 @@ DEBUT=$SECONDS
 lance uv run python -c "$MODULES" || echoue "import" 3
 dit "porte « import » passée en $((SECONDS - DEBUT)) s"
 
-# 2. les tests concernés par le diff. Le diff est celui de tout l'atelier
-#    face à `origin/main` — ce que le candidat a commité et ce qu'il n'a pas
-#    encore commité —, lu comme `test_backend` et `test_frontend` le lisent.
-DIFF=$({ git diff --name-only origin/main; git ls-files --others --exclude-standard; } 2>/dev/null)
+# 2. les tests concernés par le diff. Le diff est celui de la branche depuis
+#    son point commun avec `origin/main`, plus le travail suivi et non suivi
+#    de l'atelier — lu comme `test_backend` et `test_frontend` le lisent. Les
+#    commits arrivés seulement sur main ne sont jamais ceux du candidat.
+DIFF=$({ git diff --name-only origin/main...HEAD; git diff --name-only HEAD;
+         git ls-files --others --exclude-standard; } 2>/dev/null)
 if ! printf '%s\n' "$DIFF" | grep -qF "$CONCERNE"; then
     dit "diff sans code, bundle, schéma ni script — suite de tests non concernée"
     dit "PORTES OK — le candidat peut rendre son issue de succès"
@@ -143,7 +152,8 @@ fi
 
 for TEST in $TESTS; do
     DEBUT=$SECONDS
-    lance uv run python "$TEST" || echoue "$TEST" 3
+    lance uv run graphatom build-quota -- uv run python "$TEST" \
+        || echoue "$TEST" 3
     dit "porte « $TEST » passée en $((SECONDS - DEBUT)) s"
 done
 

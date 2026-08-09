@@ -81,7 +81,7 @@ class FakeConn:
         if "FROM work_item w" in sql:
             return FakeCursor(self.items)
         if sql.startswith("INSERT INTO effect"):
-            # effects.intend : item, run, clé logique, cible, intention
+            # les params d'`effects.intend` : item, run, clé logique, cible, intention
             self.effects.setdefault((params[3], params[2]), "not_attempted")
             return FakeCursor([])
         if sql.startswith("SELECT * FROM effect"):

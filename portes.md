@@ -1,4 +1,4 @@
-portes du candidat — atelier /home/jack/projects/graphatom/.worktrees/fix-keep-n-early
+portes du candidat — atelier /home/jack/projects/graphatom/.claude/worktrees/imperative-crunching-conway/.worktrees/rail-item-103
 $ uv run python -c import graphatom.blocks, graphatom.channel, graphatom.cli, graphatom.db, graphatom.github_sync, graphatom.graph, graphatom.heartbeat, graphatom.kernel, graphatom.scheduler, graphatom.web, graphatom.worktree
 porte « import » passée en 0 s
 $ uv run python tests/validate_test.py
@@ -12,7 +12,7 @@ $ uv run python tests/validate_test.py
 validation : OK — une cible on_kernel fantôme ne se publie plus
 porte « tests/validate_test.py » passée en 0 s
 $ uv run python tests/fanout_config_test.py
-1. fan-out bien formé sur `implement` publié : révision 7c8e60e3e63b… ✓
+1. fan-out bien formé sur `implement` publié : révision c5e76f268e0d… ✓
 2. fan-out sur un WAIT refusé : clarify : un nœud WAIT ne peut pas être en fan-out ✓
 3. table bloc → réductions : ['first_pass', 'keep_n'] livrées, keep_n sur ACT seul, WAIT au jeu vide ✓
    réduction 'vote' refusée : implement : réduction 'vote' refusée sur un bloc ACT — permises : ['first_pass', 'keep_n'] ✓
@@ -49,7 +49,7 @@ $ uv run python tests/fanout_config_test.py
    arbitre sans arête `sole` → judge : nœud arbitre sans arête ['sole'] — les trois issues ['sole', 'chosen', 'none'] sont fermées ✓
 
 fan-out : OK — la déclaration existe, et une config fautive ne se publie pas
-porte « tests/fanout_config_test.py » passée en 0 s
+porte « tests/fanout_config_test.py » passée en 1 s
 $ uv run python tests/answer_test.py
 #87 ← q9-receipt
 1. première ligne valide + prose : réponse prise, reçu posté ✓
@@ -163,6 +163,14 @@ $ uv run python tests/heartbeat_test.py
 
 battement : OK — le silence de chaque processus se voit
 porte « tests/heartbeat_test.py » passée en 0 s
+$ uv run python tests/postgres_recovery_test.py
+1. marqueur stable : reconnexion sans signal de reprise ✓
+2. jeton changé : une ligne de reprise distincte ✓
+3. plusieurs opérations après la reconnexion : une seule ligne ✓
+4. postmaster redémarré proprement : reprise signalée ✓
+
+reprise Postgres : OK — reprise et reconnexion restent distinctes
+porte « tests/postgres_recovery_test.py » passée en 1 s
 $ uv run python tests/links_test.py
 1. sujet gh → https://github.com/Acid3croco/graphatom/issues/27 ✓
 2. sujet quelconque : texte brut, échappé ✓
@@ -179,7 +187,7 @@ $ uv run python tests/live_test.py
 4. onglet caché et focus respectés, conteneur remplacé, aucun canal ✓
 
 rafraîchissement : OK — la page se suit sans se recharger
-porte « tests/live_test.py » passée en 1 s
+porte « tests/live_test.py » passée en 0 s
 $ uv run python tests/failure_trace_test.py
 1. agent Codex : échec rendu relu dans failure.json, quatre champs bornés ✓
 2. shell sans issue : crashed au même chemin, qui ne porte que ce dernier échec ✓
@@ -194,13 +202,13 @@ routage codex : OK — modèle et effort explicites, release script-first
 porte « tests/codex_routing_test.py » passée en 0 s
 $ uv run python tests/orphans_test.py
 1. agent fauché au timeout après 2.0s, autopsie -15 ✓
-2. groupe 1818450 entièrement révoqué ✓
+2. groupe 2393602 entièrement révoqué ✓
 3. traces agent-travail-1-1.log et prompt-travail-1-1.md écrites ✓
 4. agent nominal appliqué, usage fusionné : {'outcome': 'ok', 'summary': 'fait', 'usage': {'input_tokens': 12, 'output_tokens': 3456}} ✓
 4 bis. agent sans usage.json : résultat inchangé ✓
 5. autopsie du crash : sortie 42, queue « Execution error » ✓
-6. worker tué, agent orphelin toujours vivant : groupe 1819445 ✓
-orphelin révoqué : groupe 1819445 (ps -o pgid= -p $$ > pgid.txt; sleep 300 & sleep 300)
+6. worker tué, agent orphelin toujours vivant : groupe 2393943 ✓
+orphelin révoqué : groupe 2393943 (ps -o pgid= -p $$ > pgid.txt; sleep 300 & sleep 300)
 7. orphelin révoqué par le faucheur, trace effacée ✓
 8. trace d'une autre tentative : ni suivie ni effacée ✓
 9. identité périmée (naissance, boot) : le faucheur ne tue personne ✓

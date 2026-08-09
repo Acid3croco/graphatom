@@ -5,9 +5,9 @@ Il ne touche jamais la base : le noyau réserve avant, applique après.
 Les stubs simulent le travail via la config du nœud.
 
 Un nœud ACT / CHECK / JUDGE peut déclarer `config.agent` : un vrai agent
-CLI fait alors le travail. Le contrat est minuscule et agnostique — le
-bloc écrit `prompt.md` dans le workspace, lance la commande configurée
-(claude, codex, pi, n'importe quoi), et lit `outcome.json`. Pas de
+CLI fait alors le travail. Le contrat est minuscule — le bloc écrit
+`prompt.md` dans le workspace, résout l'adaptateur configuré ou la commande
+explicite, puis lit `outcome.json`. Pas de
 fichier d'issue valide = crashed, et le noyau route comme d'habitude.
 
 Une extension optionnelle : si la tentative laisse un `usage.json`, le
@@ -81,7 +81,7 @@ from pathlib import Path
 
 import psycopg
 
-from . import db, effects, worktree
+from . import db, effects, executors, worktree
 from .graph import KERNEL_OUTCOMES, judge_source
 from .worktree import run_git, run_worktree
 
@@ -90,6 +90,7 @@ OUTBOX_NAME = "effects_outbox.log"  # sous DATA_DIR, résolu au moment de l'effe
 GRACE_S = 5.0  # entre le SIGTERM et le SIGKILL du groupe de l'agent
 PGID_FILE = "agent.pgid"  # la trace qui survit au worker, écrasée à chaque tentative
 OUTCOME_NAME = "outcome.json"  # transitoire : purgé avant chaque tentative
+STARVED_NAME = "starved.json"  # idem — une panne de crédits nommée par l'adaptateur
 PROMPT_NAME = "prompt.md"  # l'interface avec le cmd, archivée après la tentative
 USAGE_NAME = "usage.json"  # idem — ce que l'agent veut bien dire de sa consommation
 FAILURE_NAME = "failure.json"  # emplacement stable du dernier échec de l'item
@@ -283,6 +284,20 @@ DEATHS = {  # ce qui a tué la tentative précédente, dit en clair au repreneur
 }
 
 
+def _death(previous: dict) -> str:
+    """La mort précédente, avec la raison du fournisseur s'il l'a donnée."""
+    if previous["outcome"] == "starved":
+        result = previous.get("result") or {}
+        provider = result.get("provider")
+        reason = result.get("reason")
+        if provider and reason:
+            return (f"a perdu son fournisseur {provider} : {reason}. "
+                    "Ce qu'elle avait fait est resté là")
+    return DEATHS.get(previous["outcome"],
+                      f"a rendu « {previous['outcome']} », et ce qu'elle a "
+                      "laissé est toujours là")
+
+
 def _last_attempt(ctx: Context) -> dict | None:
     """La dernière tentative achevée de ce nœud, tous passages confondus.
 
@@ -297,7 +312,7 @@ def _last_attempt(ctx: Context) -> dict | None:
     C'est exactement le cas qu'une reprise doit couvrir.
     """
     return ctx.conn.execute(
-        "SELECT cycle, attempt, outcome FROM node_run "
+        "SELECT cycle, attempt, outcome, result FROM node_run "
         "WHERE item_id = %s AND node = %s AND outcome IS NOT NULL "
         "ORDER BY cycle DESC, attempt DESC LIMIT 1",
         (ctx.item["id"], ctx.run["node"]),
@@ -314,7 +329,7 @@ def _work_files(workspace: Path) -> list[str]:
     pendu qui n'a laissé qu'un journal vide — et une reprise inventée est
     pire que pas de reprise du tout.
     """
-    traces = {PGID_FILE, OUTCOME_NAME, PROMPT_NAME, USAGE_NAME}
+    traces = {PGID_FILE, OUTCOME_NAME, STARVED_NAME, PROMPT_NAME, USAGE_NAME}
     return sorted(p.name for p in workspace.iterdir()
                   if p.is_file() and p.name not in traces
                   and not p.name.startswith(("agent-", "prompt-", "usage-")))
@@ -390,9 +405,7 @@ def _reprise(ctx: Context, workspace: Path) -> str:
     # la liste, elle, ne cache rien : les traces des tentatives passées se
     # lisent aussi, et leur journal dit souvent où celle d'avant s'est arrêtée
     files = sorted(p.name for p in workspace.iterdir() if p.is_file())
-    death = DEATHS.get(previous["outcome"],
-                       f"a rendu « {previous['outcome']} », et ce qu'elle a "
-                       "laissé est toujours là")
+    death = _death(previous)
     return (
         f"\n\n--- Reprise de la tentative {previous['attempt']} du passage "
         f"{previous['cycle']} ---\n"
@@ -488,9 +501,12 @@ def _wait(proc: subprocess.Popen, watched: tuple, mark: tuple,
     Rend la main quand le process meurt de sa belle mort ; lève
     `TimeoutExpired` quand un couperet tombe, comme `proc.wait` le ferait.
     """
+    from .quota import WAIT_FILE
+
     start = time.monotonic()
     deadline, probe_s = start + budget_s, min(PROBE_S, silence_s / 4)
     quiet_since, next_probe = start, start + probe_s
+    last = start
     while True:
         try:
             proc.wait(timeout=POLL_S)
@@ -498,6 +514,13 @@ def _wait(proc: subprocess.Popen, watched: tuple, mark: tuple,
         except subprocess.TimeoutExpired:
             pass
         now = time.monotonic()
+        # Une commande lourde qui attend le quota n'a pas encore commencé.
+        # Son marqueur est renouvelé par le preneur en même temps que le bail.
+        # Cette durée ne mange donc ni le couperet total ni celui du silence.
+        if (watched[1] / WAIT_FILE).exists():
+            deadline += now - last
+            quiet_since = now
+        last = now
         if now >= next_probe:
             next_probe = now + probe_s
             fresh = _mark(*watched)
@@ -528,12 +551,19 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
     ).fetchone()["subject_key"]
 
     outcome_path = workspace / OUTCOME_NAME
-    for transient in (outcome_path, workspace / USAGE_NAME):
+    starved_path = workspace / STARVED_NAME
+    for transient in (outcome_path, starved_path, workspace / USAGE_NAME):
         transient.unlink(missing_ok=True)  # rien de la tentative précédente
     (workspace / PROMPT_NAME).write_text(_prompt(ctx, workspace, subject))
 
     env = os.environ | {"GRAPHATOM_WORKSPACE": str(workspace),
-                        "GRAPHATOM_SUBJECT_KEY": subject}
+                        "GRAPHATOM_SUBJECT_KEY": subject,
+                        "GRAPHATOM_ITEM_ID": str(ctx.item["id"]),
+                        "GRAPHATOM_RUN_ID": str(ctx.run["id"]),
+                        "GRAPHATOM_LEASE_S": str(ctx.config.get("lease_s", 30)),
+                        # Copiée avant que la base jetable de l'item remplace
+                        # GRAPHATOM_DSN : toutes les places vivent ici.
+                        "GRAPHATOM_QUOTA_DSN": db.DSN}
     if ctx.worktree is not None:
         # le bloc ne devine pas son checkout : celui d'un candidat n'est pas
         # celui de son item, et aucune convention de nom ne l'en déduit
@@ -547,8 +577,11 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
     log = attempt_log(workspace, ctx.run)
     pgid_file = workspace / PGID_FILE
     watched = (log, workspace, ctx.worktree)
-    cmd = _fill(ctx, cfg["cmd"], subject)  # une variante joue sa propre commande
+    resolved = executors.resolve(ctx.bundle, ctx.node)
+    cmd = _fill(ctx, executors.command(resolved), subject)
     with log.open("w") as out:
+        out.write(f"$ {cmd}\n")
+        out.flush()
         # session dédiée : l'agent est chef de son groupe, ses descendants aussi
         proc = subprocess.Popen(
             cmd, shell=True, cwd=workspace, env=env, start_new_session=True,
@@ -576,8 +609,26 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
         data = json.loads(outcome_path.read_text())
         outcome, summary = data["outcome"], data.get("summary", "")
     except (OSError, ValueError, KeyError, TypeError) as exc:  # pas d'issue valide
-        return _autopsy(proc, log, exc, timeout=False)
+        return _starved(starved_path) or _autopsy(proc, log, exc, timeout=False)
     return {"outcome": outcome, "summary": summary}
+
+
+def _starved(path: Path) -> dict | None:
+    """La panne de fournisseur déclarée par l'adaptateur, si elle est valide.
+
+    Le bloc ne reconnaît aucun message de CLI. Il ne fait que lire le contrat
+    de fichier : deux chaînes non vides, le fournisseur et sa raison exacte.
+    Un fichier absent ou mal formé ne change rien au verdict `crashed`.
+    """
+    try:
+        data = json.loads(path.read_text())
+        provider, reason = data["provider"], data["reason"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not all(isinstance(value, str) and value.strip()
+               for value in (provider, reason)):
+        return None
+    return {"outcome": "starved", "provider": provider, "reason": reason}
 
 
 def _autopsy(proc: subprocess.Popen, log: Path, exc: BaseException,
@@ -686,10 +737,11 @@ def write_failure_trace(item_id: int, run: dict, outcome: str) -> Path | None:
     """Remplace la trace stable quand un run rend une issue d'échec.
 
     Agent, adaptateur de fournisseur et script shell ont tous le même contrat
-    de bloc. Le rail connaît donc les quatre données sans aide de la commande :
-    le nœud et l'issue du run, le journal de sa tentative et le dernier compte
-    rendu Markdown écrit pendant cette tentative. Journal et rapport sont
-    bornés par `TAIL_LINES`/`TAIL_CHARS` et `REPORT_CHARS`.
+    de bloc. Le rail connaît donc le nœud et l'issue du run, le journal de sa
+    tentative et le dernier compte rendu Markdown écrit pendant cette
+    tentative. Pour `starved`, il garde aussi le fournisseur et sa raison.
+    Journal et rapport sont bornés par `TAIL_LINES`/`TAIL_CHARS` et
+    `REPORT_CHARS`.
 
     Une réussite ne touche rien. Un item neuf ne reçoit ainsi aucune trace, et
     une réussite ultérieure conserve bien le dernier échec observé. Chaque
@@ -706,6 +758,12 @@ def write_failure_trace(item_id: int, run: dict, outcome: str) -> Path | None:
         "log_tail": _tail(attempt_log(workspace, run)),
         "report": _attempt_report(workspace, run),
     }
+    result = run.get("result") or {}
+    if outcome == "starved":
+        for name in ("provider", "reason"):
+            value = result.get(name)
+            if isinstance(value, str) and value.strip():
+                trace[name] = value
     temporary = path.with_suffix(f"{path.suffix}.tmp")
     temporary.write_text(json.dumps(trace, ensure_ascii=False, indent=2) + "\n")
     temporary.replace(path)

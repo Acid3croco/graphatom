@@ -1,0 +1,35 @@
+{
+  "name": "structured-agent",
+  "entry": "work",
+  "agent": {
+    "cli": "claude",
+    "model": "sonnet"
+  },
+  "budgets": {
+    "escalations": 1,
+    "wall_deadline_hours": 1
+  },
+  "on_kernel": {
+    "escalate_to": "failed",
+    "exhausted_to": "failed"
+  },
+  "nodes": {
+    "work": {
+      "block": "ACT",
+      "config": {
+        "agent": {
+          "prompt": "Exécute le travail demandé et rends outcome.json."
+        }
+      },
+      "edges": {
+        "done": "finished"
+      }
+    },
+    "finished": {
+      "terminal": true
+    },
+    "failed": {
+      "terminal": true
+    }
+  }
+}
