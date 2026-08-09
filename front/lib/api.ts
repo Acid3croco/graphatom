@@ -34,6 +34,7 @@ export type Item = {
   version: number;
   cycle: number;
   escalations: number;
+  total_cost_usd: number;
   issue_url: string | null;
   pr_url: string | null;
   terminal_at: string | null;
