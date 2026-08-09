@@ -578,6 +578,7 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
     pgid_file = workspace / PGID_FILE
     watched = (log, workspace, ctx.worktree)
     resolved = executors.resolve(ctx.bundle, ctx.node)
+    env.update(executors.environment(resolved))
     cmd = _fill(ctx, executors.command(resolved), subject)
     with log.open("w") as out:
         out.write(f"$ {cmd}\n")

@@ -12,13 +12,19 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from graphatom import executors, graph  # noqa: E402
+
 BUNDLE = json.loads((ROOT / "examples" / "code-task.json").read_text())
 CODEX = ROOT / "scripts" / "agent-codex.sh"
+DECLARED = ROOT / "scripts" / "agent-declared.sh"
 RELEASE_NODE = ROOT / "scripts" / "release-node.sh"
 
 
@@ -28,10 +34,10 @@ def cmd(node: str) -> str:
 
 
 def porte(node: str, model: str, effort: str) -> None:
-    """Un nœud nomme son modèle et son effort, sans dépendre du défaut local."""
-    commande = cmd(node)
-    assert f"CODEX_MODEL={model}" in commande, (node, commande)
-    assert f"CODEX_REASONING_EFFORT={effort}" in commande, (node, commande)
+    """Un nœud résout le modèle et l'effort attendus."""
+    resolved = executors.resolve(BUNDLE, BUNDLE["nodes"][node])
+    assert (resolved.cli, resolved.model, resolved.effort) == (
+        "codex", model, effort), (node, resolved)
 
 
 def declaration() -> None:
@@ -47,13 +53,15 @@ def declaration() -> None:
     variants = BUNDLE["nodes"]["implement"]["config"]["fanout"]["variants"]
     assert [v["label"] for v in variants] == ["minimal", "test d'abord", "gratuit"]
     assert len(variants) == 3
-    luna, sol, gratuit = [v["agent"]["cmd"] for v in variants]
-    assert "CODEX_MODEL=gpt-5.6-luna" in luna
-    assert "CODEX_REASONING_EFFORT=medium" in luna
-    assert "CODEX_MODEL=gpt-5.6-sol" in sol
-    assert "CODEX_REASONING_EFFORT=high" in sol
-    assert "agent-opencode.sh" in gratuit
-    assert "opencode/deepseek-v4-flash-free" in gratuit
+    spec = BUNDLE["nodes"]["implement"]
+    luna, sol, gratuit = [executors.resolve(BUNDLE, graph.candidate_node(spec, i))
+                          for i in range(3)]
+    assert (luna.cli, luna.model, luna.effort) == (
+        "codex", "gpt-5.6-luna", "medium")
+    assert (sol.cli, sol.model, sol.effort) == (
+        "codex", "gpt-5.6-sol", "high")
+    assert (gratuit.cli, gratuit.model, gratuit.effort) == (
+        "opencode", "opencode/deepseek-v4-flash-free", None)
     assert variants[2]["agent"]["silence_s"] == 300
     assert "claude " not in json.dumps(BUNDLE)
     print("1. scope et judge Sol high ; course Luna medium + Sol high + "
@@ -125,6 +133,7 @@ def release_rapide(tmp: Path) -> None:
     scripts = worktree / "scripts"
     scripts.mkdir(parents=True)
     shutil.copy2(CODEX, scripts / "agent-codex.sh")
+    shutil.copy2(DECLARED, scripts / "agent-declared.sh")
     workspace = tmp / "release"
     workspace.mkdir()
     release = scripts / "release.sh"
@@ -134,6 +143,10 @@ def release_rapide(tmp: Path) -> None:
         "GRAPHATOM_WORKTREE": str(worktree),
         "GRAPHATOM_WORKSPACE": str(workspace),
         "CODEX_BIN": str(absent),
+        "GRAPHATOM_AGENT_CLI": "codex",
+        "CODEX_MODEL": "gpt-5.6-luna",
+        "CODEX_REASONING_EFFORT": "low",
+        "CODEX_TIMEOUT_S": "540",
     })
     assert result.returncode == 0, result.stderr
     assert json.loads((workspace / "outcome.json").read_text())["outcome"] == "done"
@@ -150,6 +163,10 @@ def release_rapide(tmp: Path) -> None:
         "CODEX_BIN": str(cli),
         "CODEX_CAPTURE": str(capture),
         "FAKE_OUTCOME": '{"outcome":"rebased","summary":"réparé"}',
+        "GRAPHATOM_AGENT_CLI": "codex",
+        "CODEX_MODEL": "gpt-5.6-luna",
+        "CODEX_REASONING_EFFORT": "low",
+        "CODEX_TIMEOUT_S": "540",
     })
     assert result.returncode == 0, result.stderr
     assert json.loads((workspace / "outcome.json").read_text())["outcome"] == "rebased"
@@ -199,12 +216,14 @@ def selection_diff(tmp: Path) -> None:
 printf appelé > "$GRAPHATOM_WORKSPACE/agent-called"
 printf '%s\n' '{"outcome":"pass","summary":"agent appelé"}' > outcome.json
 """)
+    shutil.copy2(DECLARED, scripts / "agent-declared.sh")
     workspace = tmp / "item-17"
     workspace.mkdir()
     env = os.environ | {
         "GRAPHATOM_REPO_DIR": str(repo),
         "GRAPHATOM_WORKTREE": str(worktree),
         "GRAPHATOM_WORKSPACE": str(workspace),
+        "GRAPHATOM_AGENT_CLI": "codex",
     }
 
     portes = (ROOT / "scripts" / "portes.sh").read_text()
