@@ -958,6 +958,7 @@ def _api_load(conn) -> dict:
     return {"running": scheduler.en_vol(conn),
             "max_runs": scheduler.MAX_RUNS,
             "max_runs_per_item": scheduler.MAX_RUNS_PER_ITEM,
+            "solo": scheduler.etat_solo(conn),
             "builds": quota.en_vol(conn),
             "max_builds": quota.MAX_BUILDS}
 

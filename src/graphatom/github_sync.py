@@ -84,6 +84,7 @@ CRITERIA = "criteria.md"    # les critères figés par le nœud scope, même wor
 CRITERIA_LINES = 80         # une spécification proposée est plus longue qu'une checklist
 CRITERIA_TITLE = "**Ce que le rail a compris** — critères figés par `scope`"
 TIMEOUT_TITLE = "**Escalade après timeout** — le budget du nœud a été dépassé"
+STARVED_TITLE = "**Escalade sans fournisseur** — le fournisseur est indisponible"
 # la pendaison d'un agent, à ne pas confondre avec le label STALLED ci-dessus,
 # qui parle du worker : l'un est un run muet, l'autre un rail sans battement
 HUNG_TITLE = "**Escalade après pendaison** — l'agent n'a jamais rien produit"
@@ -544,7 +545,7 @@ def _budget_s(conn: Connection, run: dict) -> float:
 def _death_report(conn: Connection, item_id: int, node: str) -> str:
     """Le post-mortem du couperet qui vient d'escalader — sinon rien du tout.
 
-    Deux morts, et l'humain ne tranche pas pareil entre les deux, donc le
+    Trois morts, et l'humain ne tranche pas pareil entre elles, donc le
     message dit laquelle :
 
     - `timed_out` — l'agent produisait, il n'a pas fini dans son budget. La
@@ -553,6 +554,8 @@ def _death_report(conn: Connection, item_id: int, node: str) -> str:
     - `stalled` — l'agent était pendu, muet du début à la fin, et les
       relances sur place n'y ont rien changé. La question utile est celle de
       l'infra, pas celle de la tâche : rien n'a jamais été essayé.
+    - `starved` — le fournisseur refuse la tentative. Son nom et son message
+      exact suffisent : une relance identique ne rendra ni crédits ni accès.
 
     On ne lit que le dernier pas — l'événement qui a armé cette question :
     une mort d'un passage précédent ne regarde pas celui-ci.
@@ -563,7 +566,7 @@ def _death_report(conn: Connection, item_id: int, node: str) -> str:
     ).fetchone()
     if not event or event["run_id"] is None:
         return ""
-    if event["outcome"] not in ("timed_out", "stalled"):
+    if event["outcome"] not in ("timed_out", "starved", "stalled"):
         return ""
     run = conn.execute(
         "SELECT n.*, w.revision FROM node_run n JOIN work_item w ON w.id = n.item_id "
@@ -575,6 +578,13 @@ def _death_report(conn: Connection, item_id: int, node: str) -> str:
         entete = (f"{TIMEOUT_TITLE} : `{run['node']}` a dépassé son `timeout_s` de "
                   f"{_budget_s(conn, run):.0f} s "
                   f"(passage {run['cycle']}, tentative {run['attempt']}).")
+    elif event["outcome"] == "starved":
+        result = run["result"] or {}
+        provider = result.get("provider", "inconnu")
+        reason = result.get("reason", "raison absente")
+        entete = (f"{STARVED_TITLE} : `{run['node']}` a perdu le fournisseur "
+                  f"`{provider}` (passage {run['cycle']}, tentative "
+                  f"{run['attempt']}).\n\nRaison du fournisseur : {reason}")
     else:
         entete = (f"{HUNG_TITLE} : `{run['node']}` a été coupé sans avoir écrit un "
                   "octet ni toucher un fichier — l'agent n'a jamais démarré. "

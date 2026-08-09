@@ -303,6 +303,7 @@ def api_load(conn) -> None:
             time.sleep(0.1)
     assert charge is not None, f"{url} n'a jamais répondu"
     assert charge == {"running": 2, "max_runs": 3, "max_runs_per_item": 2,
+                      "solo": {"running": 0, "waiting": 0},
                       "builds": 0, "max_builds": quota.MAX_BUILDS}, charge
     print(f"5. GET /api/load → {charge} : runs et constructions en vol, "
           "avec leurs plafonds effectifs ✓")

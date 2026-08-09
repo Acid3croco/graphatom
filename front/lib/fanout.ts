@@ -31,6 +31,7 @@ import { execution } from "@/lib/agent-model";
 // Miroir de `KERNEL_OUTCOMES` dans `src/graphatom/graph.py`.
 const KERNEL_OUTCOMES = new Set([
   "crashed",
+  "starved",
   "stalled",
   "timed_out",
   "invalid_result",
@@ -85,6 +86,9 @@ function loss(run: Run): string | null {
   }
   if (run.outcome === "timed_out") {
     return "timeout";
+  }
+  if (run.outcome === "starved") {
+    return "fournisseur";
   }
   return run.outcome && KERNEL_OUTCOMES.has(run.outcome)
     ? "porte interne"

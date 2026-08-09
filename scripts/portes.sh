@@ -93,6 +93,7 @@ tests/failure_trace_test.py
 tests/agent_executor_test.py
 tests/codex_routing_test.py
 tests/orphans_test.py
+tests/starved_test.py
 tests/timeout_marge_test.py
 tests/timeout_test.py"
 
@@ -137,10 +138,12 @@ DEBUT=$SECONDS
 lance uv run python -c "$MODULES" || echoue "import" 3
 dit "porte « import » passée en $((SECONDS - DEBUT)) s"
 
-# 2. les tests concernés par le diff. Le diff est celui de tout l'atelier
-#    face à `origin/main` — ce que le candidat a commité et ce qu'il n'a pas
-#    encore commité —, lu comme `test_backend` et `test_frontend` le lisent.
-DIFF=$({ git diff --name-only origin/main; git ls-files --others --exclude-standard; } 2>/dev/null)
+# 2. les tests concernés par le diff. Le diff est celui de la branche depuis
+#    son point commun avec `origin/main`, plus le travail suivi et non suivi
+#    de l'atelier — lu comme `test_backend` et `test_frontend` le lisent. Les
+#    commits arrivés seulement sur main ne sont jamais ceux du candidat.
+DIFF=$({ git diff --name-only origin/main...HEAD; git diff --name-only HEAD;
+         git ls-files --others --exclude-standard; } 2>/dev/null)
 if ! printf '%s\n' "$DIFF" | grep -qF "$CONCERNE"; then
     dit "diff sans code, bundle, schéma ni script — suite de tests non concernée"
     dit "PORTES OK — le candidat peut rendre son issue de succès"
