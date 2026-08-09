@@ -736,6 +736,10 @@ def reap(conn: psycopg.Connection) -> int:
     migration, un SIGKILL. L'issue ne change pas, la cause probable si :
     lire « bail expiré, agent déjà mort » ferait chercher un agent instable
     là où il n'y a qu'un processus qui a redémarré.
+
+    Avant le bail, seul un run étranger dont l'identité est certainement
+    morte passe. Une trace absente ou indécidable garde le bail. La sonde est
+    refaite sous les verrous : une observation périmée ne classe aucun run.
     """
     running = conn.execute(
         "SELECT id, item_id, lease_expires_at FROM node_run WHERE status = 'running'"

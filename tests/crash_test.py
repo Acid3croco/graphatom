@@ -110,10 +110,13 @@ def main() -> None:
 
     with db.connect() as conn:
         anciens = conn.execute(
-            "SELECT id, lease_expires_at FROM node_run WHERE item_id = %s "
+            "SELECT id, lease_expires_at, "
+            "EXTRACT(epoch FROM lease_expires_at - now()) AS reste FROM node_run "
+            "WHERE item_id = %s "
             "AND status = 'running' ORDER BY id", (item_id,),
         ).fetchall()
     assert len(anciens) == 3, anciens
+    assert min(float(run["reste"]) for run in anciens) > LEASE_S - 20, anciens
 
     kill_group(proc, signal.SIGKILL)
     with db.connect() as conn:

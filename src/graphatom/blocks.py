@@ -1115,19 +1115,21 @@ def agent_state(item_id: int, run_id: int) -> str:
     trace = found[1]
     who = trace["identity"]
     if (not isinstance(who, dict) or not isinstance(who.get("boot"), str)
-            or not isinstance(who.get("starttime"), int)
-            or not isinstance(trace["pgid"], int)):
+            or type(who.get("starttime")) is not int
+            or type(trace["pgid"]) is not int or trace["pgid"] <= 0):
         return AGENT_UNKNOWN
     try:
         fields = Path(f"/proc/{trace['pgid']}/stat").read_text().rsplit(") ", 1)[1].split()
     except FileNotFoundError:
-        return AGENT_DEAD
+        return AGENT_DEAD if Path("/proc/self/stat").exists() else AGENT_UNKNOWN
     except (OSError, IndexError):
         return AGENT_UNKNOWN
     try:
         boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
         current = {"boot": boot, "starttime": int(fields[19])}
     except (OSError, IndexError, ValueError):
+        return AGENT_UNKNOWN
+    if not boot:
         return AGENT_UNKNOWN
     return AGENT_ALIVE if current == who else AGENT_DEAD
 
