@@ -109,12 +109,12 @@ printf '   jugement %s, candidats %s, total %s — trois lignes, trois prix ✓\
 echo "4. la décision du juge sous les candidats"
 for cas in \
     '1|finalisteB→c1|raisonduchoix:Bcouvrelespreuvesdemandées|ComparaisoncomplètedesfinalistesAetB.|modèlegpt-5.6-sol·CLIcodex·efforthigh' \
-    '2|finalisteuniquechoisimécaniquement|finalisteA→c0|aucunmodèlejugenaétéappelé.' \
-    '3|aucunfinaliste|aucunchoixnaétépossible.'; do
+    '2|finalisteuniquechoisimécaniquement|finalisteA→c0|aucunmodèlejugen’aétéappelé.' \
+    '3|aucunfinaliste|aucunchoixn’aétépossible.'; do
     id=${cas%%|*}
     attendus=${cas#*|}
     rendu=$(curl -sf "http://127.0.0.1:$WEB_PORT/item/$id")
-    rendu=$(printf '%s' "$rendu" | sed 's/<!-- -->//g; s/’/'"'"'/g; s/[[:space:]]//g')
+    rendu=$(printf '%s' "$rendu" | sed 's/<!-- -->//g; s/[[:space:]]//g')
     while [ -n "$attendus" ]; do
         attendu=${attendus%%|*}
         case $rendu in
