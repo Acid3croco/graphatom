@@ -1230,8 +1230,8 @@ seul mélange de fournisseurs est la course d'implémentation :
 | nœuds | fournisseur | pourquoi |
 | --- | --- | --- |
 | `scope`, `judge` | Codex `gpt-5.6-sol`, effort high | les deux jugements qui découpent ou choisissent gardent le modèle fort |
-| `test_backend`, `validate` | Codex `gpt-5.6-luna`, effort low | constat borné, preuves déjà nommées |
-| `test_frontend` | Codex `gpt-5.6-luna`, effort medium | le navigateur demande plus de lecture, pas un Sol |
+| `validate` | Codex `gpt-5.6-luna`, effort low | constat borné, preuves déjà nommées |
+| `test_backend`, `test_frontend` | aucun modèle | harnais versionné, preuves déterministes et usage nul |
 | `release` | `release.sh` d'abord ; Luna low seulement sur panne | le nominal ne consomme aucun tour de modèle |
 | `implement` | Luna medium, Sol high, DeepSeek V4 Flash gratuit | deux abonnements Codex et un fournisseur gratuit, trois stratégies |
 | `worktree`, `deploy`, `verify_deploy`, `cleanup`, `cleanup_unresolved`, `cleanup_split` | pas d'agent | du shell pur, qui écrit son `outcome.json` |
@@ -1318,19 +1318,22 @@ que sur la panne de release. Si elle se met à rater, la marche arrière est
 compteurs de tentatives et le journal disent ce qui a lâché ; c'est la
 donnée qui tranche, pas l'intuition.
 
-**Une porte de pertinence avant chaque test.** Le test le plus cher du
-cycle est le test frontend (~8 min de navigateur) et il tournait même pour
-une issue qui ne touche que du JSON de graph. Les deux `cmd` de test
-commencent donc par quelques lignes de shell — pas du jugement d'agent —
-qui lisent seulement le travail de la branche depuis son point commun avec
-main (`git diff --name-only origin/main...HEAD`), puis les modifications
-suivies et les fichiers neufs non encore suivis. Un commit arrivé sur main
-après la création de l'item n'est donc jamais pris pour un changement de
-l'item. Les portes décident ensuite :
+**Un harnais fermé pour les deux nœuds de test.**
+[`scripts/test_harness.py`](scripts/test_harness.py) lit une fois le travail
+de la branche depuis son point commun avec main
+(`git diff --name-only origin/main...HEAD`), puis les modifications suivies
+et les fichiers neufs. Un commit arrivé sur main après la création de
+l'item n'est donc jamais pris pour un changement de l'item. Une liste
+versionnée choisit les portes liées à ce diff ; les tests qui partagent la
+base courent en série, et le premier code non nul force `fail`. Chaque
+commande laisse dans `test-evidence.json` son argv, son code, sa durée, la
+queue de sa sortie et son empreinte. Le budget total nominal est de 85 s.
+
+Le harnais décide ensuite :
 
 - le diff ne touche aucun fichier front (`src/graphatom/web.py` et `front/`,
   liste en tête du `cmd`) → `outcome` `pass`, « diff sans src/graphatom/web.py
-  ni front/ — test frontend non concerné », sans lancer l'agent ;
+  ni front/ — test frontend non concerné », sans lancer de navigateur ;
 - en miroir côté backend : ni `src/`, ni `tests/`, ni `schema.sql` → même
   court-circuit ;
 - le diff **vide** n'est pas un skip, c'est un symptôme → `outcome` `fail`,
@@ -1342,8 +1345,22 @@ l'item. Les portes décident ensuite :
   l'item 10 aurait été vu dès `test_backend`.
 
 Le résumé dit toujours pourquoi le test n'a pas tourné : le journal et la
-page de l'item le lisent comme n'importe quel autre. Un chemin que la
-porte ne comprend pas ne court-circuite rien — l'agent tourne.
+page de l'item le lisent comme n'importe quel autre. Les deux nœuds portent
+`cli`, `model` et `effort` à `null`, écrivent un usage nul et n'appellent
+aucune API de modèle.
+
+Le côté frontend possède toute la durée de vie. Il prépare la base et le
+build, lance API et Next dans deux groupes de processus, attend leurs ports
+sur des délais bornés, puis capture `/`, `/items` et `/item/1` en DOM et en
+PNG. Son `finally` envoie TERM, attend, puis envoie KILL aux survivants. Un
+`000`, un SVG absent ou un screenshot vide rend une cause stable ; aucun
+`nohup` ne peut survivre au nœud.
+
+Enfin, `validate` ne peut pas effacer une lacune du juge : si la section du
+finaliste élu dans `verdict.md` porte encore `**Raté.**`, un outcome `pass`
+est remplacé par `fail` et le cycle retourne à `implement`. Il faut un
+nouveau cycle, un nouveau verdict et les nouvelles preuves exécutables des
+deux harnais pour lever ce constat.
 
 Même motif côté fixtures : le test frontend peuple sa base avec
 [`tests/seed.py`](tests/seed.py) — publier, admettre, quelques ticks
@@ -1359,10 +1376,8 @@ partage entre worktrees, c'est le **cache npm** —
 stable de l'hôte (`GRAPHATOM_NPM_CACHE`, `$HOME/.npm` par défaut), installe
 en `npm ci --prefer-offline` puis builde : ~4 s d'install et ~10 s de build
 cache chaud, contre plusieurs minutes à froid. C'est la voie normale du
-prompt de `test_frontend` ; l'install à froid reste le secours. Le bail du
-nœud est passé à **30 min** (`timeout_s: 1740`) : un test front réel paie
-l'environnement, un serveur et des captures multi-viewports, là où 20 min
-étaient calibrées sur du Python.
+harnais frontend. Son propre budget fermé reste 85 s ; le bail plus large
+du nœud ne sert que de dernier couperet si le superviseur lui-même casse.
 
 **Un worktree git par item** — le pendant git du workspace `data/item-N`.
 `GRAPHATOM_REPO_DIR` est le clone de référence, plus l'atelier : le nœud
