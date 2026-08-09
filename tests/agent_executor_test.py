@@ -114,7 +114,9 @@ def adapter(cli: str, model: str, expected_input: int, tmp: Path) -> None:
     os.environ[env_name] = str(binary)
     os.environ["CAPTURE"] = str(capture)
     try:
-        spec = node({"cli": cli, "model": model, "timeout_s": 10,
+        effort = "high" if cli == "codex" else None
+        spec = node({"cli": cli, "model": model, "effort": effort,
+                     "timeout_s": 10,
                      "silence_s": 10})
         paquet = bundle({"cli": "codex", "model": "défaut"}, spec)
         run = {"id": expected_input, "node": "travail", "cycle": 1,
@@ -136,17 +138,22 @@ def adapter(cli: str, model: str, expected_input: int, tmp: Path) -> None:
     args = capture.read_text().splitlines()
     assert model in args, args
     assert "Réponds à ce test" in "\n".join(args), args
-    log = blocks.attempt_log(workspace, run).read_text()
-    assert cli in log and model in log, log
+    trace = json.loads(blocks.attempt_command(workspace, run).read_text())
+    resolved = executors.resolve(paquet, spec)
+    assert trace == {
+        "kind": "model",
+        "executor": {"cli": cli, "model": model, "effort": effort},
+        "command": executors.command(resolved),
+    }, trace
 
 
 def adapters(tmp: Path) -> None:
-    """2 et 3. Chaque adaptateur transmet et mesure; le bloc journalise."""
+    """2 et 3. Chaque adaptateur transmet, mesure et laisse sa commande exacte."""
     adapter("claude", "claude-test", 11, tmp)
     adapter("codex", "codex-test", 12, tmp)
     adapter("opencode", "opencode-test", 13, tmp)
     print("2. claude, codex et opencode : invocation, prompt et usage ✓")
-    print("3. la commande CLI + modèle effectivement exécutée est journalisée ✓")
+    print("3. la commande CLI + modèle effective est tracée hors du journal ✓")
 
 
 def explicit_command(tmp: Path) -> None:
@@ -164,11 +171,48 @@ def explicit_command(tmp: Path) -> None:
     ctx.workspace = workspace
     ctx.worktree = tmp
     result = blocks.act(ctx)
-    log = blocks.attempt_log(workspace, run).read_text()
+    trace = json.loads(blocks.attempt_command(workspace, run).read_text())
     assert result["outcome"] == "done", result
-    assert "commande-explicite" in log, log
-    assert "agent-codex" not in log and "ne-doit-pas-tourner" not in log, log
+    assert trace == {"kind": "shell", "executor": None,
+                     "command": commande}, trace
+    assert "agent-codex" not in trace["command"]
+    assert "ne-doit-pas-tourner" not in trace["command"]
     print("4. le bloc exécute cmd en priorité sur l'adaptateur structuré ✓")
+
+
+def composed_command(tmp: Path) -> None:
+    """4 bis. Une commande composée trace son exécuteur et le texte interpolé."""
+    workspace = tmp / "composee"
+    workspace.mkdir()
+    commande = (
+        "printf '%s' '{subject_key}|{label}|{strategy}' > filled.txt; "
+        "printf '{\"outcome\":\"done\",\"summary\":\"composed\"}' "
+        "> outcome.json"
+    )
+    spec = node({"cli": "codex", "model": "gpt-5.6-sol", "effort": "high",
+                 "cmd": commande, "cmd_uses_executor": True,
+                 "timeout_s": 10, "silence_s": 10, "passation": False})
+    spec["config"] |= {"label": "minimal Sol", "strategy": "diff minimal"}
+    paquet = bundle({"cli": "codex", "model": "défaut"}, spec)
+    run = {"id": 41, "node": "travail", "cycle": 2, "attempt": 3,
+           "candidate": 1}
+    ctx = blocks.Context(FakeConn(), run, {"id": 41, "subject_id": 1}, spec, paquet)
+    ctx.workspace = workspace
+    ctx.worktree = tmp
+    result = blocks.act(ctx)
+    trace = json.loads(blocks.attempt_command(workspace, run).read_text())
+    filled = commande.replace("{subject_key}", "gh:test/graphatom#194") \
+        .replace("{label}", "minimal Sol").replace("{strategy}", "diff minimal")
+    assert result["outcome"] == "done", result
+    assert workspace.joinpath("filled.txt").read_text() == (
+        "gh:test/graphatom#194|minimal Sol|diff minimal"
+    )
+    assert trace == {
+        "kind": "composed",
+        "executor": {"cli": "codex", "model": "gpt-5.6-sol", "effort": "high"},
+        "command": filled,
+    }, trace
+    print("4 bis. commande composée : exécuteur, effort et interpolation tracés ✓")
 
 
 def validation() -> None:
@@ -187,6 +231,22 @@ def validation() -> None:
             assert attendu in texte, texte
         else:
             raise AssertionError(f"configuration acceptée : {mauvais}")
+    for mauvais, attendu in (
+        ({"cmd": "true", "cmd_uses_executor": "oui"}, "booléen"),
+        ({"cmd_uses_executor": True}, "sans cmd"),
+    ):
+        try:
+            graph.validate(bundle({"cli": "codex", "model": "gpt"}, node(mauvais)))
+        except graph.GraphError as exc:
+            assert attendu in str(exc), str(exc)
+        else:
+            raise AssertionError(f"configuration composée acceptée : {mauvais}")
+    try:
+        graph.validate(bundle({}, node({"cmd": "true", "cmd_uses_executor": True})))
+    except graph.GraphError as exc:
+        assert "sans CLI" in str(exc), str(exc)
+    else:
+        raise AssertionError("commande composée sans CLI acceptée")
     print("5. une CLI inconnue est refusée et nommée ✓")
     print("7. les réglages structurés refusent toute clé sensible ou inconnue ✓")
 
@@ -212,6 +272,7 @@ def main() -> None:
     os.environ.pop("GRAPHATOM_REPO_DIR", None)
     adapters(tmp)
     explicit_command(tmp)
+    composed_command(tmp)
     validation()
     variantes()
     print("\nexécuteurs structurés : OK")

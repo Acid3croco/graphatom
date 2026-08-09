@@ -49,6 +49,11 @@ def declaration() -> None:
     porte("validate", "gpt-5.6-luna", "low")
     porte("release", "gpt-5.6-luna", "low")
     assert "release-node.sh" in cmd("release"), cmd("release")
+    for name in ("implement", "test_backend", "test_frontend", "release"):
+        resolved = executors.resolve(BUNDLE, BUNDLE["nodes"][name])
+        assert resolved.cmd is not None and resolved.cmd_uses_executor is True, (
+            name, resolved
+        )
 
     variants = BUNDLE["nodes"]["implement"]["config"]["fanout"]["variants"]
     assert [v["label"] for v in variants] == [

@@ -154,7 +154,10 @@ def cli_absente(conn, workdir: Path, repo: Path) -> None:
     os.environ["OPENCODE_BIN"] = str(absent)
 
     revision = graph.publish(conn, bundle_gratuit())
-    item_id = kernel.admit(conn, revision, f"gh:test/opencode#{uuid.uuid4().int % 999}")
+    item_id = kernel.admit(
+        conn, revision, f"gh:test/opencode#{uuid.uuid4().int % 999}",
+        _allow_parallel_for_test=True,
+    )
     git(repo, "worktree", "add", "-q", str(repo / ".worktrees" / f"rail-item-{item_id}"),
         "-b", f"rail/issue-{item_id}")
 

@@ -4,8 +4,10 @@ GitHub est l'interface humaine et la cible des effets ; Postgres reste
 l'unique autorité d'exécution. Ce module fait huit choses, et refuse
 tout le reste :
 
-  1. admission  — une issue ouverte portant le label `graphatom` devient
-                  un sujet (une seule admission automatique par issue) ;
+  1. admission  — la plus ancienne issue ouverte portant le label `graphatom`
+                  devient un sujet (une seule admission automatique par issue,
+                  et un seul item non terminal dans le rail) ; les suivantes
+                  restent sur GitHub avec `rail:queued` ;
                   une ligne `Depends-on: #N` dans le corps diffère
                   l'admission tant que l'issue visée est ouverte ; une ligne
                   `Retry-of: #N` copie les pièces du dernier item terminal ;
@@ -74,6 +76,7 @@ LABEL = "graphatom"
 RAIL = "rail:"        # préfixe des labels d'état — l'espace de noms du rail
 RAIL_COLOR = "1f6feb"  # couleur unie : un label d'état se reconnaît d'un coup d'œil
 BLOCKED = f"{RAIL}blocked"  # pas un état d'item : une admission différée se voit
+QUEUED = f"{RAIL}queued"    # la voie unique est tenue par l'item précédent
 STALLED = f"{RAIL}stalled"  # pas un état d'item non plus : le worker ne bat plus
 STALLED_COLOR = "d73a4a"    # le rouge de l'alarme, seule exception à la couleur unie
 DEPENDS = "Depends-on:"     # la grammaire fermée des dépendances, dans le corps
@@ -468,18 +471,22 @@ def _remember_title(conn: Connection, name: str, subject_key: str,
 
 def _admit_labeled(conn: Connection, gh: GitHub, revision: str,
                    said: set[tuple[int, str]],
-                   retries: dict[int, tuple[int, int]] | None = None) -> set[int]:
-    """L'admission automatique, et son seul frein : les dépendances déclarées.
+                   retries: dict[int, tuple[int, int]] | None = None
+                   ) -> tuple[set[int], set[int]]:
+    """Admet au plus une issue ; les dépendances et la voie diffèrent le reste.
 
-    Renvoie les numéros d'issues dont l'admission est différée — le repeint
-    des labels les montre `rail:blocked`. Tant qu'une dépendance est ouverte,
-    aucun item n'est créé ; quand la dernière se ferme, l'admission part au
-    tick suivant par le chemin normal.
+    Renvoie séparément les dépendances (`rail:blocked`) et la file de la voie
+    unique (`rail:queued`). Un item en attente n'existe qu'en issue GitHub :
+    il n'a donc ni deadline, ni bail, ni tentative avant son vrai départ.
     """
     name = graph.load_bundle(conn, revision)["name"]
     blocked: set[int] = set()
+    queued: set[int] = set()
+    free = conn.execute(
+        "SELECT id FROM work_item WHERE terminal_at IS NULL ORDER BY id LIMIT 1"
+    ).fetchone() is None
     states: dict[int, str | None] = {}
-    for issue in gh.labeled_issues():
+    for issue in sorted(gh.labeled_issues(), key=lambda row: row["number"]):
         subject_key = f"gh:{gh.repo}#{issue['number']}"
         _remember_title(conn, name, subject_key, issue["title"])
         known = conn.execute(
@@ -498,6 +505,9 @@ def _admit_labeled(conn: Connection, gh: GitHub, revision: str,
                       "cette issue au tick qui suit la fermeture de la dernière "
                       "dépendance.", said)
             continue
+        if not free:
+            queued.add(issue["number"])
+            continue
         retry = _retry_source(conn, gh, issue, name, states, said)
         try:
             if retry:
@@ -510,9 +520,13 @@ def _admit_labeled(conn: Connection, gh: GitHub, revision: str,
             else:
                 item_id = kernel.admit(conn, revision, subject_key, issue["title"])
             print(f"#{issue['number']} admis → item {item_id}", flush=True)
+            free = False
+        except kernel.LaneOccupied:
+            queued.add(issue["number"])
+            free = False
         except RuntimeError as exc:
             print(f"#{issue['number']} refusé : {exc}", flush=True)
-    return blocked
+    return blocked, queued
 
 
 def _gh_items(conn: Connection, gh: GitHub, where: str = "") -> list[dict]:
@@ -785,7 +799,7 @@ def _collect_answers(conn: Connection, gh: GitHub, allowed: set[str]) -> None:
 
 
 def _paint_states(conn: Connection, gh: GitHub, blocked: set[int],
-                  stalled: bool) -> None:
+                  queued: set[int], stalled: bool) -> None:
     """Les labels du rail : une projection possédée par le rail.
 
     Comme la colonne d'un board — jamais lue comme état d'item, seulement
@@ -797,18 +811,27 @@ def _paint_states(conn: Connection, gh: GitHub, blocked: set[int],
     dont l'admission est différée n'a pas d'item, donc pas d'état — le label
     part tout seul au tick où elle est enfin admise.
 
+    `rail:queued` garde les autres issues hors de la base tant que l'item en
+    cours n'est pas terminal. Il part au tick qui admet l'issue suivante.
+
     `rail:stalled` non plus n'est pas un état : c'est le battement du worker
     qui est trop vieux. Il s'ajoute au label d'état des items actifs, et
     part au retour du battement. Ce sync est un processus séparé du worker :
     il survit à sa mort, et c'est tout l'intérêt — le problème se voit sur
     GitHub précisément quand le worker ne peut plus rien dire.
     """
-    wanted = {
+    active = {
         _issue_number(r["subject_key"]): {f"{RAIL}{r['state']}"}
         | ({STALLED} if stalled else set())
         for r in _gh_items(conn, gh, "AND w.terminal_at IS NULL")
     }
-    wanted.update({number: {BLOCKED} for number in blocked})
+    wanted = {number: {BLOCKED} for number in blocked}
+    wanted.update({number: {QUEUED} for number in queued})
+    # L'item actif gagne sur une vue différée issue d'une course entre deux
+    # processus de sync. Le perdant de l'admission peut avoir vu « occupée »
+    # après que l'autre a admis cette même issue ; il ne doit pas repeindre
+    # l'issue active en `rail:queued` pendant un tick.
+    wanted.update(active)
     for issue in gh.labeled_issues():
         number = issue["number"]
         want = wanted.get(number, set())
@@ -932,12 +955,12 @@ def tick(conn: Connection, gh: GitHub, revision: str, allowed: set[str],
         # décide d'aucun état avec — la base reste l'autorité
         stalled = heartbeat.stalled(heartbeat.last(conn, heartbeat.RAIL))
         retries: dict[int, tuple[int, int]] = {}
-        blocked = _admit_labeled(conn, gh, revision, said, retries)
+        blocked, queued = _admit_labeled(conn, gh, revision, said, retries)
         _acknowledge(conn, gh, retries)
         _publish_criteria(conn, gh)
         _publish_questions(conn, gh)
         _collect_answers(conn, gh, allowed)
-        _paint_states(conn, gh, blocked, stalled)
+        _paint_states(conn, gh, blocked, queued, stalled)
         _paint_trajectories(conn, gh, drawn)
         _report_terminals(conn, gh)
         _clear_terminal_labels(conn, gh)

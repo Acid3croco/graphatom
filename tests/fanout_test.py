@@ -184,7 +184,9 @@ def reserve_tout(conn, item_id: int) -> list[dict]:
 
 def nouvel_item(conn, bundle: dict) -> int:
     rev = graph.publish(conn, bundle)
-    return kernel.admit(conn, rev, f"{bundle['name']}:{uuid.uuid4().hex[:8]}")
+    return kernel.admit(
+        conn, rev, f"{bundle['name']}:{uuid.uuid4().hex[:8]}", _allow_parallel_for_test=True
+    )
 
 
 # -------------------------------------------------------------------- épreuves

@@ -26,6 +26,7 @@ en place — il peut tourner à côté d'un rail vivant.
 Usage : uv run python tests/silence_test.py
 """
 
+import json
 import os
 import shutil
 import sys
@@ -185,7 +186,9 @@ def runs_du_noeud(conn, item_id: int, node: str) -> int:
 
 
 def item_neuf(conn, revision: str, prefixe: str) -> int:
-    return kernel.admit(conn, revision, f"{prefixe}:{uuid.uuid4().hex[:8]}")
+    return kernel.admit(
+        conn, revision, f"{prefixe}:{uuid.uuid4().hex[:8]}", _allow_parallel_for_test=True
+    )
 
 
 def route(conn, item_id: int, outcome: str, attempt: int) -> str:
@@ -260,9 +263,14 @@ def deux_morts(workdir: Path) -> None:
     pendu = blocks.act(contexte(workdir, MUET, node=f"{NOEUD}-pendu"))
     log = blocks.attempt_log(blocks.item_workspace(ITEM_FACTICE),
                              {"node": f"{NOEUD}-pendu", "cycle": 1, "attempt": 1})
+    trace = blocks.attempt_command(
+        blocks.item_workspace(ITEM_FACTICE),
+        {"node": f"{NOEUD}-pendu", "cycle": 1, "attempt": 1},
+    )
     assert log.stat().st_size == 0, "le pendu a écrit quelque chose ?"
+    assert json.loads(trace.read_text())["command"] == MUET
     post_mortem(pendu, "stalled")
-    print(f"3. journal à 0 octet, aucun fichier touché → {pendu['outcome']} ✓")
+    print(f"3. commande tracée, journal à 0 octet → {pendu['outcome']} ✓")
 
     # un mot écrit puis le silence : le chien de garde coupe aussi, mais
     # l'agent avait démarré — c'est un débordement, pas une pendaison
@@ -284,7 +292,7 @@ def deux_morts(workdir: Path) -> None:
 def relances_et_escalade(conn, revision: str) -> tuple[int, int]:
     """3 bis et 4 bis. `stalled` relance sur place, `timed_out` escalade."""
     # cet item-là est le sujet d'une issue : sa question sera lue au point 6
-    pendu = kernel.admit(conn, revision, f"gh:{REPO}#112")
+    pendu = kernel.admit(conn, revision, f"gh:{REPO}#112", _allow_parallel_for_test=True)
     for attempt in range(1, MAX_ATTEMPTS + 1):
         run = kernel.claim(conn, pendu)
         assert run["attempt"] == attempt, run
@@ -305,7 +313,7 @@ def relances_et_escalade(conn, revision: str) -> tuple[int, int]:
         cible = NOEUD if attempt < MAX_ATTEMPTS else "escalate"
         assert route(conn, autre, "stalled", attempt) == cible, attempt
 
-    deborde = kernel.admit(conn, revision, f"gh:{REPO}#113")
+    deborde = kernel.admit(conn, revision, f"gh:{REPO}#113", _allow_parallel_for_test=True)
     run = kernel.claim(conn, deborde)
     assert run["attempt"] == 1, run
     kernel.apply(conn, run["id"], {
@@ -352,6 +360,9 @@ def prompt_de_reprise(workdir: Path, worktree: Path) -> None:
     vierge = contexte(workdir, "true", node=NOEUD, attempt=1, cycle=2,
                       item_id=ITEM_PROPRE,
                       precedente={"cycle": 1, "attempt": 1, "outcome": "timed_out"})
+    blocks.attempt_command(vierge.workspace.resolve(), {
+        "node": NOEUD, "cycle": 1, "attempt": 1,
+    }).write_text('{"kind":"shell","executor":null,"command":"true"}\n')
     rien = blocks._prompt(vierge, vierge.workspace.resolve(), f"gh:{REPO}#112")
     assert "Reprise" not in rien, rien
     print("5 bis. worktree propre et workspace vide : aucun bloc de reprise — "

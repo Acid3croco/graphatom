@@ -56,6 +56,7 @@ class Executor:
     cli: str | None
     model: str | None
     cmd: str | None
+    cmd_uses_executor: bool = False
     effort: str | None = None
     timeout_s: int | float | None = None
 
@@ -68,6 +69,7 @@ def resolve(bundle: dict, node: dict) -> Executor:
         cli=local.get("cli", defaults.get("cli")),
         model=local.get("model", defaults.get("model")),
         cmd=local.get("cmd"),
+        cmd_uses_executor=local.get("cmd_uses_executor", False),
         effort=local.get("effort", defaults.get("effort")),
         timeout_s=local.get("timeout_s", defaults.get("timeout_s")),
     )

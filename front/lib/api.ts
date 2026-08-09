@@ -192,6 +192,7 @@ export type BundleAgent = {
   model?: string;
   effort?: string | null;
   cmd?: string;
+  cmd_uses_executor?: boolean;
   cmd_reason?: string;
   prompt?: string;
   timeout_s?: number;

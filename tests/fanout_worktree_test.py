@@ -161,7 +161,9 @@ def ancetre(repo: Path, sha: str, branche: str) -> bool:
 def item_sur(conn, repo: Path, spec: dict) -> tuple[int, str, Path]:
     """Un item sur ce bundle, son atelier, sa branche — ce que le shell prépare."""
     rev = graph.publish(conn, spec)
-    item_id = kernel.admit(conn, rev, f"fanout-worktree:{uuid.uuid4().hex[:8]}")
+    item_id = kernel.admit(
+        conn, rev, f"fanout-worktree:{uuid.uuid4().hex[:8]}", _allow_parallel_for_test=True
+    )
     branche = f"rail/issue-{item_id}"
     atelier = repo / ".worktrees" / f"rail-item-{item_id}"
     git(repo, "worktree", "add", "-q", str(atelier), "-b", branche)

@@ -153,7 +153,9 @@ def depot(tmp: Path) -> Path:
 def nouvel_item(conn, repo: Path) -> int:
     """Un item, son atelier, sa branche — ce que le shell du graph préparerait."""
     rev = graph.publish(conn, bundle_portes())
-    item_id = kernel.admit(conn, rev, f"portes:{uuid.uuid4().hex[:8]}")
+    item_id = kernel.admit(
+        conn, rev, f"portes:{uuid.uuid4().hex[:8]}", _allow_parallel_for_test=True
+    )
     git(repo, "worktree", "add", "-q", str(repo / ".worktrees" / f"rail-item-{item_id}"),
         "-b", f"rail/issue-{item_id}")
     return item_id

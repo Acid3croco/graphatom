@@ -24,6 +24,7 @@ suite locale ne doit jamais attendre un fournisseur externe par accident.
 Usage : GRAPHATOM_LIVE_OPENCODE=1 uv run python tests/opencode_test.py
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -110,7 +111,10 @@ def noeud_reel(conn, workdir: Path, binaire: str) -> None:
     """2. un nœud réel tourne sous le modèle gratuit, et son issue est en base."""
     revision = graph.publish(conn, bundle(f"opencode-{uuid.uuid4().hex[:8]}",
                                           commande(binaire)))
-    item_id = kernel.admit(conn, revision, f"gh:test/opencode#{uuid.uuid4().int % 999}")
+    item_id = kernel.admit(
+        conn, revision, f"gh:test/opencode#{uuid.uuid4().int % 999}",
+        _allow_parallel_for_test=True,
+    )
     run = kernel.claim(conn, item_id)
     assert run["node"] == NOEUD, run
 
@@ -131,12 +135,11 @@ def noeud_reel(conn, workdir: Path, binaire: str) -> None:
     if "usage" in ligne["result"]:
         print(f"   usage fusionné dans le run : {ligne['result']['usage']}")
 
-    journal = blocks.attempt_log(blocks.item_workspace(item_id), run)
-    trace = journal.read_text()
-    assert MODELE in trace, trace[:400]
-    assert "agent-opencode:" in trace, trace[:400]
-    print(f"   trace de la commande dans {journal.name} : "
-          f"{trace.splitlines()[0]} ✓")
+    command_path = blocks.attempt_command(blocks.item_workspace(item_id), run)
+    trace = json.loads(command_path.read_text())
+    assert trace["cli"] == "opencode" and trace["model"] == MODELE, trace
+    assert MODELE in trace["command"], trace["command"]
+    print(f"   commande effective dans {command_path.name} : {MODELE} ✓")
 
 
 def main() -> None:

@@ -52,7 +52,9 @@ def bundle(solo: bool) -> dict:
 
 def seme(conn, solo: bool) -> int:
     revision = graph.publish(conn, bundle(solo))
-    return kernel.admit(conn, revision, f"solo:{uuid.uuid4().hex[:8]}")
+    return kernel.admit(
+        conn, revision, f"solo:{uuid.uuid4().hex[:8]}", _allow_parallel_for_test=True
+    )
 
 
 def runs(conn, item_id: int) -> list[dict]:
@@ -75,11 +77,12 @@ def main() -> None:
     blocks.DATA_DIR = workdir
     os.environ["GRAPHATOM_REPO_DIR"] = str(workdir / "sans-depot")
     garde = (db.DSN, scheduler.MAX_RUNS, scheduler.MAX_RUNS_PER_ITEM,
-             scheduler._execute)
+             scheduler.MAX_ACTIVE_ITEMS, scheduler._execute)
     dsn = db.agent_dsn(ITEM_ID)
     assert dsn, "aucune instance jetable : impossible de tester le dispatch"
     db.DSN = dsn
     scheduler.MAX_RUNS = scheduler.MAX_RUNS_PER_ITEM = 8
+    scheduler.MAX_ACTIVE_ITEMS = 8
     scheduler._execute = lambda run_id, item_id: None
     try:
         db.init_db()
@@ -116,7 +119,7 @@ def main() -> None:
     finally:
         db.drop_agent_db()
         (db.DSN, scheduler.MAX_RUNS, scheduler.MAX_RUNS_PER_ITEM,
-         scheduler._execute) = garde
+         scheduler.MAX_ACTIVE_ITEMS, scheduler._execute) = garde
         shutil.rmtree(workdir, ignore_errors=True)
 
     print("\nsolo : OK — le nœud court seul, et l'attente ne coûte rien")

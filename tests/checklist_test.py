@@ -4,7 +4,8 @@ Scénario, sans base ni réseau — le graph est une donnée, GitHub une doublur
 
   1. le graph route les tests vers `validate`, et `validate` vers la review
      ou le retour en `implement` ; le cycle qu'il referme est borné par
-     `escalade`, donc par le budget d'escalades de l'item
+     `escalade`, donc par le budget d'escalades de l'item ; aucun chemin vers
+     le terminal de succès ne contourne la review
   2. sans `validate.md`, la question publiée est celle d'avant, mot pour mot
   3. avec `validate.md`, la question l'embarque cité, et donne le lien de
      la preview du fichier entier
@@ -157,10 +158,23 @@ def main() -> None:
     assert nodes["test_frontend"]["edges"]["pass"] == "validate"
     assert nodes["validate"]["block"] == "JUDGE", nodes["validate"]["block"]
     assert nodes["validate"]["edges"] == {"pass": "review", "fail": "implement"}
+    assert nodes["review"]["edges"]["merger"] == "release"
+    # Si la review est une coupure, le terminal de succès doit être
+    # inatteignable. Cette propriété couvre aussi les futures arêtes ajoutées
+    # ailleurs dans le graph.
+    seen: set[str] = set()
+    pending = [bundle["entry"]]
+    while pending:
+        node = pending.pop()
+        if node in seen or node == "review":
+            continue
+        seen.add(node)
+        pending.extend(nodes[node].get("edges", {}).values())
+    assert "close" not in seen, "un chemin de succès contourne la review"
     # l'arête `fail` referme un cycle : sans `escalade`, rien ne le bornerait
     assert nodes["validate"].get("escalade") is True
     assert bundle["budgets"]["escalations"] >= 5, bundle["budgets"]
-    print("1. test_frontend → validate → review / implement, cycle borné ✓")
+    print("1. review obligatoire avant release et close ; cycle borné ✓")
 
     with tempfile.TemporaryDirectory() as tmp:
         blocks.DATA_DIR = Path(tmp)

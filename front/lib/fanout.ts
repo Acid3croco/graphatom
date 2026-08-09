@@ -47,6 +47,7 @@ export type Candidate = {
   variant: Variant;
   model: string | null;
   cli: string | null;
+  effort: string | null;
   duration_s: number | null;
   winner: boolean;
   /** Pourquoi il a perdu — `null` s'il a gagné, ou s'il court encore. */
@@ -160,12 +161,14 @@ export function steps(
         const end = candidate.finished_at;
         // l'API porte l'agent effectif : le client n'analyse aucune commande
         const exec = execution(agent);
+        const modelExecution = exec.kind === "model" || exec.kind === "composed";
         return {
           run: candidate,
           index: candidate.candidate!,
           variant: declared[candidate.candidate!]?.variant ?? {},
-          model: exec.kind === "model" ? exec.model : null,
-          cli: exec.kind === "model" ? exec.cli : null,
+          model: modelExecution ? exec.model : null,
+          cli: modelExecution ? exec.cli : null,
+          effort: modelExecution ? exec.effort : null,
           duration_s:
             start === null || end === null
               ? candidate.duration_s

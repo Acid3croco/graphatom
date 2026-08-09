@@ -178,7 +178,9 @@ def runs_de(conn, item_id: int, node: str | None = None) -> list[dict]:
 def nouvel_item(conn, repo: Path, spec: dict) -> tuple[int, str]:
     """Un item, son atelier, sa branche — ce que le shell du graph préparerait."""
     rev = graph.publish(conn, spec)
-    item_id = kernel.admit(conn, rev, f"judge:{uuid.uuid4().hex[:8]}")
+    item_id = kernel.admit(
+        conn, rev, f"judge:{uuid.uuid4().hex[:8]}", _allow_parallel_for_test=True
+    )
     branche = f"rail/issue-{item_id}"
     git(repo, "worktree", "add", "-q",
         str(repo / ".worktrees" / f"rail-item-{item_id}"), "-b", branche)
