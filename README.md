@@ -1341,6 +1341,17 @@ journée. Tant qu'un item n'avait qu'un run par nœud, le nombre d'items
 bornait la charge tout seul ; le fan-out a supprimé cette borne implicite
 sans la remplacer.
 
+**Diagnostic de mémoire partagée, avec réserve.** Le conteneur arrêté avait
+un `/dev/shm` de 64 Mo. Postgres indiquait
+`dynamic_shared_memory_type = posix` et
+`max_parallel_workers_per_gather = 2`. Les requêtes parallèles utilisent donc
+la mémoire partagée dynamique POSIX dans ce `/dev/shm` réduit. Sous la forte
+concurrence du fan-out, ce mécanisme est cohérent avec les trois arrêts
+observés en code 2. Il reste un diagnostic probable, pas une cause reproduite :
+aucun test à la demande n'a provoqué le même arrêt. Le service `db` réserve
+donc 1 Go de mémoire partagée dans `docker-compose.yml`, indépendamment des
+limites de dispatch ajoutées pour réduire la charge.
+
 Deux plafonds la remplacent, dans l'ordonnanceur. Tous deux dérivés du nombre
 de cœurs de la machine — aucun chiffre magique —, tous deux surchargeables,
 et tous deux plafonnés par en bas à `FANOUT_MAX_CANDIDATES` (8), la largeur
