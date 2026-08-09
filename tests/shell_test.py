@@ -1144,6 +1144,74 @@ def main() -> None:
                 "status": "active", "worker_sha": newest,
             }, latest
 
+            # Le chemin complet `_execute` doit lire outcome.json, appliquer
+            # et router, puis seulement appeler le vrai réconciliateur.
+            (cible / "troisieme.txt").write_text("release du chemin réel\n")
+            git(cible, "add", "troisieme.txt")
+            git(cible, "commit", "-qm", "troisième release")
+            target = git(cible, "rev-parse", "HEAD")
+            for service in scheduler.DEPLOYED_SERVICES:
+                (deploiement / f"sha-{service}.txt").write_text(target)
+            real_bundle = {
+                "name": f"activation-reelle-{os.getpid()}",
+                "entry": "deploy",
+                "budgets": {"escalations": 1, "wall_deadline_hours": 1},
+                "on_kernel": {"escalate_to": "abandon",
+                              "exhausted_to": "abandon"},
+                "nodes": {
+                    "deploy": {
+                        "block": "ACT",
+                        "config": {"lease_s": 30, "agent": {
+                            "cmd": "printf '%s\\n' '" + json.dumps({
+                                "outcome": "done", "summary": "chemin réel",
+                                "deploy_sha": target,
+                            }) + "' > outcome.json",
+                            "prompt": "Doublure déterministe du déploiement.",
+                            "timeout_s": 10, "silence_s": 10,
+                            "passation": False,
+                        }},
+                        "edges": {"done": "fini"},
+                    },
+                    "fini": {"terminal": True},
+                    "abandon": {"terminal": True},
+                },
+            }
+            real_revision = graph.publish(conn, real_bundle)
+            real_item = kernel.admit(
+                conn, real_revision, f"activation-reelle:{os.getpid()}",
+                _allow_parallel_for_test=True,
+            )
+            real_run = kernel.claim(conn, real_item)
+            assert real_run is not None
+            observations = []
+            real_activation = scheduler._activation_worker
+
+            def observe_after_apply(observed_conn):
+                stored = observed_conn.execute(
+                    "SELECT status, result FROM node_run WHERE id = %s",
+                    (real_run["id"],),
+                ).fetchone()
+                event = observed_conn.execute(
+                    "SELECT kind FROM event WHERE run_id = %s",
+                    (real_run["id"],),
+                ).fetchone()
+                observations.append((stored, event))
+                return real_activation(observed_conn)
+
+            scheduler._activation_worker = observe_after_apply
+            before = len(journal.read_text().splitlines())
+            try:
+                scheduler._execute(real_run["id"], real_item)
+            finally:
+                scheduler._activation_worker = real_activation
+            assert len(observations) == 1, observations
+            assert observations[0][0]["status"] == "applied", observations
+            assert observations[0][0]["result"]["deploy_sha"] == target
+            assert observations[0][1] == {"kind": "result"}, observations
+            assert len(journal.read_text().splitlines()) == before + 1
+            scheduler.WORKER_SHA = target
+            assert scheduler._activation_worker(conn) == 0
+
             brut.write_text(json.dumps({
                 "outcome": "done", "summary": "SHA tronqué",
                 "deploy_sha": wanted[:12],
