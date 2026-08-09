@@ -539,18 +539,18 @@ is already in use` nomme le coupable : le shell le retire et rejoue le
 
 ## De vrais agents dans les blocs (milestone 3b)
 
-Un graph peut déclarer la CLI et le modèle par défaut. Un nœud ACT / CHECK /
+Un graph peut déclarer la CLI, le modèle et l'effort par défaut. Un nœud ACT / CHECK /
 JUDGE qui porte `config.agent` hérite de chaque valeur séparément :
 
 ```json
-"agent": {"cli": "codex", "model": "gpt-5.6-luna"},
+"agent": {"cli": "codex", "model": "gpt-5.6-luna", "effort": "low"},
 "nodes": {
   "test": {
     "block": "CHECK",
     "config": {
       "agent": {
         "model": "gpt-5.6-sol",
-        "timeout_s": 540,
+        "effort": "high",
         "prompt": "Agent de test frontend… chromium --headless=new…"
       }
     }
@@ -558,28 +558,31 @@ JUDGE qui porte `config.agent` hérite de chaque valeur séparément :
 }
 ```
 
-Ici, `test` garde la CLI `codex` du graph et surcharge seulement son modèle.
+Ici, `test` garde la CLI `codex` du graph et surcharge son modèle et son effort.
 Une variante de fan-out peut poser le même fragment `agent` : les autres
 variantes gardent leurs valeurs héritées. Les trois CLI reconnues sont
 `claude`, `codex` et `opencode`. Leurs adaptateurs construisent l'invocation,
 passent `prompt.md` et produisent `usage.json` quand la CLI rapporte un usage.
+Leur délai descend du bail du nœud, avec la même marge que le couperet du
+noyau : le graph ne porte pas une seconde valeur à synchroniser.
 
 Une commande shell reste possible pour un cas spécial :
 
 ```json
 "agent": {
   "cmd": "bash scripts/operation-deterministe.sh",
-  "timeout_s": 540,
+  "cmd_reason": "Cette porte déterministe ne lance aucun modèle.",
   "prompt": "Contrat de cette opération…"
 }
 ```
 
-`cmd` a toujours priorité sur `cli` et `model`. Cette règle conserve les
-opérations shell existantes et ne dépend pas d'un choix implicite. Une CLI
-inconnue, ou une clé autre que `cli` et `model` dans les valeurs par défaut,
-est refusée à la publication. Aucun secret ni identifiant d'accès ne fait
-partie de ce schéma. Pas d'`outcome.json` valide → `crashed`, retenté puis
-escaladé — comme n'importe quel bloc.
+`cmd` a toujours priorité sur l'exécuteur structuré. Chaque occurrence
+restante porte `cmd_reason` : elle nomme la composition shell ou la porte
+déterministe qu'un adaptateur d'agent ne peut pas remplacer. Une CLI inconnue,
+ou une clé autre que `cli`, `model`, `effort` et `timeout_s` dans les valeurs
+par défaut, est refusée à la publication. Aucun secret ni identifiant d'accès
+ne fait partie de ce schéma. Pas d'`outcome.json` valide → `crashed`, retenté
+puis escaladé — comme n'importe quel bloc.
 
 ### Le contrat d'un bloc agent, noir sur blanc
 
