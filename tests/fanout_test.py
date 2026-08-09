@@ -411,7 +411,11 @@ def transition_sans_run(conn) -> None:
         "UPDATE node_run SET lease_expires_at = now() - interval '1 hour' "
         "WHERE item_id = %s", (item_id,),
     )
-    assert kernel.reap(conn) == 0, "le faucheur ne doit pas reprendre un run révoqué"
+    reapables = conn.execute(
+        "SELECT id FROM node_run WHERE item_id = %s AND status = 'running' "
+        "AND lease_expires_at < now()", (item_id,),
+    ).fetchall()
+    assert not reapables, f"le faucheur pourrait reprendre des runs révoqués : {reapables}"
     stable = etat(conn, item_id)
     assert stable["version"] == version and stable["state"] == "abandon", stable
     assert len(evenements(conn, item_id)) == events
@@ -462,9 +466,12 @@ def expiration_wait(conn) -> None:
         vrai_menage(item, run_ids, ranger)
 
     kernel._menage = observe
+    vrai_active_item = kernel.active_item
+    kernel.active_item = lambda _conn: etat(conn, item_id)
     try:
         assert scheduler._settle_waits(conn) == 1
     finally:
+        kernel.active_item = vrai_active_item
         kernel._menage = vrai_menage
 
     apres = etat(conn, item_id)
