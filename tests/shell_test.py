@@ -641,25 +641,27 @@ def main() -> None:
           "et front sur une absorption saine, code 11 sur chaque rupture ✓")
 
     # 10. la frontière du bundle, relue à chaque tour : les nœuds mécaniques
-    #    n'appellent aucun modèle, tous les nœuds à modèle passent par codex
-    #    sans épingler de modèle, et seul le fan-out garde quatre candidats
-    #    opencode — une limite claude ne doit plus arrêter le rail
+    #    n'appellent aucun modèle, les jugements chers restent sur Sol high,
+    #    les portes simples passent sur Luna, et la course tient en trois runs
     for nom in ("worktree", "deploy", "verify_deploy",
                 "cleanup", "cleanup_unresolved", "cleanup_split"):
         cmd = BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
         assert "agent-codex.sh" not in cmd and "agent-opencode.sh" not in cmd, \
             f"{nom} lance encore un modèle"
     model_nodes = ("scope", "implement", "test_backend", "test_frontend",
-                   "validate", "release", "judge")
+                   "validate", "judge")
     for nom in model_nodes:
         cmd = BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
         assert "agent-codex.sh" in cmd, f"{nom} n'est pas sur codex"
-        assert "CODEX_MODEL" not in cmd, f"{nom} épingle encore un modèle codex"
+        assert "CODEX_MODEL" in cmd and "CODEX_REASONING_EFFORT" in cmd, \
+            f"{nom} n'épingle pas modèle et effort"
+    assert "release-node.sh" in BUNDLE["nodes"]["release"]["config"]["agent"]["cmd"], \
+        "release ne prend pas sa voie shell avant Luna"
     assert "claude " not in json.dumps(BUNDLE), "le bundle dépend encore de claude"
     variants = BUNDLE["nodes"]["implement"]["config"]["fanout"]["variants"]
     opencode = [v for v in variants if "agent-opencode.sh" in v["agent"]["cmd"]]
     codex = [v for v in variants if "agent-codex.sh" in v["agent"]["cmd"]]
-    assert len(opencode) == 4 and len(codex) == 1, \
+    assert len(opencode) == 1 and len(codex) == 2, \
         f"course inattendue : {len(opencode)} opencode, {len(codex)} codex"
     # les trois retraits sont le même shell : seul leur prompt les distingue,
     # et une correction sur l'un doit se voir sur les trois
@@ -673,8 +675,8 @@ def main() -> None:
     shells["scripts/release.sh"] = (ROOT / "scripts" / "release.sh").read_text()
     for nom, shell in shells.items():
         assert "/.git" not in shell, f"{nom} teste .git comme un chemin"
-    print("10. six nœuds sans modèle, sept nœuds codex par défaut, "
-          "fan-out quatre opencode + un codex, aucun test sur .git ✓")
+    print("10. six nœuds sans modèle, Sol/Luna et effort explicites, "
+          "fan-out deux codex + un opencode, aucun test sur .git ✓")
 
     # 11. les portes de verify_deploy attendent. `docker compose up` rend la
     #    main avant que les services écoutent : un front reconstruit ouvre

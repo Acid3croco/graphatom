@@ -501,9 +501,12 @@ def _wait(proc: subprocess.Popen, watched: tuple, mark: tuple,
     Rend la main quand le process meurt de sa belle mort ; lève
     `TimeoutExpired` quand un couperet tombe, comme `proc.wait` le ferait.
     """
+    from .quota import WAIT_FILE
+
     start = time.monotonic()
     deadline, probe_s = start + budget_s, min(PROBE_S, silence_s / 4)
     quiet_since, next_probe = start, start + probe_s
+    last = start
     while True:
         try:
             proc.wait(timeout=POLL_S)
@@ -511,6 +514,13 @@ def _wait(proc: subprocess.Popen, watched: tuple, mark: tuple,
         except subprocess.TimeoutExpired:
             pass
         now = time.monotonic()
+        # Une commande lourde qui attend le quota n'a pas encore commencé.
+        # Son marqueur est renouvelé par le preneur en même temps que le bail.
+        # Cette durée ne mange donc ni le couperet total ni celui du silence.
+        if (watched[1] / WAIT_FILE).exists():
+            deadline += now - last
+            quiet_since = now
+        last = now
         if now >= next_probe:
             next_probe = now + probe_s
             fresh = _mark(*watched)
@@ -547,7 +557,13 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
     (workspace / PROMPT_NAME).write_text(_prompt(ctx, workspace, subject))
 
     env = os.environ | {"GRAPHATOM_WORKSPACE": str(workspace),
-                        "GRAPHATOM_SUBJECT_KEY": subject}
+                        "GRAPHATOM_SUBJECT_KEY": subject,
+                        "GRAPHATOM_ITEM_ID": str(ctx.item["id"]),
+                        "GRAPHATOM_RUN_ID": str(ctx.run["id"]),
+                        "GRAPHATOM_LEASE_S": str(ctx.config.get("lease_s", 30)),
+                        # Copiée avant que la base jetable de l'item remplace
+                        # GRAPHATOM_DSN : toutes les places vivent ici.
+                        "GRAPHATOM_QUOTA_DSN": db.DSN}
     if ctx.worktree is not None:
         # le bloc ne devine pas son checkout : celui d'un candidat n'est pas
         # celui de son item, et aucune convention de nom ne l'en déduit

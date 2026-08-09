@@ -139,6 +139,9 @@ uv run python tests/plafond_test.py                  # les deux plafonds du disp
                                                      # la charge est bornée, et ce
                                                      # que le plafond retient attend
                                                      # sans bail ni tentative
+uv run python tests/quota_test.py                    # le quota des opérations lourdes :
+                                                     # N places globales, bail préservé,
+                                                     # session morte et équité par item
 ```
 
 Les tests ne touchent jamais au `data/` du repo : chacun travaille dans un
@@ -210,7 +213,7 @@ Sept lectures, pour un client qui rend les pages lui-même : `/api/items`
 `criteria`, `files`), `/api/questions` (les questions ouvertes),
 `/api/heartbeat` (les deux battements bruts, `rail` et `github-sync`, chacun
 avec son horodatage, son âge et son état périmé), `/api/load` (la charge de
-l'ordonnanceur : les runs en vol, et les deux plafonds qui les bornent — voir
+l'ordonnanceur : runs et constructions en vol, avec leurs plafonds — voir
 [la file du dispatch](#la-charge-a-un-plafond--le-dispatch-est-une-file)),
 `/api/graphs` (les
 révisions publiées : nom, date, nombre d'items qui la portent) et
@@ -643,7 +646,12 @@ Le modèle se donne en argument, ou par `OPENCODE_MODEL` ; à défaut c'est
 ne demandent **aucun identifiant** — rien à configurer, rien à mettre dans
 le dépôt. `OPENCODE_TIMEOUT_S` borne l'attente (300 s par défaut),
 `OPENCODE_BIN` désigne le binaire quand le PATH ne suffit pas, et
-`OPENCODE_DIR` le répertoire de travail du modèle.
+`OPENCODE_DIR` le répertoire de travail du modèle. Chaque run reçoit aussi
+sa propre base SQLite par `OPENCODE_DB`, sous
+`$GRAPHATOM_WORKSPACE/.opencode/` : deux candidats parallèles ne peuvent
+plus se bloquer avec `database is locked`. La configuration, les
+identifiants et le cache OpenCode restent ceux de la session de l'hôte.
+`OPENCODE_STATE_DIR` permet de déplacer cette seule base si nécessaire.
 
 Le script est déterministe, et ne juge jamais : si le modèle a écrit
 `outcome.json`, il n'y touche pas ; si le modèle a dicté son issue dans
@@ -662,6 +670,7 @@ sortie et son message sur `stderr` :
 | 4 | borne d'attente dépassée — le modèle fautif est nommé |
 | 5 | opencode a échoué, et aucune issue n'a été rendue |
 | 6 | opencode a fini sans rendre la moindre issue |
+| 7 | le répertoire de la base locale n'a pas pu être créé |
 
 Le code 4 n'est pas théorique : `opencode/north-mini-code-free` ne rend
 rien du tout. Un candidat muet ne doit jamais retenir quoi que ce soit —
@@ -806,15 +815,13 @@ aller-retour par l'humain à chaque fois. `release` n'en est pas gênée : elle
 commite ce qui reste quand il reste quelque chose, et le corps de la PR porte
 `Closes #<num>` de toute façon.
 
-**`implement` est une course.** Le nœud déclare un `fanout` de quatre
-variantes — *minimal* (le plus petit diff qui tienne), *réécriture* (le
-composant repris en entier), *test d'abord* (le test rouge, puis le code qui
-le passe), *gratuit* (le chemin court, sur un modèle qui ne coûte rien) —
-réduit par `first_pass`. Quatre candidats implémentent la même issue en même
-temps, chacun dans son atelier et avec son angle imposé ; le premier qui rend
-`done` gagne, les autres sont révoqués en vol et leurs ateliers détruits. On
-paie quatre fois le prix d'une étape pour rendre le meilleur des quatre
-essais au lieu du seul essai d'un seul agent.
+**`implement` est une course.** Le nœud déclare un `fanout` de trois
+variantes — *minimal* sur Luna medium, *test d'abord* sur Sol high, et
+*gratuit* sur DeepSeek V4 Flash — réduit par `keep_n: 2`. Trois candidats
+implémentent la même issue en même temps, chacun dans son atelier et avec son
+angle imposé. Les deux premiers qui rendent `done` après leurs portes vont au
+juge ; le troisième est révoqué en vol. Trois runs laissent assez de place,
+sous le plafond de huit, pour deux courses et deux portes concurrentes.
 
 **Un candidat qui ne coûte rien.** La variante *gratuit* ne change que sa
 commande : elle passe par [`scripts/agent-opencode.sh`](scripts/agent-opencode.sh)
@@ -824,6 +831,10 @@ harnais fait le travail de fiabilité, un modèle gratuit suffit parfois, et
 c'est la course qui le dit. Son `OPENCODE_DIR` est l'atelier du candidat —
 rien à configurer, aucun identifiant, le modèle visé est sans
 authentification.
+
+Son budget total reste de 1 500 s, mais son budget de silence est de 300 s.
+Un appel qui montre du progrès continue ; un fournisseur qui ne rend aucun
+octet pendant cinq minutes libère sa place au lieu de retenir la file.
 
 Un candidat qui perdrait en silence fausserait justement cette mesure.
 L'adaptateur sort donc en **code 3** quand `opencode` est introuvable, en
@@ -1029,16 +1040,19 @@ dupliquée. Le worktree que la mère avait préparé n'a jamais servi, mais il
 existe : la sortie `split` passe par `cleanup_split` — le même shell que les
 deux autres retraits — avant son terminal.
 
-**Un fournisseur explicite par atome.** Le `cmd` d'un nœud est une ligne de
-shell. Tous les nœuds qui demandent un modèle passent par l'adaptateur
-`agent-codex.sh`, sans `CODEX_MODEL` : la configuration locale de codex
-choisit donc le modèle par défaut. Les nœuds mécaniques restent du shell pur.
-Le seul mélange de fournisseurs est la course d'implémentation :
+**Un modèle et un effort explicites par atome.** Le `cmd` d'un nœud est une
+ligne de shell. Les nœuds Codex passent par `agent-codex.sh` avec
+`CODEX_MODEL` et `CODEX_REASONING_EFFORT` : le routage du graph ne dépend pas
+de la configuration locale. Les nœuds mécaniques restent du shell pur. Le
+seul mélange de fournisseurs est la course d'implémentation :
 
 | nœuds | fournisseur | pourquoi |
 | --- | --- | --- |
-| `scope`, `test_backend`, `test_frontend`, `validate`, `judge`, `release` | codex, modèle par défaut de la session | une limite d'un autre fournisseur ne bloque aucune porte |
-| `implement` | quatre candidats opencode gratuits et un candidat codex par défaut | la diversité reste dans le fan-out, où la sélection la rend utile |
+| `scope`, `judge` | Codex `gpt-5.6-sol`, effort high | les deux jugements qui découpent ou choisissent gardent le modèle fort |
+| `test_backend`, `validate` | Codex `gpt-5.6-luna`, effort low | constat borné, preuves déjà nommées |
+| `test_frontend` | Codex `gpt-5.6-luna`, effort medium | le navigateur demande plus de lecture, pas un Sol |
+| `release` | `release.sh` d'abord ; Luna low seulement sur panne | le nominal ne consomme aucun tour de modèle |
+| `implement` | Luna medium, Sol high, DeepSeek V4 Flash gratuit | deux abonnements Codex et un fournisseur gratuit, trois stratégies |
 | `worktree`, `deploy`, `verify_deploy`, `cleanup`, `cleanup_unresolved`, `cleanup_split` | pas d'agent | du shell pur, qui écrit son `outcome.json` |
 
 **Les nœuds mécaniques n'ont pas d'agent.** `worktree`, `deploy` et
@@ -1059,8 +1073,9 @@ un dépôt jetable, sans modèle ni docker. Un `cmd` sans modèle ne laisse pas
 d'`usage.json` : ces nœuds ne coûtent aucun token, et la page de l'item le
 montre — c'est exactement le gain que l'on cherchait.
 
-**`release` est le seul hybride : un agent script-first.** Tout le nominal
-vit dans [`scripts/release.sh`](scripts/release.sh) — rapprochement
+**`release` est le seul hybride : shell-first, agent sur panne.**
+[`scripts/release-node.sh`](scripts/release-node.sh) lance d'abord tout le
+nominal, qui vit dans [`scripts/release.sh`](scripts/release.sh) — rapprochement
 d'`origin/main`, commit (titre de l'issue, puis `Closes #<num>`), push, PR
 ouverte ou retrouvée, merge surveillé jusqu'au SHA, un code de retour par
 pas. Le rapprochement est le pas le plus récent, et il dit la règle du
@@ -1115,10 +1130,10 @@ entrée : demander à un humain de relancer, c'est un tour par définition.
 Le budget de `code-task` reste à **cinq**, tous disponibles pour de vraies
 reprises.
 
-Le trade-off du modèle le moins cher reste assumé, mais il ne porte plus
+Le trade-off du modèle le plus rapide reste assumé, mais il ne porte plus
 que sur la panne de release. Si elle se met à rater, la marche arrière est
-*une ligne de JSON* : remonter d'un cran (`haiku` → `sonnet`, `low` →
-`medium`) dans [`examples/code-task.json`](examples/code-task.json). Les
+*une ligne de JSON* : remonter Luna de `low` à `medium` dans
+[`examples/code-task.json`](examples/code-task.json). Les
 compteurs de tentatives et le journal disent ce qui a lâché ; c'est la
 donnée qui tranche, pas l'intuition.
 
@@ -1126,8 +1141,11 @@ donnée qui tranche, pas l'intuition.
 cycle est le test frontend (~8 min de navigateur) et il tournait même pour
 une issue qui ne touche que du JSON de graph. Les deux `cmd` de test
 commencent donc par quelques lignes de shell — pas du jugement d'agent —
-qui lisent le diff de l'item (`git diff --name-only origin/main` plus les
-fichiers neufs non encore suivis) et décident :
+qui lisent seulement le travail de la branche depuis son point commun avec
+main (`git diff --name-only origin/main...HEAD`), puis les modifications
+suivies et les fichiers neufs non encore suivis. Un commit arrivé sur main
+après la création de l'item n'est donc jamais pris pour un changement de
+l'item. Les portes décident ensuite :
 
 - le diff ne touche aucun fichier front (`src/graphatom/web.py` et `front/`,
   liste en tête du `cmd`) → `outcome` `pass`, « diff sans src/graphatom/web.py
@@ -1193,8 +1211,8 @@ Le rail a été conçu pour un agent cher et compétent par nœud. La direction
 change : on veut pouvoir lancer **des myriades de modèles bon marché,
 potentiellement stupides**, sur la même étape, et laisser la sélection
 produire la qualité que l'intelligence individuelle ne donne pas. Le premier
-étage est en place — `implement` court en fan-out de cinq candidats, quatre
-sur opencode gratuit et un sur codex par défaut, et chacun porte ses portes
+étage est en place — `implement` court en fan-out de trois candidats, Luna
+medium, Sol high et DeepSeek V4 Flash gratuit, et chacun porte ses portes
 déterministes ; le reste
 de ce qui suit est la vision à laquelle les issues suivantes se réfèrent,
 écrite dans le dépôt parce qu'un principe non écrit se perd.
@@ -1214,18 +1232,17 @@ critère qui exige un modèle cher. Corollaire : si `criteria.md` était
 entièrement exécutable, aucun juge ne serait nécessaire — le premier
 candidat qui franchit toutes les portes gagne, et la course est le juge.
 
-Le premier pas est fait : `implement` court en fan-out de quatre candidats —
-trois stratégies sur modèle cher, une sur modèle gratuit — et chacun porte
-ses portes déterministes ([`scripts/portes.sh`](scripts/portes.sh)). Ce qui
-manque encore, c'est l'étage de jugement des finalistes, et un `criteria.md`
-assez exécutable pour qu'il ne serve jamais.
+Le premier pas est fait : `implement` court en fan-out de trois candidats —
+deux tiers Codex d'abonnement, un modèle gratuit — et chacun porte ses portes
+déterministes ([`scripts/portes.sh`](scripts/portes.sh)). Un juge Sol high
+compare les deux finalistes ; `criteria.md` reste la grille commune.
 
 **L'haltère : cher aux deux bouts, gratuit au milieu.**
 
 | étage | tarif | pourquoi |
 | --- | --- | --- |
 | `scope` | cher | transformer une issue en fonction de fitness exécutable devient le nœud le plus important du graph |
-| `implement` | gratuit et massif | N candidats jetables |
+| `implement` | abonnement et gratuit | trois candidats jetables, deux finalistes |
 | jugement | cher | seulement sur les finalistes, et seulement quand les portes n'ont pas suffi |
 
 **Le fan-out de candidats n'est pas le fan-out interdit.** Le périmètre
@@ -1250,7 +1267,7 @@ silence.
 | réduction | ce qu'elle fait | ce qu'elle coûte |
 | --- | --- | --- |
 | `first_pass` | le premier candidat dont l'issue passe gagne, les autres sont tués sur place | rien : personne n'attend |
-| `keep_n` | **attend tout le monde**, puis laisse passer les `n` premières réussites — les *finalistes* — au nœud d'aval | l'attente du plus lent, et un juge derrière |
+| `keep_n` | tranche dès les `n` premières réussites et révoque les candidats encore en vol ; si le lot finit avec moins de `n` réussites, elles passent toutes | un juge derrière |
 
 **La promotion du gagnant est dans la transaction de la réduction.** Élire,
 promouvoir, router : trois gestes, un seul verrou — celui de l'item, que
@@ -1317,12 +1334,12 @@ moyens :
 - la machine hôte a les CLI `opencode`, `codex` et `claude`, mais aucun
   runtime d'inférence local ni poids de modèle ;
 - le rail nominal ne dépend plus du quota claude : ses nœuds à modèle
-  utilisent codex sans épingler de modèle ;
-- la course utilise quatre variantes
-  `opencode/deepseek-v4-flash-free` et une variante codex, qui apportent une
-  vraie diversité de fournisseur ;
-- un modèle local réellement gratuit demanderait d'installer un runtime et
-  de télécharger des poids — c'est une option ouverte, pas un prérequis.
+  épinglent un tier Codex et son effort ;
+- la course utilise trois variantes : une variante
+  `opencode/deepseek-v4-flash-free`, une variante Luna medium et
+  une variante Sol high, qui apportent une vraie diversité de fournisseur ;
+- aucun modèle local ne tourne sur cet hôte. Tous les nœuds utilisent un
+  abonnement CLI ou un modèle distant gratuit, sans clé API.
   **Le modèle est un paramètre de configuration : l'architecture ne doit
   dépendre d'aucun fournisseur.**
 
@@ -1335,6 +1352,17 @@ cœurs, load average 22 au pic, et **Postgres tombé deux fois** dans la
 journée. Tant qu'un item n'avait qu'un run par nœud, le nombre d'items
 bornait la charge tout seul ; le fan-out a supprimé cette borne implicite
 sans la remplacer.
+
+**Diagnostic de mémoire partagée, avec réserve.** Le conteneur arrêté avait
+un `/dev/shm` de 64 Mo. Postgres indiquait
+`dynamic_shared_memory_type = posix` et
+`max_parallel_workers_per_gather = 2`. Les requêtes parallèles utilisent donc
+la mémoire partagée dynamique POSIX dans ce `/dev/shm` réduit. Sous la forte
+concurrence du fan-out, ce mécanisme est cohérent avec les trois arrêts
+observés en code 2. Il reste un diagnostic probable, pas une cause reproduite :
+aucun test à la demande n'a provoqué le même arrêt. Le service `db` réserve
+donc 1 Go de mémoire partagée dans `docker-compose.yml`, indépendamment des
+limites de dispatch ajoutées pour réduire la charge.
 
 Deux plafonds la remplacent, dans l'ordonnanceur. Tous deux dérivés du nombre
 de cœurs de la machine — aucun chiffre magique —, tous deux surchargeables,
@@ -1376,15 +1404,15 @@ réservé du tout : aucune ligne `node_run`, donc aucun bail posé, aucune
 tentative consommée, aucune issue d'échec, rien à annuler. Le tick suivant le
 prend. C'est la file du déploiement, appliquée au dispatch.
 
-**Une course se réserve entière, ou elle attend.** Quatre candidats de la
+**Une course se réserve entière, ou elle attend.** Les candidats de la
 même issue construisent le projet et lancent la même suite de tests, et
 c'est ce qui coûte — on ne la sérialise pas et on ne la partage pas : une
 porte jouée une fois pour tous ne prouverait plus rien sur le diff d'un
 candidat en particulier, et c'est précisément ce que la course sélectionne.
 Le dispatch (`_dispatch`) ne réserve donc les K candidats d'un item que si la
-place en accueille tous : deux candidats réservés sur quatre, plus rien ne
-tourne, et la réduction trancherait sur une course amputée — les deux autres
-ne naîtraient jamais. Une course trop large pour attendre son tour reste
+place en accueille tous : une réservation partielle ne tourne pas, car la
+réduction trancherait sur une course amputée — les autres candidats ne
+naîtraient jamais. Une course trop large pour attendre son tour reste
 entière ou attend, jamais coupée en deux ; le plancher ci-dessus garantit que
 ce cas n'arrive pas tant que les plafonds gardent leur défaut. **Dernier
 recours**, si une surcharge (`GRAPHATOM_MAX_RUNS` ou
@@ -1393,10 +1421,40 @@ largeur d'une course : celle-ci passe quand même, entière, mais seulement
 quand plus rien d'autre ne peut avancer et que le rail est vide — sinon elle
 attendrait indéfiniment derrière des items plus étroits.
 
-**La charge se lit hors de la base.** `GET /api/load` rend les runs en vol et
-les deux plafonds effectifs — `{"running": 4, "max_runs": 8,
-"max_runs_per_item": 8}` sur cette machine à 12 cœurs : une saturation ne se
-diagnostique plus à coups de `ps`.
+### Les opérations lourdes ont leur propre quota
+
+Le plafond des runs ne suffit pas : un agent qui écrit du texte et un build
+Next ne demandent pas la même machine. Les chemins normaux qui installent,
+construisent ou lancent une suite de portes passent donc par
+`graphatom build-quota -- <commande>` : `scripts/portes.sh`,
+`scripts/front-env.sh`, le crash-test backend, les constructions de
+rapprochement de `scripts/release.sh` et le build du déploiement. La
+réflexion du modèle reste hors quota.
+
+Le quota vaut `max(1, cœurs // 6)`, soit **2 sur 12 cœurs**. Une construction
+Next utilise déjà plusieurs cœurs. `GRAPHATOM_MAX_BUILDS` surcharge cette
+valeur. Un item garde au plus `max(1, quota - 1)` places : dès que le quota
+vaut au moins deux, une course ne peut pas prendre toute la capacité et un
+autre item peut avancer.
+
+Chaque place est un `pg_advisory_lock` de session sur la base commune du
+rail. Il n'y a ni démon ni fichier de verrou. Une fin normale, un échec, une
+révocation ou la mort de la session ferment la connexion et rendent la
+place. Le fournisseur surveille aussi la session pendant la commande : si
+PostgreSQL la termine, il arrête la famille de processus lourde au lieu de
+la laisser travailler hors quota.
+
+**L'attente ne coûte pas un run.** Le preneur renouvelle
+`lease_expires_at` avec le bail entier et pose un marqueur dans le
+workspace. Le chien de garde suspend ses deux couperets tant que ce marqueur
+existe. Il n'y a donc ni nouvelle tentative, ni bail consommé, ni échec dû à
+l'attente. Les verrous de session ne survivent pas à leur détenteur ; il
+n'existe pas de place orpheline qui pourrait bloquer la file sans limite.
+
+**La charge se lit hors de la base.** `GET /api/load` rend les runs, les
+constructions et leurs plafonds effectifs — `{"running": 4, "max_runs": 8,
+"max_runs_per_item": 8, "builds": 2, "max_builds": 2}`. Une saturation ne
+se diagnostique plus à coups de `ps`.
 
 ## Ce qu'on ne fera jamais
 

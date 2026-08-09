@@ -60,10 +60,11 @@ en erreur —, le nœud échoue, nommément : l'item ne part pas en avant sur un
 atelier vide en croyant que tout va bien. Voir `_promouvoir` et `_faute`.
 
 Deux réductions, et elles ne coûtent pas la même chose. `first_pass` est
-monotone : le premier succès tranche, personne n'attend. `keep_n` attend
-tout le monde et laisse passer n finalistes au lieu d'un gagnant — le noyau
-ne choisit alors rien entre eux, ni ne range leurs ateliers : c'est le nœud
-d'aval, un JUDGE arbitre, qui élit et qui range. Voir `blocks.judge`.
+monotone : le premier succès tranche, personne n'attend. `keep_n` tranche
+dès que n candidats ont réussi et laisse passer ces finalistes au lieu d'un
+gagnant — le noyau ne choisit alors rien entre eux, ni ne range leurs
+ateliers : c'est le nœud d'aval, un JUDGE arbitre, qui élit et qui range.
+Voir `blocks.judge`.
 """
 
 import datetime as dt
@@ -432,16 +433,16 @@ def _first_pass(conn, item, run, outcome: str) -> tuple | None:
 def _keep_n(conn, item, run, n: int) -> tuple | None:
     """Les n premiers candidats qui ont réussi passent en aval, ensemble.
 
-    Contrairement à `first_pass`, elle **attend tout le monde** : garder les
-    n meilleurs demande de les avoir tous vus, et un succès précoce ne peut
-    donc rien trancher seul. C'est le prix de la sélection, et c'est le chien
-    de garde du silence qui le rend tenable — un seul candidat pendu
-    retiendrait sinon tout le fan-out jusqu'au bail.
+    La décision est monotone : dès que n réussites existent, aucun candidat
+    encore en vol ne peut entrer dans les n premiers. Ceux-ci restent
+    `applied` — ce sont les finalistes, et c'est à ce statut que le nœud
+    arbitre les reconnaîtra. Les réussites suivantes et les candidats encore
+    en vol deviennent `superseded` ; ces derniers sont rendus à `_menage`
+    pour que leurs groupes de processus soient tués hors transaction.
 
-    La course finie, les réussites se comptent dans l'ordre où elles se sont
-    terminées : les n premières restent `applied` — ce sont les finalistes, et
-    c'est à ce statut que le nœud arbitre les reconnaîtra —, les suivantes
-    sont classées `superseded`. Aucune réussite : rien de neuf, l'issue
+    Avant n réussites, la course continue tant qu'un candidat vole. Cela
+    préserve le traitement des échecs : si le lot complet compte moins de n
+    réussites, elles passent toutes ; sans réussite, l'issue du noyau
     majoritaire est rendue exactement comme sous `first_pass`.
 
     L'item, lui, avance sur une seule arête : celle de l'issue majoritaire des
@@ -449,20 +450,28 @@ def _keep_n(conn, item, run, n: int) -> tuple | None:
     l'objet du nœud d'aval.
     """
     batch = _batch(conn, item, run)
-    if any(r["status"] == "running" for r in batch):
-        return None  # keep_n attend tout le monde : personne ne tranche seul
-
     reussis = [r for r in batch if r["outcome"] and r["outcome"] not in KERNEL_OUTCOMES]
+    if len(reussis) >= n:
+        recales = [r["id"] for r in reussis[n:]]
+        if recales:
+            conn.execute(
+                "UPDATE node_run SET status = 'superseded' WHERE id = ANY(%s)",
+                (recales,),
+            )
+        finaliste = _majoritaire(reussis[:n])
+        revoques = _revoke_losers(conn, item, finaliste)
+        return finaliste, finaliste["outcome"], revoques
+
+    if any(r["status"] == "running" for r in batch):
+        return None  # un autre candidat peut encore compléter les finalistes
+
     if not reussis:
         perdant = _majoritaire([r for r in batch if r["outcome"]])
         return perdant, perdant["outcome"], []
 
-    recales = [r["id"] for r in reussis[n:]]
-    if recales:
-        conn.execute(
-            "UPDATE node_run SET status = 'superseded' WHERE id = ANY(%s)", (recales,)
-        )
-    finaliste = _majoritaire(reussis[:n])
+    # Le lot est fini sans avoir produit n réussites. Elles restent toutes
+    # finalistes, comme avant la règle de décision anticipée.
+    finaliste = _majoritaire(reussis)
     return finaliste, finaliste["outcome"], []
 
 

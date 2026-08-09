@@ -29,6 +29,9 @@
 #
 #   CODEX_MODEL         le modèle à passer à codex (défaut : celui que la
 #                       session codex lit dans sa configuration)
+#   CODEX_REASONING_EFFORT l'effort à passer à codex (`low`, `medium`,
+#                       `high`...) ; absent, la configuration de la session
+#                       reste l'autorité
 #   CODEX_TIMEOUT_S     la borne d'attente, en secondes (défaut 300)
 #   CODEX_BIN           le binaire codex, quand le PATH ne suffit pas
 #   CODEX_DIR           le répertoire de travail du modèle (défaut : l'atelier
@@ -49,6 +52,7 @@
 set -u
 
 MODELE="${CODEX_MODEL:-}"
+EFFORT="${CODEX_REASONING_EFFORT:-}"
 BORNE="${CODEX_TIMEOUT_S:-300}"
 CX="${CODEX_BIN:-codex}"
 DIR="${CODEX_DIR:-${GRAPHATOM_WORKTREE:-$PWD}}"
@@ -109,22 +113,20 @@ starvation() {  # motifs fermés de codex : crédits, quota, authentification
     done
 }
 
-echo "agent-codex: modèle ${MODELE:-défaut de la session} — répertoire $DIR — borne ${BORNE} s"
+echo "agent-codex: modèle ${MODELE:-défaut de la session} — effort ${EFFORT:-défaut de la session} — répertoire $DIR — borne ${BORNE} s"
 # `--dangerously-bypass-approvals-and-sandbox` n'est pas un détail : sans
 # lui, codex attend une approbation humaine avant d'écrire un fichier, et
 # un bloc de rail n'a personne pour la donner. Le prix est connu et assumé
 # — l'agent tourne déjà dans l'atelier de son item et sur sa base jetable,
 # jamais sur la production.
-if [ -n "$MODELE" ]; then
-    timeout -k 5 "$BORNE" \
-        "$CX" exec --json --dangerously-bypass-approvals-and-sandbox \
-        -m "$MODELE" -C "$DIR" "$(cat prompt.md)" < /dev/null \
-        > "$LOG" 2> "$ERRORS"
-else
-    timeout -k 5 "$BORNE" \
-        "$CX" exec --json --dangerously-bypass-approvals-and-sandbox \
-        -C "$DIR" "$(cat prompt.md)" < /dev/null > "$LOG" 2> "$ERRORS"
+PARAMETRES=(exec --json --dangerously-bypass-approvals-and-sandbox)
+if [ -n "$MODELE" ]; then PARAMETRES+=(-m "$MODELE"); fi
+if [ -n "$EFFORT" ]; then
+    PARAMETRES+=(-c "model_reasoning_effort=\"$EFFORT\"")
 fi
+PARAMETRES+=(-C "$DIR" "$(cat prompt.md)")
+timeout -k 5 "$BORNE" "$CX" "${PARAMETRES[@]}" < /dev/null \
+    > "$LOG" 2> "$ERRORS"
 RC=$?
 
 cat "$ERRORS" >&2

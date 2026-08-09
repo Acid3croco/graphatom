@@ -29,6 +29,7 @@
 #   OPENCODE_TIMEOUT_S  la borne d'attente, en secondes (défaut 300)
 #   OPENCODE_BIN        le binaire opencode, quand le PATH ne suffit pas
 #   OPENCODE_DIR        le répertoire de travail du modèle (défaut : le workspace)
+#   OPENCODE_STATE_DIR  le répertoire de sa base locale (défaut : propre au run)
 #
 # Le script travaille dans le répertoire courant, sans jamais en changer :
 # le bloc lance déjà son `cmd` depuis le workspace de l'item, et c'est là
@@ -39,6 +40,7 @@
 #   4  borne d'attente dépassée : le modèle n'a rien rendu
 #   5  opencode a échoué, et aucune issue n'a été rendue
 #   6  opencode a fini sans rendre la moindre issue
+#   7  le répertoire de la base locale n'a pas pu être créé
 
 set -u
 
@@ -59,6 +61,23 @@ command -v "$OC" > /dev/null 2>&1 || {
     echo "agent-opencode: OPENCODE_BIN sur le chemin du binaire." >&2
     exit 3
 }
+
+# OpenCode garde ses sessions dans une base SQLite globale. Deux candidats
+# parallèles peuvent alors écrire dans le même fichier et l'un d'eux meurt
+# avec `database is locked`. Le workspace d'un run est déjà isolé par le
+# noyau et persiste pendant ses reprises : sa sous-arborescence est la bonne
+# durée de vie pour cette base. Seule la base change de place ; config,
+# identifiants et cache restent ceux de la session OpenCode de l'hôte.
+ETAT="${OPENCODE_STATE_DIR:-${GRAPHATOM_WORKSPACE:-$PWD}/.opencode}"
+mkdir -p "$ETAT" || {
+    echo "agent-opencode: impossible de créer l'état local dans $ETAT" >&2
+    exit 7
+}
+ETAT=$(cd "$ETAT" && pwd -P) || {
+    echo "agent-opencode: impossible de résoudre l'état local dans $ETAT" >&2
+    exit 7
+}
+export OPENCODE_DB="$ETAT/opencode.db"
 
 texte() {  # le texte du modèle, extrait du flux d'événements d'opencode
     jq -r 'select(.type == "text") | .part.text' "$EVENTS" 2>/dev/null
@@ -119,7 +138,7 @@ recopie() {  # l'issue dictée dans le texte, quand le modèle a parlé au lieu 
 # humaine avant d'écrire un fichier, et un bloc de rail n'a personne pour
 # la donner. Le prix est connu et assumé — l'agent tourne déjà dans le
 # worktree de son item et sur sa base jetable, jamais sur la production.
-echo "agent-opencode: modèle $MODELE — répertoire $DIR — borne ${BORNE} s"
+echo "agent-opencode: modèle $MODELE — répertoire $DIR — base $OPENCODE_DB — borne ${BORNE} s"
 timeout -k 5 "$BORNE" \
     "$OC" run -m "$MODELE" --format json --auto --dir "$DIR" "$(cat prompt.md)" \
     > "$EVENTS" 2> "$ERRORS"
