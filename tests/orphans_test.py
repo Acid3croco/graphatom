@@ -15,8 +15,10 @@ par le faucheur sont en jeu :
   6. worker tué en plein vol : l'agent survit, et sa trace `agent.pgid` aussi
   7. `revoke_orphan` — ce que fait le faucheur — tue le groupe et efface la trace
   8. garde-fou : une trace d'une autre tentative n'est ni suivie ni effacée
-  9. garde-fou : une identité qui ne colle plus (naissance ou boot) ne tue personne
- 10. une trace illisible ou amputée ne fait pas tomber le faucheur
+ 9. garde-fou : une identité qui ne colle plus (naissance ou boot) ne tue personne
+10. une trace illisible ou amputée ne fait pas tomber le faucheur
+11. les trois adaptateurs gardent leur CLI dans le groupe suivi par le worker
+12. le timeout interne exact de codex ne laisse aucun descendant vivant
 
 Usage : uv run python tests/orphans_test.py
 """
@@ -231,6 +233,60 @@ def main() -> None:
         trace_path.write_text(abime)
         assert blocks.revoke_orphan(ITEM_ID, RUN_ID) is None
     print("10. trace illisible ou amputée : le faucheur passe son chemin ✓")
+
+    # 11. GNU timeout crée sinon un groupe enfant que la trace agent.pgid ne
+    # voit pas. --foreground garde la CLI dans le groupe suivi et révoqué.
+    root = Path(__file__).resolve().parents[1]
+    for name in ("agent-claude.sh", "agent-codex.sh", "agent-opencode.sh"):
+        script = (root / "scripts" / name).read_text()
+        assert "timeout --foreground -k 5" in script, name
+    probe = workdir / "timeout-foreground"
+    probe.mkdir()
+    child_pgid = probe / "child.pgid"
+    command = (
+        "timeout --foreground -k 5 30 sh -c "
+        "'ps -o pgid= -p $$ > child.pgid; sleep 30'"
+    )
+    process = subprocess.Popen(["bash", "-c", command], cwd=probe,
+                               start_new_session=True)
+    deadline = time.time() + 5
+    while time.time() < deadline and not child_pgid.exists():
+        time.sleep(0.05)
+    assert child_pgid.exists(), "la CLI factice n'a pas écrit son groupe"
+    assert int(child_pgid.read_text().strip()) == os.getpgid(process.pid)
+    os.killpg(process.pid, signal.SIGTERM)
+    process.wait(timeout=5)
+    print("11. timeout --foreground : la CLI reste dans le groupe suivi ✓")
+
+    # 12. Le vrai adaptateur codex laisse GNU timeout atteindre sa borne.
+    # La CLI factice lance un enfant long : après le retour du bloc, le
+    # groupe doit être vide et la trace déjà désarmée.
+    fake = probe / "codex-factice"
+    fake.write_text(
+        "#!/bin/sh\n"
+        "ps -o pgid= -p $$ > \"$CODEX_FAKE_PGID\"\n"
+        "sleep 300 &\n"
+        "wait\n"
+    )
+    fake.chmod(0o755)
+    fake_pgid = probe / "codex-timeout.pgid"
+    adapter = root / "scripts" / "agent-codex.sh"
+    command = (
+        f'CODEX_BIN="{fake}" CODEX_FAKE_PGID="{fake_pgid}" '
+        f'CODEX_TIMEOUT_S=0.3 bash "{adapter}"'
+    )
+    result = blocks.act(context(workdir, command, attempt=6, timeout_s=10))
+    assert result["outcome"] == "crashed", result
+    assert result["exit_code"] == 4, result
+    assert fake_pgid.exists(), "la CLI codex factice n'a pas écrit son groupe"
+    pgid = int(fake_pgid.read_text().strip())
+    survivants = wait_dead(pgid)
+    if survivants:
+        for pid in survivants:
+            os.kill(pid, 9)
+        sys.exit(f"ÉCHEC : enfants après le timeout codex : {survivants}")
+    assert not trace_path.exists(), "le timeout codex laisse une trace désarmée"
+    print("12. timeout interne codex : aucun descendant ne survit ✓")
 
     shutil.rmtree(workdir, ignore_errors=True)
     print("\norphelins : OK — ni le bail ni la mort du worker ne laissent d'agent")

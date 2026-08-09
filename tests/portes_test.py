@@ -31,9 +31,9 @@ Scénario, sur la base et sur une copie jetable du dépôt :
      suite lâche de la même façon, après que la sélection l'a choisie
   4. le candidat sain passe ses portes, garde son `outcome.json`, et gagne
      la course ; son diff sans code ne fait jouer que la porte d'import
-  5. aucune porte ne parle à une base : le script coupe les DSN d'entrée, et
-     pas un des tests qu'il nomme n'ouvre de connexion — c'est ce qui rend K
-     candidats concurrents inoffensifs les uns pour les autres
+  5. aucun test de porte ne parle à une base de données : le script coupe les
+     DSN d'entrée. Seul le fournisseur du quota garde la base commune, pour
+     son verrou de session et sans lire les données d'un item
 
 Le test ne détruit rien de la production : son dépôt est une copie jetable,
 et `GRAPHATOM_REPO_DIR` est épinglé dessus.
@@ -257,10 +257,12 @@ def course(conn, workdir: Path, repo: Path) -> None:
 
 
 def portes_sans_base() -> None:
-    """5. la sûreté en parallèle est mécanique : aucune porte ne touche de base."""
+    """5. Les tests sont sans base ; seul le fournisseur garde son DSN."""
     source = (ROOT / "scripts" / "portes.sh").read_text()
     assert "unset GRAPHATOM_DSN GRAPHATOM_AGENT_DSN" in source, \
         "le script ne coupe plus les DSN de l'agent"
+    assert "GRAPHATOM_QUOTA_DSN" in source and "build-quota" in source, \
+        "la suite lourde ne passe plus par la base de contrôle du quota"
     assert 'export GRAPHATOM_REPO_DIR="$WT"' in source, \
         "le script ne pointe plus le dépôt du candidat sur son propre atelier"
 
@@ -276,8 +278,8 @@ def portes_sans_base() -> None:
         code = chemin.read_text()
         for ouvre in ("db.connect(", "db.init_db(", "psycopg.connect("):
             assert ouvre not in code, f"{nom} ouvre une base ({ouvre}) : pas une porte"
-    print(f"5. {len(choisies)} portes de test, aucune n'ouvre de base, DSN coupées "
-          "et dépôt épinglé sur l'atelier du candidat ✓")
+    print(f"5. {len(choisies)} portes de test sans base, DSN de données coupées, "
+          "fournisseur du quota présent et dépôt épinglé sur l'atelier ✓")
 
 
 def main() -> None:

@@ -12,13 +12,19 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from graphatom import executors, graph  # noqa: E402
+
 BUNDLE = json.loads((ROOT / "examples" / "code-task.json").read_text())
 CODEX = ROOT / "scripts" / "agent-codex.sh"
+DECLARED = ROOT / "scripts" / "agent-declared.sh"
 RELEASE_NODE = ROOT / "scripts" / "release-node.sh"
 
 
@@ -28,10 +34,10 @@ def cmd(node: str) -> str:
 
 
 def porte(node: str, model: str, effort: str) -> None:
-    """Un nœud nomme son modèle et son effort, sans dépendre du défaut local."""
-    commande = cmd(node)
-    assert f"CODEX_MODEL={model}" in commande, (node, commande)
-    assert f"CODEX_REASONING_EFFORT={effort}" in commande, (node, commande)
+    """Un nœud résout le modèle et l'effort attendus."""
+    resolved = executors.resolve(BUNDLE, BUNDLE["nodes"][node])
+    assert (resolved.cli, resolved.model, resolved.effort) == (
+        "codex", model, effort), (node, resolved)
 
 
 def declaration() -> None:
@@ -45,19 +51,40 @@ def declaration() -> None:
     assert "release-node.sh" in cmd("release"), cmd("release")
 
     variants = BUNDLE["nodes"]["implement"]["config"]["fanout"]["variants"]
-    assert [v["label"] for v in variants] == ["minimal", "test d'abord", "gratuit"]
+    assert [v["label"] for v in variants] == [
+        "minimal Luna", "minimal Sol", "gratuit libre"]
     assert len(variants) == 3
-    luna, sol, gratuit = [v["agent"]["cmd"] for v in variants]
-    assert "CODEX_MODEL=gpt-5.6-luna" in luna
-    assert "CODEX_REASONING_EFFORT=medium" in luna
-    assert "CODEX_MODEL=gpt-5.6-sol" in sol
-    assert "CODEX_REASONING_EFFORT=high" in sol
-    assert "agent-opencode.sh" in gratuit
-    assert "opencode/deepseek-v4-flash-free" in gratuit
+    spec = BUNDLE["nodes"]["implement"]
+    luna, sol, gratuit = [executors.resolve(BUNDLE, graph.candidate_node(spec, i))
+                          for i in range(3)]
+    assert (luna.cli, luna.model, luna.effort) == (
+        "codex", "gpt-5.6-luna", "medium")
+    assert (sol.cli, sol.model, sol.effort) == (
+        "codex", "gpt-5.6-sol", "high")
+    assert (gratuit.cli, gratuit.model, gratuit.effort) == (
+        "opencode", "opencode/deepseek-v4-flash-free", None)
+    minimal = "le diff minimal"
+    assert minimal in variants[0]["strategy"]
+    assert minimal in variants[1]["strategy"]
+    assert "aucune méthode de construction ne t'est imposée" in variants[2]["strategy"]
+    implement = executors.resolve(BUNDLE, BUNDLE["nodes"]["implement"])
+    assert (implement.cli, implement.model, implement.effort) == (
+        "codex", "gpt-5.6-sol", "high")
     assert variants[2]["agent"]["silence_s"] == 300
     assert "claude " not in json.dumps(BUNDLE)
-    print("1. scope et judge Sol high ; course Luna medium + Sol high + "
-          "DeepSeek gratuit ; portes légères sur Luna ✓")
+    print("1. scope, judge et implement seul Sol high ; course minimale "
+          "Luna medium + Sol high + DeepSeek gratuit libre ; portes Luna ✓")
+
+
+def prompts_synchrones() -> None:
+    """2. Les règles d'exécution sont cinq vrais paragraphes, pas du JSON cité."""
+    nodes = ("scope", "implement", "test_backend", "test_frontend", "judge")
+    for node in nodes:
+        prompt = BUNDLE["nodes"][node]["config"]["agent"]["prompt"]
+        assert "Tout se fait en synchrone" in prompt, node
+        assert "outcome.json" in prompt, node
+        assert "\\n" not in prompt, (node, prompt[:200])
+    print("2. cinq prompts synchrones rendus avec de vrais retours de ligne ✓")
 
 
 def executable(path: Path, content: str) -> None:
@@ -86,7 +113,7 @@ def execute(script: Path, cwd: Path, env: dict[str, str]) -> subprocess.Complete
 
 
 def arguments_codex(tmp: Path) -> None:
-    """2. L'adaptateur passe le modèle et l'effort à la CLI."""
+    """3. L'adaptateur passe le modèle et l'effort à la CLI."""
     workspace = tmp / "adapter"
     workspace.mkdir()
     (workspace / "prompt.md").write_text("test")
@@ -105,15 +132,16 @@ def arguments_codex(tmp: Path) -> None:
     args = capture.read_text().splitlines()
     assert args[args.index("-m") + 1] == "gpt-5.6-luna", args
     assert args[args.index("-c") + 1] == 'model_reasoning_effort="medium"', args
-    print("2. agent-codex transmet gpt-5.6-luna et effort medium à la CLI ✓")
+    print("3. agent-codex transmet gpt-5.6-luna et effort medium à la CLI ✓")
 
 
 def release_rapide(tmp: Path) -> None:
-    """3. Le nominal reste shell ; seule la panne appelle Luna low."""
+    """4. Le nominal reste shell ; seule la panne appelle Luna low."""
     worktree = tmp / "worktree"
     scripts = worktree / "scripts"
     scripts.mkdir(parents=True)
     shutil.copy2(CODEX, scripts / "agent-codex.sh")
+    shutil.copy2(DECLARED, scripts / "agent-declared.sh")
     workspace = tmp / "release"
     workspace.mkdir()
     release = scripts / "release.sh"
@@ -123,6 +151,10 @@ def release_rapide(tmp: Path) -> None:
         "GRAPHATOM_WORKTREE": str(worktree),
         "GRAPHATOM_WORKSPACE": str(workspace),
         "CODEX_BIN": str(absent),
+        "GRAPHATOM_AGENT_CLI": "codex",
+        "CODEX_MODEL": "gpt-5.6-luna",
+        "CODEX_REASONING_EFFORT": "low",
+        "CODEX_TIMEOUT_S": "540",
     })
     assert result.returncode == 0, result.stderr
     assert json.loads((workspace / "outcome.json").read_text())["outcome"] == "done"
@@ -139,21 +171,120 @@ def release_rapide(tmp: Path) -> None:
         "CODEX_BIN": str(cli),
         "CODEX_CAPTURE": str(capture),
         "FAKE_OUTCOME": '{"outcome":"rebased","summary":"réparé"}',
+        "GRAPHATOM_AGENT_CLI": "codex",
+        "CODEX_MODEL": "gpt-5.6-luna",
+        "CODEX_REASONING_EFFORT": "low",
+        "CODEX_TIMEOUT_S": "540",
     })
     assert result.returncode == 0, result.stderr
     assert json.loads((workspace / "outcome.json").read_text())["outcome"] == "rebased"
     args = capture.read_text().splitlines()
     assert args[args.index("-m") + 1] == "gpt-5.6-luna", args
     assert args[args.index("-c") + 1] == 'model_reasoning_effort="low"', args
-    print("3. release nominale sans modèle ; panne confiée à Luna low ✓")
+    print("4. release nominale sans modèle ; panne confiée à Luna low ✓")
+
+
+def git(cwd: Path, *args: str) -> str:
+    """Lance git dans le petit dépôt du test et rend sa sortie."""
+    done = subprocess.run(["git", "-C", str(cwd), *args], check=True,
+                          text=True, capture_output=True)
+    return done.stdout.strip()
+
+
+def selection_diff(tmp: Path) -> None:
+    """4. Les tests voient la branche et le worktree, pas le retard sur main."""
+    repo = tmp / "diff-repo"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "config", "user.email", "diff@test.invalid")
+    git(repo, "config", "user.name", "diff")
+    (repo / "README.md").write_text("base\n")
+    git(repo, "add", "README.md")
+    git(repo, "commit", "-qm", "base")
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+    worktree = repo / ".worktrees" / "rail-item-17"
+    git(repo, "worktree", "add", "-q", "-b", "issue", str(worktree), "main")
+    (worktree / "README.md").write_text("changement de l'issue\n")
+    git(worktree, "add", "README.md")
+    git(worktree, "commit", "-qm", "issue")
+
+    (repo / "front").mkdir()
+    (repo / "tests").mkdir()
+    (repo / "front" / "page.tsx").write_text("nouveau sur main\n")
+    (repo / "tests" / "main_test.py").write_text("# nouveau sur main\n")
+    git(repo, "add", "front/page.tsx", "tests/main_test.py")
+    git(repo, "commit", "-qm", "main avance")
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+    scripts = worktree / "scripts"
+    scripts.mkdir()
+    agent = scripts / "agent-codex.sh"
+    executable(agent, """#!/usr/bin/env bash
+printf appelé > "$GRAPHATOM_WORKSPACE/agent-called"
+printf '%s\n' '{"outcome":"pass","summary":"agent appelé"}' > outcome.json
+""")
+    shutil.copy2(DECLARED, scripts / "agent-declared.sh")
+    workspace = tmp / "item-17"
+    workspace.mkdir()
+    env = os.environ | {
+        "GRAPHATOM_REPO_DIR": str(repo),
+        "GRAPHATOM_WORKTREE": str(worktree),
+        "GRAPHATOM_WORKSPACE": str(workspace),
+        "GRAPHATOM_AGENT_CLI": "codex",
+    }
+
+    portes = (ROOT / "scripts" / "portes.sh").read_text()
+    for fragment in ("git diff --name-only origin/main...HEAD",
+                     "git diff --name-only HEAD",
+                     "git ls-files --others --exclude-standard"):
+        assert fragment in portes, fragment
+    assert "git diff --name-only origin/main;" not in portes
+
+    for node in ("test_backend", "test_frontend"):
+        (workspace / "outcome.json").unlink(missing_ok=True)
+        (workspace / "agent-called").unlink(missing_ok=True)
+        done = subprocess.run(cmd(node), shell=True, cwd=workspace, env=env,
+                              text=True, capture_output=True, timeout=10)
+        assert done.returncode == 0, (node, done.stdout, done.stderr)
+        outcome = json.loads((workspace / "outcome.json").read_text())
+        assert outcome["outcome"] == "pass", (node, outcome)
+        assert not (workspace / "agent-called").exists(), node
+
+    def agents_appeles() -> None:
+        """Les deux tests doivent appeler leur agent pour ce diff pertinent."""
+        for node in ("test_backend", "test_frontend"):
+            (workspace / "outcome.json").unlink(missing_ok=True)
+            (workspace / "agent-called").unlink(missing_ok=True)
+            done = subprocess.run(cmd(node), shell=True, cwd=workspace, env=env,
+                                  text=True, capture_output=True, timeout=10)
+            assert done.returncode == 0, (node, done.stdout, done.stderr)
+            assert (workspace / "agent-called").read_text() == "appelé", node
+
+    source = worktree / "src" / "graphatom"
+    source.mkdir(parents=True)
+    (source / "web.py").write_text("changement non commité\n")
+    agents_appeles()  # fichier neuf non suivi
+    git(worktree, "add", "src/graphatom/web.py")
+    agents_appeles()  # fichier neuf indexé
+    git(worktree, "commit", "-qm", "branche pertinente")
+    agents_appeles()  # changement pertinent commité sur la branche
+    (source / "web.py").write_text("changement suivi non commité\n")
+    agents_appeles()  # fichier suivi modifié
+
+    print("4. un main plus récent ne déclenche aucun test ; un fichier src/ "
+          "non suivi, indexé, commité ou modifié déclenche les deux tests ; "
+          "les portes utilisent la même sélection ✓")
 
 
 def main() -> None:
     declaration()
+    prompts_synchrones()
     tmp = Path(tempfile.mkdtemp(prefix="graphatom-codex-routing-"))
     try:
         arguments_codex(tmp)
         release_rapide(tmp)
+        selection_diff(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("\nroutage codex : OK — modèle et effort explicites, release script-first")

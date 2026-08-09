@@ -4,10 +4,11 @@ Ce test est sans base. Il joue deux commandes de nœud par le vrai bloc ACT :
 
 1. l'adaptateur Codex, devant une fausse CLI déterministe, rend `failed` ;
 2. un script shell meurt sans `outcome.json` et devient `crashed` ;
-3. les deux échecs se relisent dans le même `failure.json`, avec le nœud,
+3. une panne de fournisseur garde son nom et sa raison dans la même trace ;
+4. les échecs se relisent dans le même `failure.json`, avec le nœud,
    l'issue, la queue du journal et le compte rendu bornés ;
-4. le second échec remplace le premier ;
-5. un item neuf et une réussite ne portent aucune trace d'échec.
+5. le nouvel échec remplace le précédent ;
+6. un item neuf et une réussite ne portent aucune trace d'échec.
 
 Usage : uv run python tests/failure_trace_test.py
 """
@@ -62,14 +63,15 @@ def context(node: str, attempt: int, cmd: str, outcome: str,
                           spec, {"name": "failure-trace"})
 
 
-def route(ctx: blocks.Context, outcome: str) -> None:
+def route(ctx: blocks.Context, result: dict) -> None:
     """Le vrai point de routage, qui écrit la trace avant de bouger l'item."""
     item = {"id": ctx.item["id"], "state": ctx.run["node"],
             "cycle": 1, "version": 1}
     bundle = {"nodes": {ctx.run["node"]: ctx.node,
                         "suite": {"terminal": True}},
               "on_kernel": {"escalate_to": "suite", "exhausted_to": "suite"}}
-    kernel._route(RouteConn(), item, bundle, ctx.run, outcome, kind="result")
+    run = {**ctx.run, "result": result}
+    kernel._route(RouteConn(), item, bundle, run, result["outcome"], kind="result")
 
 
 def fake_codex(path: Path) -> None:
@@ -96,7 +98,7 @@ def rendered_failure(workdir: Path) -> tuple[Path, dict]:
     ctx = context("codex", 1, cmd, "failed")
     result = blocks.act(ctx)
     assert result["outcome"] == "failed", result
-    route(ctx, result["outcome"])
+    route(ctx, result)
     path = blocks.failure_path(ITEM_ID)
     return path, json.loads(path.read_text())
 
@@ -108,7 +110,21 @@ def dead_failure() -> tuple[Path, dict]:
     ctx = context("deploy", 2, cmd, "failed")
     result = blocks.act(ctx)
     assert result["outcome"] == "crashed", result
-    route(ctx, result["outcome"])
+    route(ctx, result)
+    path = blocks.failure_path(ITEM_ID)
+    return path, json.loads(path.read_text())
+
+
+def starved_failure() -> tuple[Path, dict]:
+    """La trace stable reprend le fournisseur et son message sans le modifier."""
+    reason = "You have 0 weighted tokens left"
+    cmd = ("printf '%s' "
+           f"'{json.dumps({'provider': 'codex', 'reason': reason})}' "
+           "> starved.json; exit 9")
+    ctx = context("codex", 2, cmd, "failed")
+    result = blocks.act(ctx)
+    assert result == {"outcome": "starved", "provider": "codex", "reason": reason}
+    route(ctx, result)
     path = blocks.failure_path(ITEM_ID)
     return path, json.loads(path.read_text())
 
@@ -125,7 +141,7 @@ def success_writes_nothing() -> None:
     ctx.config["agent"]["passation"] = False
     result = blocks.act(ctx)
     assert result["outcome"] == "done", result
-    route(ctx, result["outcome"])
+    route(ctx, result)
     assert not path.exists(), path
 
 
@@ -144,6 +160,13 @@ def main() -> None:
     assert len(codex["report"]["content"]) <= blocks.REPORT_CHARS
     print(f"1. agent Codex : échec rendu relu dans {path.name}, quatre champs bornés ✓")
 
+    same_path, starved = starved_failure()
+    assert same_path == path
+    assert starved["outcome"] == "starved", starved
+    assert starved["provider"] == "codex", starved
+    assert starved["reason"] == "You have 0 weighted tokens left", starved
+    print("2. panne fournisseur : failure.json garde fournisseur et raison exacte ✓")
+
     same_path, shell = dead_failure()
     assert same_path == path
     assert set(shell) == {"node", "outcome", "log_tail", "report"}, shell
@@ -152,13 +175,13 @@ def main() -> None:
     assert shell["report"]["name"] == "shell.md", shell["report"]
     assert "FIN RAPPORT SHELL" in shell["report"]["content"]
     assert "codex" not in path.read_text().lower(), "le premier échec s'est accumulé"
-    print("2. shell sans issue : crashed au même chemin, qui ne porte que ce dernier échec ✓")
+    print("3. shell sans issue : crashed au même chemin, qui ne porte que ce dernier échec ✓")
 
     assert blocks.is_failure_outcome("none")
     assert blocks.is_failure_outcome("timed_out")
     assert not blocks.is_failure_outcome("done")
     success_writes_nothing()
-    print("3. règle explicite vérifiée ; item neuf et réussite sans trace inventée ✓")
+    print("4. règle explicite vérifiée ; item neuf et réussite sans trace inventée ✓")
 
 
 if __name__ == "__main__":
