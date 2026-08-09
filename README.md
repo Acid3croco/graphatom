@@ -139,6 +139,9 @@ uv run python tests/plafond_test.py                  # les deux plafonds du disp
                                                      # la charge est bornée, et ce
                                                      # que le plafond retient attend
                                                      # sans bail ni tentative
+uv run python tests/quota_test.py                    # le quota des opérations lourdes :
+                                                     # N places globales, bail préservé,
+                                                     # session morte et équité par item
 ```
 
 Les tests ne touchent jamais au `data/` du repo : chacun travaille dans un
@@ -210,7 +213,7 @@ Sept lectures, pour un client qui rend les pages lui-même : `/api/items`
 `criteria`, `files`), `/api/questions` (les questions ouvertes),
 `/api/heartbeat` (les deux battements bruts, `rail` et `github-sync`, chacun
 avec son horodatage, son âge et son état périmé), `/api/load` (la charge de
-l'ordonnanceur : les runs en vol, et les deux plafonds qui les bornent — voir
+l'ordonnanceur : runs et constructions en vol, avec leurs plafonds — voir
 [la file du dispatch](#la-charge-a-un-plafond--le-dispatch-est-une-file)),
 `/api/graphs` (les
 révisions publiées : nom, date, nombre d'items qui la portent) et
@@ -643,7 +646,12 @@ Le modèle se donne en argument, ou par `OPENCODE_MODEL` ; à défaut c'est
 ne demandent **aucun identifiant** — rien à configurer, rien à mettre dans
 le dépôt. `OPENCODE_TIMEOUT_S` borne l'attente (300 s par défaut),
 `OPENCODE_BIN` désigne le binaire quand le PATH ne suffit pas, et
-`OPENCODE_DIR` le répertoire de travail du modèle.
+`OPENCODE_DIR` le répertoire de travail du modèle. Chaque run reçoit aussi
+sa propre base SQLite par `OPENCODE_DB`, sous
+`$GRAPHATOM_WORKSPACE/.opencode/` : deux candidats parallèles ne peuvent
+plus se bloquer avec `database is locked`. La configuration, les
+identifiants et le cache OpenCode restent ceux de la session de l'hôte.
+`OPENCODE_STATE_DIR` permet de déplacer cette seule base si nécessaire.
 
 Le script est déterministe, et ne juge jamais : si le modèle a écrit
 `outcome.json`, il n'y touche pas ; si le modèle a dicté son issue dans
@@ -662,6 +670,7 @@ sortie et son message sur `stderr` :
 | 4 | borne d'attente dépassée — le modèle fautif est nommé |
 | 5 | opencode a échoué, et aucune issue n'a été rendue |
 | 6 | opencode a fini sans rendre la moindre issue |
+| 7 | le répertoire de la base locale n'a pas pu être créé |
 
 Le code 4 n'est pas théorique : `opencode/north-mini-code-free` ne rend
 rien du tout. Un candidat muet ne doit jamais retenir quoi que ce soit —
@@ -1132,8 +1141,11 @@ donnée qui tranche, pas l'intuition.
 cycle est le test frontend (~8 min de navigateur) et il tournait même pour
 une issue qui ne touche que du JSON de graph. Les deux `cmd` de test
 commencent donc par quelques lignes de shell — pas du jugement d'agent —
-qui lisent le diff de l'item (`git diff --name-only origin/main` plus les
-fichiers neufs non encore suivis) et décident :
+qui lisent seulement le travail de la branche depuis son point commun avec
+main (`git diff --name-only origin/main...HEAD`), puis les modifications
+suivies et les fichiers neufs non encore suivis. Un commit arrivé sur main
+après la création de l'item n'est donc jamais pris pour un changement de
+l'item. Les portes décident ensuite :
 
 - le diff ne touche aucun fichier front (`src/graphatom/web.py` et `front/`,
   liste en tête du `cmd`) → `outcome` `pass`, « diff sans src/graphatom/web.py
@@ -1409,10 +1421,40 @@ largeur d'une course : celle-ci passe quand même, entière, mais seulement
 quand plus rien d'autre ne peut avancer et que le rail est vide — sinon elle
 attendrait indéfiniment derrière des items plus étroits.
 
-**La charge se lit hors de la base.** `GET /api/load` rend les runs en vol et
-les deux plafonds effectifs — `{"running": 4, "max_runs": 8,
-"max_runs_per_item": 8}` sur cette machine à 12 cœurs : une saturation ne se
-diagnostique plus à coups de `ps`.
+### Les opérations lourdes ont leur propre quota
+
+Le plafond des runs ne suffit pas : un agent qui écrit du texte et un build
+Next ne demandent pas la même machine. Les chemins normaux qui installent,
+construisent ou lancent une suite de portes passent donc par
+`graphatom build-quota -- <commande>` : `scripts/portes.sh`,
+`scripts/front-env.sh`, le crash-test backend, les constructions de
+rapprochement de `scripts/release.sh` et le build du déploiement. La
+réflexion du modèle reste hors quota.
+
+Le quota vaut `max(1, cœurs // 6)`, soit **2 sur 12 cœurs**. Une construction
+Next utilise déjà plusieurs cœurs. `GRAPHATOM_MAX_BUILDS` surcharge cette
+valeur. Un item garde au plus `max(1, quota - 1)` places : dès que le quota
+vaut au moins deux, une course ne peut pas prendre toute la capacité et un
+autre item peut avancer.
+
+Chaque place est un `pg_advisory_lock` de session sur la base commune du
+rail. Il n'y a ni démon ni fichier de verrou. Une fin normale, un échec, une
+révocation ou la mort de la session ferment la connexion et rendent la
+place. Le fournisseur surveille aussi la session pendant la commande : si
+PostgreSQL la termine, il arrête la famille de processus lourde au lieu de
+la laisser travailler hors quota.
+
+**L'attente ne coûte pas un run.** Le preneur renouvelle
+`lease_expires_at` avec le bail entier et pose un marqueur dans le
+workspace. Le chien de garde suspend ses deux couperets tant que ce marqueur
+existe. Il n'y a donc ni nouvelle tentative, ni bail consommé, ni échec dû à
+l'attente. Les verrous de session ne survivent pas à leur détenteur ; il
+n'existe pas de place orpheline qui pourrait bloquer la file sans limite.
+
+**La charge se lit hors de la base.** `GET /api/load` rend les runs, les
+constructions et leurs plafonds effectifs — `{"running": 4, "max_runs": 8,
+"max_runs_per_item": 8, "builds": 2, "max_builds": 2}`. Une saturation ne
+se diagnostique plus à coups de `ps`.
 
 ## Ce qu'on ne fera jamais
 

@@ -946,16 +946,21 @@ def _api_heartbeat(rail: dt.datetime | None, sync: dt.datetime | None) -> dict:
 
 
 def _api_load(conn) -> dict:
-    """La charge du rail : les runs en vol, et les plafonds qui les bornent.
+    """La charge du rail : runs et constructions, avec leurs plafonds.
 
     Une saturation invisible se diagnostique à coups de `ps` : les deux
     valeurs se lisent donc ici, hors de la base. `running` au niveau de
     `max_runs`, c'est un rail qui n'est pas bloqué mais plein — les runs
     réservables attendent leur tour.
     """
+    from . import quota
+
     return {"running": scheduler.en_vol(conn),
             "max_runs": scheduler.MAX_RUNS,
-            "max_runs_per_item": scheduler.MAX_RUNS_PER_ITEM}
+            "max_runs_per_item": scheduler.MAX_RUNS_PER_ITEM,
+            "solo": scheduler.etat_solo(conn),
+            "builds": quota.en_vol(conn),
+            "max_builds": quota.MAX_BUILDS}
 
 
 # --------------------------------------------------------------------- notify
