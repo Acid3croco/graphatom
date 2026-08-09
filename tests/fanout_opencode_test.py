@@ -87,6 +87,7 @@ def bundle_gratuit() -> dict:
     return {
         "name": f"opencode-absent-{uuid.uuid4().hex[:8]}",
         "entry": "implement",
+        "agent": json.loads(json.dumps(PAQUET["agent"])),
         "budgets": {"escalations": 1, "wall_deadline_hours": 1},
         "on_kernel": {"escalate_to": "abandon", "exhausted_to": "abandon"},
         "nodes": {
