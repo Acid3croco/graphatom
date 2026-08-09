@@ -51,6 +51,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { TraceViewer } from "@/components/run-trace";
 
 // jsonb ne garde pas l'ordre des clés : le post-mortem d'abord, la trace après
 const RESULT_ORDER = ["outcome", "exit_code", "timeout", "error"];
@@ -504,6 +505,7 @@ export function ItemJournal({
 /** Les runs : leur statut, leur durée, leurs tokens, leur résultat. */
 export function ItemRuns({ id, initial }: { id: number; initial: Run[] }) {
   const runs = useItem(id, (view) => view.runs, initial);
+  const [open, setOpen] = useState<number[]>([]);
   if (!runs.length) {
     return null;
   }
@@ -527,8 +529,26 @@ export function ItemRuns({ id, initial }: { id: number; initial: Run[] }) {
         </TableHeader>
         <TableBody>
           {runs.map((run) => (
-            <TableRow key={run.id}>
-              <TableCell>{run.id}</TableCell>
+            <Fragment key={run.id}>
+            <TableRow>
+              <TableCell className="whitespace-nowrap">
+                {run.id}{" "}
+                <button
+                  type="button"
+                  className="cursor-pointer underline"
+                  aria-expanded={open.includes(run.id)}
+                  aria-label={`ouvrir la trace du run ${run.id}`}
+                  onClick={() =>
+                    setOpen((was) =>
+                      was.includes(run.id)
+                        ? was.filter((id) => id !== run.id)
+                        : [...was, run.id],
+                    )
+                  }
+                >
+                  trace
+                </button>
+              </TableCell>
               <TableCell>{run.node}</TableCell>
               <TableCell>{run.cycle}</TableCell>
               {/* K candidats partagent une tentative : sans leur numéro, la
@@ -557,6 +577,14 @@ export function ItemRuns({ id, initial }: { id: number; initial: Run[] }) {
                 <Result run={run} />
               </TableCell>
             </TableRow>
+            {open.includes(run.id) && (
+              <TableRow>
+                <TableCell colSpan={9} className="bg-muted/40">
+                  <TraceViewer item={id} run={run} />
+                </TableCell>
+              </TableRow>
+            )}
+            </Fragment>
           ))}
         </TableBody>
       </Table>
