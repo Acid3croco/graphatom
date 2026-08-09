@@ -155,6 +155,25 @@ export type Run = {
   result: Record<string, unknown> | null;
 };
 
+export type TraceSource = {
+  type: string | null;
+  state: "missing" | "empty" | "available";
+  content: string;
+  offset: number;
+  next_offset: number;
+  media_type: string;
+};
+
+export type RunTrace = {
+  item_id: number;
+  run_id: number;
+  status: string;
+  events: TraceSource;
+  log: TraceSource;
+  command: TraceSource;
+  cursor: Record<"events" | "log" | "command", number>;
+};
+
 export type Effect = {
   op_id: string;
   logical_key: string;
@@ -303,6 +322,9 @@ export async function getFileText(href: string): Promise<string | null> {
 export const getItems = () => get<Item[]>("/api/items");
 
 export const getItem = (id: number) => get<ItemDetail>(`/api/item/${id}`);
+
+export const getRunTrace = (item: number, run: number, search = "") =>
+  get<RunTrace>(`/api/item/${item}/run/${run}/trace${search}`);
 
 /**
  * Le détail d'un item, plus le texte de `validate.md`.
