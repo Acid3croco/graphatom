@@ -57,7 +57,8 @@ def crash(conn, run: dict, command_value: str = "exit 3") -> None:
     command(run, command_value)
     kernel.apply(conn, run["id"], {
         "outcome": "crashed", "error": "ValueError: passation absente",
-        "timeout": False, "exit_code": 3, "log_tail": "texte humain variable",
+        "timeout": False, "exit_code": 3,
+        "log_tail": f"texte humain du run {run['id']}",
     })
 
 
@@ -106,7 +107,13 @@ def changement(conn, revision: str) -> None:
         crash(conn, second, "exit 4" if mode == "commande" else "exit 3")
         assert etat(conn, item_id)["state"] == "travail", mode
         assert kernel.claim(conn, item_id)["attempt"] == 3, mode
-    print("2. commande ou workspace différent : troisième tentative conservée ✓")
+
+    item_id = item(conn, revision)
+    too_large = "x" * (blocks.SIGNATURE_BYTES + 1)
+    crash(conn, kernel.claim(conn, item_id), too_large)
+    crash(conn, kernel.claim(conn, item_id), too_large)
+    assert etat(conn, item_id)["state"] == "travail"
+    print("2. commande ou workspace différent, ou borne dépassée : relance conservée ✓")
 
 
 def transitoire(conn, revision: str) -> None:
