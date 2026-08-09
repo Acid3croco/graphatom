@@ -64,13 +64,19 @@ class Executor:
 def resolve(bundle: dict, node: dict) -> Executor:
     """Résout les valeurs du graph puis du nœud, sans modifier les données."""
     defaults = bundle.get("agent") or {}
-    local = (node.get("config") or {}).get("agent") or {}
+    config = node.get("config") or {}
+    local = config.get("agent") or {}
+    harness = config.get("harness_cmd")
     return Executor(
-        cli=local.get("cli", defaults.get("cli")),
-        model=local.get("model", defaults.get("model")),
-        cmd=local.get("cmd"),
-        cmd_uses_executor=local.get("cmd_uses_executor", False),
-        effort=local.get("effort", defaults.get("effort")),
+        cli=(None if harness is not None
+             else local.get("cli", defaults.get("cli"))),
+        model=(None if harness is not None
+               else local.get("model", defaults.get("model"))),
+        cmd=harness if harness is not None else local.get("cmd"),
+        cmd_uses_executor=(False if harness is not None
+                           else local.get("cmd_uses_executor", False)),
+        effort=(None if harness is not None
+                else local.get("effort", defaults.get("effort"))),
         timeout_s=local.get("timeout_s", defaults.get("timeout_s")),
     )
 

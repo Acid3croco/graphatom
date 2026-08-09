@@ -98,8 +98,9 @@ printf '{"outcome": "done", "summary": "candidat %s"}' "$K" > outcome.json
 # coûte est dit, et c'est bien plus que ce qu'un candidat coûte — c'est
 # l'haltère, et le front doit pouvoir montrer les deux bouts.
 JUGE = """
-printf 'Les deux finalistes tiennent les critères ; A le fait en moins de lignes.\\n' \\
-    > verdict.md
+printf '%s\\n' '# Finaliste A' '' '1. **Tenu.** Tous les critères sont tenus.' '' \\
+    '# Finaliste B' '' '1. **Tenu.** Tous les critères sont tenus.' '' \\
+    '# Comparaison' '' 'A le fait en moins de lignes.' > verdict.md
 printf '%s\\n' '## Fait' 'Finalistes départagés.' '' '## Appris' 'A est plus court.' '' \\
     '## Pas fait' 'Rien.' > passation-judge.md
 printf '{"input_tokens": 50000, "total_cost_usd": 4.00}' > usage.json
@@ -146,6 +147,7 @@ def bundle() -> dict:
     spec = json.loads(PROFIL.read_text())
     spec["name"] = "code-task-cycle-test"
     for node, cmd in DOUBLURES.items():
+        spec["nodes"][node]["config"].pop("harness_cmd", None)
         agent = spec["nodes"][node]["config"]["agent"]
         agent["cmd"] = cmd
         # les budgets d'origine sont ceux d'un vrai modèle : un quart d'heure

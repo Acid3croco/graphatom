@@ -89,6 +89,9 @@ assert.deepEqual(historiques.map(agent => execution(undefined, agent)), [
   { kind: "composed", cli: "opencode", model: "deepseek-v4-flash-free", effort: null },
 ]);
 assert.deepEqual(execution(undefined, { cmd: "printf ordinaire" }), { kind: "shell" });
+assert.deepEqual(execution(graph, { cmd: "python scripts/test_harness.py" }), {
+  kind: "shell",
+});
 assert.deepEqual(execution(undefined, undefined, undefined), { kind: "none" });
 assert.deepEqual(execution({ cli: "claude" }), {
   kind: "model",
