@@ -250,6 +250,14 @@ export type BundleAgent = {
   silence_s?: number;
 };
 
+/** Le choix fermé d'exécution d'un wagon publié. */
+export type BundleExecution = {
+  kind: "agent" | "command";
+  cmd?: string;
+  timeout_s?: number;
+  silence_s?: number;
+};
+
 /**
  * La config d'un nœud, telle qu'elle est publiée.
  *
@@ -260,6 +268,7 @@ export type BundleAgent = {
 export type BundleConfig = {
   lease_s?: number;
   agent?: BundleAgent;
+  execution?: BundleExecution;
   question?: string;
   options?: string[];
   owner?: string;

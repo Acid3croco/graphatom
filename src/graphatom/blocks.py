@@ -4,10 +4,10 @@ Un bloc reçoit un contexte et retourne {"outcome": ...} plus ce qu'il veut.
 Il ne touche jamais la base : le noyau réserve avant, applique après.
 Les stubs simulent le travail via la config du nœud.
 
-Un nœud ACT / CHECK / JUDGE peut déclarer `config.agent` : un vrai agent
-CLI fait alors le travail. Le contrat est minuscule — le bloc écrit
-`prompt.md` dans le workspace, résout l'adaptateur configuré ou la commande
-explicite, puis lit `outcome.json`. Pas de
+Un nœud ACT / CHECK / JUDGE déclare `config.execution` : `agent` appelle la
+CLI configurée et reçoit `prompt.md`, `command` exécute un programme
+déterministe sans faux prompt ni fausse passation. Les deux écrivent
+`outcome.json`, que le bloc relit. Pas de
 fichier d'issue valide = crashed, et le noyau route comme d'habitude.
 
 Une extension optionnelle : si la tentative laisse un `usage.json`, le
@@ -394,12 +394,16 @@ def _fill(ctx: Context, text: str, subject: str) -> str:
     return text
 
 
-def _prompt(ctx: Context, workspace: Path, subject: str) -> str:
+def _prompt(ctx: Context, workspace: Path, subject: str,
+            resolved: executors.Executor | None = None) -> str:
     """Le prompt de la tentative : celui du nœud, le contrat, et la reprise."""
+    resolved = resolved or executors.resolve(ctx.bundle, ctx.node)
     outcomes = sorted(ctx.node.get("edges") or {})
     outcome_path = workspace / OUTCOME_NAME
+    if resolved.prompt is None:
+        raise ValueError(f"{ctx.run['node']} : exécution agent sans prompt résolu")
     return os.path.expandvars(
-        _fill(ctx, ctx.config["agent"]["prompt"], subject)
+        _fill(ctx, resolved.prompt, subject)
     ) + ctx.extra + _phase_contract(ctx) + (
         "\n\n--- Contrat GraphAtom ---\n"
         f"Tu es le bloc « {ctx.run['node']} » d'un rail d'exécution. "
@@ -408,7 +412,7 @@ def _prompt(ctx: Context, workspace: Path, subject: str) -> str:
         f"Avant de terminer, écris impérativement {outcome_path} : "
         f'{{"outcome": <une valeur parmi {outcomes}>, "summary": "<une phrase>"}}\n'
         "Sans ce fichier, ta tentative est classée crashed et sera retentée."
-        + _demande_passation(ctx, workspace)
+        + _demande_passation(ctx, workspace, resolved)
     ) + _passation(ctx) + _reprise(ctx, workspace)
 
 
@@ -439,7 +443,8 @@ def _phase_contract(ctx: Context) -> str:
     return ""
 
 
-def _demande_passation(ctx: Context, workspace: Path) -> str:
+def _demande_passation(ctx: Context, workspace: Path,
+                       resolved: executors.Executor) -> str:
     """Ce qu'un nœud laisse au suivant : trois sections, et rien de plus.
 
     La forme est courte et fermée, sinon la passation devient un journal que
@@ -449,12 +454,9 @@ def _demande_passation(ctx: Context, workspace: Path) -> str:
     nommément — c'est pour ça qu'elle est demandée en toutes lettres, et
     demandée même en cas de succès.
     """
-    # Quelques nœuds sont des scripts déterministes rangés derrière la même
-    # interface `agent` : ils n'apprennent rien et leur prompt dit « pas
-    # d'agent ici ». Leur config l'annonce, au lieu de fabriquer une
-    # passation creuse qui prétendrait venir d'un modèle.
-    if (ctx.config["agent"].get("passation") is False
-            or ctx.config.get("harness_cmd") is not None):
+    # Une commande déterministe n'apprend rien : son contrat coupe la
+    # passation au lieu d'en fabriquer une qui prétendrait venir d'un modèle.
+    if not resolved.handoff:
         return ""
     fichier = workspace / f"passation-{ctx.run['node']}.md"
     return (
@@ -879,8 +881,8 @@ def _agent_timeout_s(config: dict) -> float:
 
 
 def _attempt(ctx: Context, workspace: Path) -> dict:
-    """Une tentative d'agent. Contrat : prompt.md → outcome.json."""
-    cfg = ctx.config["agent"]
+    """Une tentative de wagon. Contrat : exécution → outcome.json."""
+    resolved = executors.resolve(ctx.bundle, ctx.node)
     subject = ctx.conn.execute(
         "SELECT subject_key FROM subject WHERE id = %s", (ctx.item["subject_id"],)
     ).fetchone()["subject_key"]
@@ -888,14 +890,19 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
     # Le prompt se construit avant la purge : une relance du même nœud doit
     # recevoir la passation de sa tentative précédente. Le process, lui,
     # démarre après la purge et ne peut donc réussir avec ce vieux fichier.
-    prompt = _prompt(ctx, workspace, subject)
+    prompt = (_prompt(ctx, workspace, subject, resolved)
+              if resolved.prompt is not None else None)
     outcome_path = workspace / OUTCOME_NAME
     starved_path = workspace / STARVED_NAME
     handoff_path = workspace / f"passation-{ctx.run['node']}.md"
     for transient in (outcome_path, starved_path, workspace / USAGE_NAME,
                       handoff_path):
         transient.unlink(missing_ok=True)  # rien de la tentative précédente
-    (workspace / PROMPT_NAME).write_text(prompt)
+    prompt_path = workspace / PROMPT_NAME
+    if prompt is None:
+        prompt_path.unlink(missing_ok=True)
+    else:
+        prompt_path.write_text(prompt)
 
     env = os.environ | {"GRAPHATOM_WORKSPACE": str(workspace),
                         "GRAPHATOM_SUBJECT_KEY": subject,
@@ -929,7 +936,6 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
     log = attempt_log(workspace, ctx.run)
     pgid_file = workspace / PGID_FILE
     watched = (log, workspace, ctx.worktree)
-    resolved = executors.resolve(ctx.bundle, ctx.node)
     if resolved.timeout_s is None:
         resolved = replace(resolved, timeout_s=_agent_timeout_s(ctx.config))
     env.update(executors.environment(resolved))
@@ -937,6 +943,7 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
     uses_executor = resolved.cmd is None or resolved.cmd_uses_executor
     attempt_command(workspace, ctx.run).write_text(json.dumps({
         "kind": ("composed" if resolved.cmd_uses_executor else
+                 "command" if resolved.kind in {"command", "harness"} else
                  "shell" if resolved.cmd is not None else "model"),
         "executor": ({
             "cli": resolved.cli,
@@ -955,8 +962,8 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
             _write_pgid(pgid_file, proc, cmd, ctx.run["id"])
             mark = _mark(*watched)  # nos traces sont écrites : la suite est de l'agent
             _wait(proc, watched, mark,
-                  _agent_timeout_s(ctx.config),
-                  float(cfg.get("silence_s", AGENT_SILENCE_S)))
+                  float(resolved.timeout_s),
+                  float(resolved.silence_s or AGENT_SILENCE_S))
             # L'adaptateur peut avoir fini alors qu'un de ses descendants
             # travaille encore. C'est notamment le cas de GNU timeout en
             # mode --foreground : il borne la commande, mais pas les enfants
@@ -1014,9 +1021,7 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
                     )
             except OSError:
                 pass
-    if (ctx.config["agent"].get("passation") is not False
-            and ctx.config.get("harness_cmd") is None
-            and not is_failure_outcome(outcome)):
+    if resolved.handoff and not is_failure_outcome(outcome):
         if erreur := _passation_invalide(handoff_path):
             return _autopsy(proc, log, ValueError(erreur), timeout=False)
     return result
@@ -1492,7 +1497,7 @@ def fetch(ctx: Context) -> dict:
 def judge(ctx: Context) -> dict:
     if judge_source(ctx.node):  # un JUDGE qui départage des finalistes
         return _arbitrate(ctx)
-    if "agent" in ctx.config:
+    if executors.configured(ctx.node):
         return _agent(ctx)
     ctx.simulate_work()
     # le stub répond ce que la config scripte ; un vrai JUDGE appelle un agent
@@ -1682,7 +1687,7 @@ def _arbitrate(ctx: Context) -> dict:
 
 
 def act(ctx: Context) -> dict:
-    if "agent" in ctx.config:
+    if executors.configured(ctx.node):
         return _agent(ctx)
     ctx.simulate_work()
     name = f"{ctx.run['node']}-{ctx.run['cycle']}-{ctx.run['attempt']}"
@@ -1693,7 +1698,7 @@ def act(ctx: Context) -> dict:
 
 
 def check(ctx: Context) -> dict:
-    if "agent" in ctx.config:
+    if executors.configured(ctx.node):
         return _agent(ctx)
     ctx.simulate_work()
     return {"outcome": ctx.config.get("stub_outcome", "pass")}

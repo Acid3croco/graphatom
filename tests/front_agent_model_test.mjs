@@ -93,6 +93,17 @@ assert.deepEqual(execution(graph, { cmd: "python scripts/test_harness.py" }), {
   kind: "shell",
 });
 assert.deepEqual(execution(undefined, undefined, undefined), { kind: "none" });
+assert.deepEqual(
+  execution(graph, undefined, undefined, { kind: "command", cmd: "true" }),
+  { kind: "shell" },
+);
+assert.deepEqual(
+  execution(graph, { model: "sonnet" }, undefined, {
+    kind: "agent",
+    cmd: "bash agent-declared.sh",
+  }),
+  { kind: "composed", cli: "codex", model: "sonnet", effort: "high" },
+);
 assert.deepEqual(execution({ cli: "claude" }), {
   kind: "model",
   cli: "claude",

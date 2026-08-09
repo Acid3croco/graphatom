@@ -73,6 +73,101 @@ GRAPH_AGENT_KEYS = {"cli", "model", "effort", "timeout_s"}
 NODE_AGENT_KEYS = {"cli", "model", "effort", "cmd", "cmd_reason",
                    "cmd_uses_executor", "prompt", "timeout_s", "silence_s",
                    "passation"}
+EXECUTION_KEYS = {"kind", "cmd", "timeout_s", "silence_s"}
+EXECUTION_KINDS = {"agent", "command"}
+EXECUTABLE_BLOCKS = {"JUDGE", "ACT", "CHECK"}
+
+
+def _positive_number(place: str, key: str, value) -> None:
+    """Valide une durée déclarative, sans accepter un booléen comme entier."""
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or value <= 0):
+        raise GraphError(f"{place} : execution.{key} invalide {value!r}")
+
+
+def _validate_executions(bundle: dict) -> None:
+    """Valide le contrat explicite qui choisit agent ou commande.
+
+    Les graphes historiques sans ``execution`` gardent leur ancien contrat.
+    Dès qu'un nœud adopte la nouvelle forme, aucune clé historique ne peut
+    reprendre la priorité en silence.
+    """
+    defaults = bundle.get("agent") or {}
+
+    def check(name: str, spec: dict, config: dict) -> None:
+        execution = config.get("execution")
+        if execution is None:
+            return
+        if spec.get("terminal"):
+            raise GraphError(f"{name} : un terminal ne peut pas avoir execution")
+        if spec.get("block") not in EXECUTABLE_BLOCKS:
+            raise GraphError(
+                f"{name} : execution refusée sur un bloc {spec.get('block')}"
+            )
+        if not isinstance(execution, dict):
+            raise GraphError(f"{name} : execution n'est pas un objet")
+        unknown = set(execution) - EXECUTION_KEYS
+        if unknown:
+            raise GraphError(f"{name} : réglage execution inconnu {sorted(unknown)}")
+        kind = execution.get("kind")
+        if kind not in EXECUTION_KINDS:
+            raise GraphError(
+                f"{name} : execution.kind invalide {kind!r} — "
+                f"attendu : {sorted(EXECUTION_KINDS)}"
+            )
+        for key in ("timeout_s", "silence_s"):
+            if key in execution:
+                _positive_number(name, key, execution[key])
+
+        local = config.get("agent")
+        if kind == "command":
+            command = execution.get("cmd")
+            if not isinstance(command, str) or not command.strip():
+                raise GraphError(f"{name} : execution command sans cmd")
+            if local is not None:
+                raise GraphError(
+                    f"{name} : execution command ne peut pas déclarer agent"
+                )
+        else:
+            if local is None:
+                raise GraphError(f"{name} : execution agent sans config.agent")
+            prompt = local.get("prompt") if isinstance(local, dict) else None
+            if not isinstance(prompt, str) or not prompt.strip():
+                raise GraphError(f"{name} : execution agent sans prompt")
+            effective = {**defaults, **local}
+            if not effective.get("cli"):
+                raise GraphError(f"{name} : execution agent sans CLI")
+            if "cmd" in execution and (
+                    not isinstance(execution["cmd"], str)
+                    or not execution["cmd"].strip()):
+                raise GraphError(f"{name} : execution agent avec cmd invalide")
+
+        if "harness_cmd" in config:
+            raise GraphError(f"{name} : execution et harness_cmd sont incompatibles")
+        if isinstance(local, dict):
+            legacy = {
+                "cmd", "cmd_reason", "cmd_uses_executor", "timeout_s", "silence_s"
+            } & set(local)
+            if legacy:
+                raise GraphError(
+                    f"{name} : execution et réglages agent historiques "
+                    f"incompatibles {sorted(legacy)}"
+                )
+
+    for name, spec in bundle["nodes"].items():
+        config = spec.get("config") or {}
+        check(name, spec, config)
+        fanout = config.get("fanout")
+        variants = fanout.get("variants") if isinstance(fanout, dict) else None
+        if not isinstance(variants, list):
+            continue
+        for index, variant in enumerate(variants):
+            if isinstance(variant, dict):
+                check(
+                    f"{name}.fanout.variants[{index}]",
+                    spec,
+                    _overlay(config, variant),
+                )
 
 
 def _validate_agent_values(place: str, agent: dict, allowed: set[str]) -> None:
@@ -293,8 +388,8 @@ def candidate_node(spec: dict, candidate: int) -> dict:
 
     Une variante est un fragment de config : les clés qu'elle nomme
     surchargent celles du nœud, celles qu'elle tait sont héritées. Les objets
-    fusionnent clé à clé — une variante qui ne change que `agent.cmd` garde
-    le prompt et les budgets du nœud. Le reste du nœud, ses arêtes en tête,
+    fusionnent clé à clé — une variante qui ne change que le modèle garde
+    le prompt, l'exécution et les budgets du nœud. Le reste du nœud, ses arêtes en tête,
     est celui de tout le monde : un candidat ne réécrit pas le graph.
     """
     variant = fanout_variants(spec)[candidate]
@@ -319,6 +414,7 @@ def validate(bundle: dict) -> None:
 
     nodes = bundle["nodes"]
     _validate_agents(bundle)
+    _validate_executions(bundle)
     if bundle["entry"] not in nodes:
         raise GraphError(f"entry inconnu : {bundle['entry']}")
 

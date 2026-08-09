@@ -25,8 +25,8 @@ LEGACY = {
     ("code-task", "implement[1]"): ("codex", "gpt-5.6-sol", "high"),
     ("code-task", "implement[2]"): (
         "opencode", "opencode/deepseek-v4-flash-free", None),
-    ("code-task", "test_backend"): ("codex", "gpt-5.6-luna", "low"),
-    ("code-task", "test_frontend"): ("codex", "gpt-5.6-luna", "medium"),
+    ("code-task", "test_backend"): (None, None, None),
+    ("code-task", "test_frontend"): (None, None, None),
     ("code-task", "validate"): ("codex", "gpt-5.6-luna", "low"),
     ("code-task", "release"): ("codex", "gpt-5.6-luna", "low"),
     ("code-task", "judge"): ("codex", "gpt-5.6-sol", "high"),
@@ -39,8 +39,6 @@ LEGACY = {
 PROMPTS = {
     ("code-task", "scope"): "c02cb2ab7b2f",
     ("code-task", "implement"): "1fdfc7929b26",
-    ("code-task", "test_backend"): "9a3125818e52",
-    ("code-task", "test_frontend"): "b0eeccfe18aa",
     ("code-task", "validate"): "5160b5153d94",
     ("code-task", "release"): "dda519e4cff3",
     ("code-task", "judge"): "56f3b53169d6",
@@ -58,18 +56,26 @@ def bundles() -> dict[str, dict]:
 
 
 def inventaire(paquets: dict[str, dict]) -> None:
-    """1 et 4. Les défauts sont partout; les commandes restantes sont motivées."""
+    """1 et 4. Chaque exécution courante choisit agent ou commande."""
     for name, paquet in paquets.items():
         assert (paquet.get("agent") or {}).get("cli"), \
             f"{name} ne déclare pas d'exécuteur par défaut"
         for node, spec in paquet["nodes"].items():
-            local = (spec.get("config") or {}).get("agent") or {}
-            if "cmd" in local:
-                assert local.get("cmd_reason"), f"{name}.{node}.agent.cmd sans raison"
-                assert "agent-codex.sh" not in local["cmd"]
-                assert "agent-opencode.sh" not in local["cmd"]
-                assert "claude --dangerously" not in local["cmd"]
-    print("1 et 4. inventaire des défauts, surcharges et exceptions ✓")
+            config = spec.get("config") or {}
+            execution = config.get("execution")
+            if execution is None:
+                continue
+            assert execution["kind"] in {"agent", "command"}, (name, node)
+            if execution["kind"] == "command":
+                assert "agent" not in config, (name, node)
+            else:
+                assert "agent" in config, (name, node)
+            assert "harness_cmd" not in config, (name, node)
+            local = config.get("agent") or {}
+            assert not ({"cmd", "cmd_reason", "cmd_uses_executor",
+                         "timeout_s", "silence_s"} & set(local)), \
+                (name, node)
+    print("1 et 4. chaque wagon choisit agent ou command, sans priorité cachée ✓")
 
 
 def resolution(paquets: dict[str, dict]) -> None:

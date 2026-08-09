@@ -73,6 +73,15 @@ const shell = render(
 );
 assert.deepEqual(executions(shell), ["shell déterministe"]);
 
+const declaredCommand = render(
+  {
+    block: "CHECK",
+    config: { execution: { kind: "command", cmd: "python harness.py" } },
+  },
+  { cli: "codex", model: "gpt-5.6" },
+);
+assert.deepEqual(executions(declaredCommand), ["shell déterministe"]);
+
 // Un bloc sans objet `agent` garde son exécuteur déterministe interne. Les
 // défauts du graph ne l'activent pas implicitement.
 const stub = render(
@@ -95,6 +104,10 @@ const fanout = render(
           { label: "cli", agent: { cli: "claude" } },
           { label: "modèle", agent: { model: "gpt-variante" } },
           { label: "shell", agent: { cmd: "printf variante" } },
+          {
+            label: "commande déclarée",
+            execution: { kind: "command", cmd: "printf variante" },
+          },
         ],
         reduce: "first_pass",
       },
@@ -106,6 +119,7 @@ assert.deepEqual(executions(fanout), [
   "codex · gpt-nœud",
   "claude · gpt-nœud",
   "codex · gpt-variante",
+  "shell déterministe",
   "shell déterministe",
 ]);
 

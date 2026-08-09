@@ -70,7 +70,7 @@ def depot(tmp: Path) -> Path:
 def cleanup(repo: Path, workspace: Path, subject: str) -> dict:
     """Le cmd de cleanup du graph, joué tel quel. Rend son outcome.json."""
     bundle = json.loads((ROOT / "examples" / "code-task.json").read_text())
-    cmd = bundle["nodes"]["cleanup"]["config"]["agent"]["cmd"]
+    cmd = bundle["nodes"]["cleanup"]["config"]["execution"]["cmd"]
     outcome = workspace / "outcome.json"
     outcome.unlink(missing_ok=True)
     done = subprocess.run(

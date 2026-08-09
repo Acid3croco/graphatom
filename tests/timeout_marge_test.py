@@ -53,6 +53,10 @@ def main() -> None:
     # 2. un nœud sans bail garde le défaut de 570 s
     assert kernel.agent_timeout_s({"agent": {"silence_s": 300}},
                                   AGENT_TIMEOUT_S) == AGENT_TIMEOUT_S
+    assert kernel.agent_timeout_s(
+        {"execution": {"kind": "command", "cmd": "true", "timeout_s": 42}},
+        AGENT_TIMEOUT_S,
+    ) == 42
     assert kernel.agent_timeout_s({}, AGENT_TIMEOUT_S) == AGENT_TIMEOUT_S
     assert AGENT_TIMEOUT_S == 570
     print(f"2. un nœud sans `lease_s` garde le défaut de {AGENT_TIMEOUT_S} s ✓")

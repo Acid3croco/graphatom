@@ -27,6 +27,9 @@
         "lease_s": 600,
         "agent": {
           "prompt": "Sujet : {subject_key} — le brief de la mission : un objectif ambitieux et une référence de qualité concrète et inspectable. Lis le brief, étudie la référence de près.\n\nDécompose le livrable en parties jugeables indépendamment, puis écris trois fichiers dans ton workspace :\n- plan.md : les parties, leurs dépendances, ce qui peut se construire en parallèle ;\n- rubric.md : la barre de qualité — pour chaque partie, les preuves inspectables attendues et les critères de comparaison avec la référence ;\n- gates.sh : un script shell déterministe qui vérifie le livrable dans $GRAPHATOM_TARGET_DIR (tests, lint, budget perf, a11y...) et sort en code 0 si tout passe, non-zéro sinon. Aucun appel à un modèle dedans : c'est une porte, pas un avis.\n\nNe construis rien encore. outcome `planned` quand les trois fichiers sont écrits."
+        },
+        "execution": {
+          "kind": "agent"
         }
       },
       "edges": {
@@ -40,6 +43,9 @@
         "lease_s": 900,
         "agent": {
           "prompt": "Constructeur. Sujet : {subject_key}. Le livrable se construit dans $GRAPHATOM_TARGET_DIR ; ne touche à rien en dehors de ce dossier et de ton workspace, ne modifie jamais gates.sh ni rubric.md, ne déploie rien.\n\nLis plan.md et rubric.md dans ton workspace. Si checks.log existe, les gates ont cassé : corrige d'abord ça. Si gap.md existe, c'est le verdict du critique sur ta version précédente : corrige LE plus gros écart qu'il identifie. Regarde tes tentatives passées (agent-*.log) — si la même approche a déjà échoué deux fois, change d'approche au lieu de la répéter.\n\nPour les parties indépendantes du plan, lance tes propres sous-agents en parallèle si utile : le fan-out est ton affaire, pas celle du rail.\n\noutcome `done` quand le livrable est prêt à être vérifié."
+        },
+        "execution": {
+          "kind": "agent"
         }
       },
       "edges": {
@@ -50,10 +56,9 @@
       "block": "CHECK",
       "config": {
         "lease_s": 600,
-        "agent": {
-          "cmd": "if bash gates.sh > checks.log 2>&1; then printf '{\"outcome\":\"pass\",\"summary\":\"gates vertes\"}' > outcome.json; else printf '{\"outcome\":\"fail\",\"summary\":\"gates rouges, voir checks.log\"}' > outcome.json; fi",
-          "prompt": "(porte déterministe — ce prompt n'est pas lu ; gates.sh, écrit par le nœud plan, décide seul)",
-          "cmd_reason": "Commande shell déterministe : aucun modèle ni adaptateur d agent ne doit intervenir."
+        "execution": {
+          "kind": "command",
+          "cmd": "if bash gates.sh > checks.log 2>&1; then printf '{\"outcome\":\"pass\",\"summary\":\"gates vertes\"}' > outcome.json; else printf '{\"outcome\":\"fail\",\"summary\":\"gates rouges, voir checks.log\"}' > outcome.json; fi"
         }
       },
       "edges": {
@@ -67,6 +72,9 @@
         "lease_s": 600,
         "agent": {
           "prompt": "Critique à contexte neuf : tu n'as pas construit ce livrable et tu ne le modifies pas — lecture seule sur $GRAPHATOM_TARGET_DIR. Sujet : {subject_key}.\n\nInspecte le livrable réel — pas de résumé : ouvre les fichiers, rends les pages, regarde les captures. Lis rubric.md et checks.log dans ton workspace, puis compare côte à côte avec la référence du brief, en aveugle quand c'est possible.\n\nÉcris gap.md dans ton workspace : LE plus gros écart significatif restant — un seul — avec la preuve qui le montre, en écrasant la version du round précédent.\n\noutcome `perfect` si aucun écart significatif ne reste ; `revise` s'il reste un écart corrigeable ; `stuck` si les rounds tournent en rond sans progrès mesurable."
+        },
+        "execution": {
+          "kind": "agent"
         }
       },
       "edges": {
@@ -81,6 +89,9 @@
         "lease_s": 900,
         "agent": {
           "prompt": "Passe d'intégration : le critique n'a plus d'écart. Relis le livrable entier dans $GRAPHATOM_TARGET_DIR comme un tout — cohérence entre les parties construites séparément : styles, conventions, doublons, coutures. Corrige uniquement ces incohérences, rien d'autre ; gates.sh et rubric.md restent intouchables. Écris integration.md dans ton workspace : ce que tu as unifié. outcome `done`."
+        },
+        "execution": {
+          "kind": "agent"
         }
       },
       "edges": {
@@ -91,10 +102,9 @@
       "block": "CHECK",
       "config": {
         "lease_s": 600,
-        "agent": {
-          "cmd": "if bash gates.sh > checks.log 2>&1; then printf '{\"outcome\":\"pass\",\"summary\":\"gates vertes sur le livrable intégré\"}' > outcome.json; else printf '{\"outcome\":\"fail\",\"summary\":\"l'intégration a cassé une gate\"}' > outcome.json; fi",
-          "prompt": "(porte déterministe finale — mêmes gates, livrable intégré)",
-          "cmd_reason": "Commande shell déterministe : aucun modèle ni adaptateur d agent ne doit intervenir."
+        "execution": {
+          "kind": "command",
+          "cmd": "if bash gates.sh > checks.log 2>&1; then printf '{\"outcome\":\"pass\",\"summary\":\"gates vertes sur le livrable intégré\"}' > outcome.json; else printf '{\"outcome\":\"fail\",\"summary\":\"l'intégration a cassé une gate\"}' > outcome.json; fi"
         }
       },
       "edges": {

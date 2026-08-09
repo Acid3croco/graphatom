@@ -122,7 +122,7 @@ def renoncement_force(bundle: dict, workspace: Path) -> None:
     )
 
     node = json.loads(json.dumps(bundle["nodes"]["validate"]))
-    node["config"]["agent"]["cmd"] = (
+    node["config"]["execution"]["cmd"] = (
         "grep -q 'Critère 2 non vérifié' c0/passation-implement.md || exit 7; "
         "printf '%s\\n' '# Validation — gh:o/r#60' '' "
         "'- [x] 1. Le premier critère — preuve rejouée' "

@@ -104,19 +104,21 @@ def main() -> None:
     else:
         sys.exit("ÉCHEC : un nœud WAIT solo a passé la validation")
 
-    # 6. les agents de modèle écrivent une passation par défaut. Un script
-    #    déterministe peut la désactiver explicitement, avec un booléen.
+    # 6. chaque wagon exécutable dit agent ou commande. Une commande n'a
+    #    aucun faux agent, et les deux formes ne peuvent pas se superposer.
     bundle = json.loads(json.dumps(bundles["code-task.json"]))
-    assert bundle["nodes"]["worktree"]["config"]["agent"]["passation"] is False
+    worktree = bundle["nodes"]["worktree"]["config"]
+    assert worktree["execution"]["kind"] == "command"
+    assert "agent" not in worktree
     graph.validate(bundle)
-    bundle["nodes"]["worktree"]["config"]["agent"]["passation"] = "non"
+    worktree["agent"] = {"prompt": "agent parasite"}
     try:
         graph.validate(bundle)
     except graph.GraphError as e:
-        assert "passation" in str(e) and "booléen" in str(e), str(e)
-        print(f"6. passation false acceptée, valeur non booléenne refusée : {e} ✓")
+        assert "command" in str(e) and "agent" in str(e), str(e)
+        print(f"6. contrat command explicite, faux agent refusé : {e} ✓")
     else:
-        sys.exit("ÉCHEC : agent.passation non booléen a passé la validation")
+        sys.exit("ÉCHEC : un wagon command avec agent a passé la validation")
 
     print("\nvalidation : OK — une cible on_kernel fantôme ne se publie plus")
 

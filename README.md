@@ -48,6 +48,23 @@ refusée, et une file sans arête sur elle-même aussi. `deploy` est la seule
 
 Hors noyau, en modules : EVAL, ADMIT, dialogue durable, gouverneur de flotte.
 
+## Vérifier le dépôt
+
+Une seule commande tient l'inventaire fermé de toutes les preuves. Elle
+refuse aussi un fichier de test neuf qui n'est classé dans aucune porte :
+
+```sh
+uv run python scripts/check.py          # noyau, sans service DB, Docker ni LLM réel
+uv run python scripts/check.py --full   # ajoute base, crash, concurrence et image Docker
+uv run python scripts/check.py --live   # ajoute le vrai fournisseur LLM gratuit
+```
+
+La porte s'arrête au premier échec et imprime la commande exacte. `--full`
+est la preuve locale avant publication. `--live` dépend de `opencode`, de son
+modèle gratuit et du réseau ; ce fournisseur externe n'est pas une condition
+de la preuve hermétique. GitHub Actions rejoue la porte de noyau sur chaque
+push et chaque pull request.
+
 ## Lancer le squelette (milestone 1)
 
 ```sh
@@ -603,7 +620,8 @@ is already in use` nomme le coupable : le shell le retire et rejoue le
 ## De vrais agents dans les blocs (milestone 3b)
 
 Un graph peut déclarer la CLI, le modèle et l'effort par défaut. Un nœud ACT / CHECK /
-JUDGE qui porte `config.agent` hérite de chaque valeur séparément :
+JUDGE choisit d'abord son exécution, puis un nœud `agent` hérite de chaque
+valeur séparément :
 
 ```json
 "agent": {"cli": "codex", "model": "gpt-5.6-luna", "effort": "low"},
@@ -611,6 +629,7 @@ JUDGE qui porte `config.agent` hérite de chaque valeur séparément :
   "test": {
     "block": "CHECK",
     "config": {
+      "execution": {"kind": "agent"},
       "agent": {
         "model": "gpt-5.6-sol",
         "effort": "high",
@@ -629,39 +648,44 @@ passent `prompt.md` et produisent `usage.json` quand la CLI rapporte un usage.
 Leur délai descend du bail du nœud, avec la même marge que le couperet du
 noyau : le graph ne porte pas une seconde valeur à synchroniser.
 
-Une commande shell reste possible pour un cas spécial :
+Une commande déterministe est un autre contrat. Elle ne déclare aucun faux
+agent, ne reçoit aucun `prompt.md` et ne doit laisser aucune passation :
 
 ```json
-"agent": {
+"execution": {
+  "kind": "command",
   "cmd": "bash scripts/operation-deterministe.sh",
-  "cmd_reason": "Cette porte déterministe ne lance aucun modèle.",
-  "prompt": "Contrat de cette opération…"
+  "silence_s": 120
 }
 ```
 
-`cmd` a toujours priorité sur l'exécuteur structuré. Chaque tentative écrit
+Un agent peut porter un wrapper déterministe — par exemple ses portes après
+la CLI — sans ambiguïté : `execution.kind` reste `agent` et `execution.cmd`
+porte le wrapper. `agent.cmd`, `cmd_uses_executor` et `harness_cmd` ne font
+plus partie des graphes sources ; ils restent seulement lisibles dans les
+révisions immuables déjà publiées.
+
+Chaque tentative écrit
 sa commande effective dans `command-<nœud>-<cycle>-<tentative>.json`, avec
-sa nature (`model`, `shell` ou `composed`), l'exécuteur configuré
+sa nature (`model`, `command` ou `composed`), l'exécuteur configuré
 et la chaîne exacte exécutée après interpolation. Une commande shell pure ne
-prétend donc pas avoir exécuté le modèle qu'elle hérite. Un wrapper qui lance
-l'exécuteur déclaré pose `cmd_uses_executor: true` : le front montre alors la
-CLI, le modèle, l'effort et le wrapper, au lieu de le réduire à du shell. Cette trace est séparée
+prétend donc pas avoir exécuté le modèle par défaut du graph. Le front montre
+un agent composé avec sa CLI, son modèle, son effort et son wrapper. Cette trace est séparée
 du journal de l'agent : la commande du framework ne peut donc pas faire passer
 un agent muet pour un agent actif, ni inventer du travail à reprendre. Chaque occurrence
-restante porte `cmd_reason` : elle nomme la composition shell ou la porte
-déterministe qu'un adaptateur d'agent ne peut pas remplacer. Une CLI inconnue,
+Une CLI inconnue,
 ou une clé autre que `cli`, `model`, `effort` et `timeout_s` dans les valeurs
 par défaut, est refusée à la publication. Aucun secret ni identifiant d'accès
 ne fait partie de ce schéma. Pas d'`outcome.json` valide → `crashed`, retenté
 puis escaladé — comme n'importe quel bloc.
 
-### Le contrat d'un bloc agent, noir sur blanc
+### Le contrat d'exécution d'un wagon, noir sur blanc
 
 C'est lui qui rend le rail agnostique du fournisseur, et tout adaptateur
 de CLI s'y adosse. Il tient en trois fichiers, tous dans le workspace de
 l'item (`data/item-<N>/`), qui est aussi le répertoire courant du `cmd`.
 
-**Ce que la commande reçoit.**
+**Ce qu'un agent reçoit.**
 
 - `prompt.md`, écrit par le bloc dans le workspace avant chaque tentative :
   le `prompt` du nœud, puis le contrat rappelé en clair — le workspace, le
@@ -676,6 +700,10 @@ l'item (`data/item-<N>/`), qui est aussi le répertoire courant du `cmd`.
   `GRAPHATOM_DSN` (la base de l'item, jamais celle du rail).
   `GRAPHATOM_REPO_DIR` — le clone de référence — vient du worker et passe
   tel quel.
+
+Une exécution `command` ne reçoit pas de faux prompt. Elle reçoit le même
+répertoire courant et le même environnement de wagon, puis produit directement
+sa preuve et son `outcome.json`.
 
 **Ce que la commande doit écrire.** `outcome.json`, dans le workspace,
 un objet JSON à deux clés :

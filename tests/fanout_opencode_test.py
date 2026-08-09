@@ -80,8 +80,8 @@ def bundle_gratuit() -> dict:
     node["config"]["fanout"]["variants"] = [
         json.loads(json.dumps(VARIANTES[gratuits()[0]]))
     ]
-    node["config"]["agent"]["timeout_s"] = 60  # rien à attendre : la CLI manque
-    node["config"]["agent"]["silence_s"] = 60
+    node["config"]["execution"]["timeout_s"] = 60  # la CLI manque
+    node["config"]["execution"]["silence_s"] = 60
     node["config"]["lease_s"] = 300
     node["edges"] = {"done": "fini"}
     return {
@@ -132,7 +132,7 @@ def declaration() -> None:
         candidat = graph.candidate_node(REEL, rang)
         resolu = executors.resolve(paquet, candidat)
         env = executors.environment(resolu)
-        cmd = candidat["config"]["agent"]["cmd"]
+        cmd = candidat["config"]["execution"]["cmd"]
         assert (resolu.cli, resolu.model, resolu.effort) == \
             ("opencode", MODELE, None), resolu
         assert env["GRAPHATOM_AGENT_CLI"] == "opencode", env

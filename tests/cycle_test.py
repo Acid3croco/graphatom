@@ -143,17 +143,19 @@ DOUBLURES = {
 
 
 def bundle() -> dict:
-    """Le profil de production, ses seules `cmd` de modèle remplacées."""
+    """Le profil de production, toutes ses exécutions remplacées par des stubs."""
     spec = json.loads(PROFIL.read_text())
     spec["name"] = "code-task-cycle-test"
     for node, cmd in DOUBLURES.items():
-        spec["nodes"][node]["config"].pop("harness_cmd", None)
-        agent = spec["nodes"][node]["config"]["agent"]
-        agent["cmd"] = cmd
+        config = spec["nodes"][node]["config"]
+        config.pop("agent", None)
+        config["execution"] = {
+            "kind": "command", "cmd": cmd,
+            "timeout_s": 60, "silence_s": 60,
+        }
         # les budgets d'origine sont ceux d'un vrai modèle : un quart d'heure
         # d'attente pour une doublure qui rend en 50 ms n'apprend rien, et
         # allongerait le test d'autant le jour où l'une se pend
-        agent["timeout_s"], agent["silence_s"] = 60, 60
     fanout = spec["nodes"]["implement"]["config"]["fanout"]
     assert fanout["reduce"] == "keep_n", fanout  # le ticket, en une ligne
     assert fanout["n"] == 2, fanout
