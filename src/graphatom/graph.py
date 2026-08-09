@@ -82,7 +82,7 @@ def _validate_agent_values(place: str, agent: dict, allowed: set[str]) -> None:
         raise GraphError(f"{place} : réglage agent inconnu {sorted(unknown)}")
     if "cli" in agent:
         cli = agent["cli"]
-        if cli not in SUPPORTED_CLIS:
+        if not isinstance(cli, str) or cli not in SUPPORTED_CLIS:
             raise GraphError(f"{place} : CLI d'agent inconnue {cli!r}")
     if "model" in agent and (not isinstance(agent["model"], str)
                              or not agent["model"].strip()):
@@ -99,9 +99,6 @@ def _validate_agents(bundle: dict) -> None:
         if spec.get("terminal"):
             continue
         local = (spec.get("config") or {}).get("agent")
-        if local is None:
-            continue
-        _validate_agent_values(name, local, NODE_AGENT_KEYS)
         fanout = (spec.get("config") or {}).get("fanout")
         variants = fanout.get("variants") or [] if isinstance(fanout, dict) else []
         for index, variant in enumerate(variants):
@@ -109,6 +106,9 @@ def _validate_agents(bundle: dict) -> None:
             if override is not None:
                 _validate_agent_values(f"{name}.fanout.variants[{index}]", override,
                                        NODE_AGENT_KEYS)
+        if local is None:
+            continue
+        _validate_agent_values(name, local, NODE_AGENT_KEYS)
         if "cmd" not in local and "cli" not in local and not (defaults or {}).get("cli"):
             raise GraphError(f"{name} : agent sans cmd ni CLI structurée")
 
