@@ -250,7 +250,7 @@ function VariantFields({ variant }: { variant: Variant }) {
 /**
  * Les candidats d'une étape en fan-out, dépliés.
  *
- * Une table à elle, sous la ligne de l'étape : dix champs par candidat ne
+ * Une table à elle, sous la ligne de l'étape : les champs d'un candidat ne
  * tiennent pas dans les colonnes du journal, et les aligner de force les
  * rendrait illisibles. Le gagnant porte sa marque — un fond, un badge —
  * qu'aucun perdant ne porte : il se voit sans comparer les colonnes.
@@ -264,6 +264,7 @@ function Candidates({ candidates }: { candidates: Candidate[] }) {
           <TableHead>variante</TableHead>
           <TableHead>modèle</TableHead>
           <TableHead>CLI</TableHead>
+          <TableHead>effort</TableHead>
           <TableHead>issue</TableHead>
           <TableHead>sort</TableHead>
           <TableHead>durée</TableHead>
@@ -290,6 +291,9 @@ function Candidates({ candidates }: { candidates: Candidate[] }) {
             </TableCell>
             <TableCell className="whitespace-nowrap">
               {candidate.cli ?? ""}
+            </TableCell>
+            <TableCell className="whitespace-nowrap">
+              {candidate.effort ?? ""}
             </TableCell>
             <TableCell>{candidate.run.outcome ?? ""}</TableCell>
             {/* le vert est celui du gagnant, et de lui seul : un perdant

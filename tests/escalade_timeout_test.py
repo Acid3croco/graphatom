@@ -150,7 +150,9 @@ def dernier_event(conn, item_id: int) -> dict:
 
 
 def item_neuf(conn, revision: str, prefixe: str) -> int:
-    return kernel.admit(conn, revision, f"{prefixe}:{uuid.uuid4().hex[:8]}")
+    return kernel.admit(
+        conn, revision, f"{prefixe}:{uuid.uuid4().hex[:8]}", _allow_parallel_for_test=True
+    )
 
 
 def route(conn, item_id: int, outcome: str, attempt: int) -> str:
@@ -225,7 +227,7 @@ def escalade_directe(conn, revision: str) -> int:
     """3. `timed_out` escalade dès la première tentative, et toujours."""
     # cet item-là est le sujet d'une issue : sa question d'escalade sera lue
     # par le canal GitHub au point 7
-    item_id = kernel.admit(conn, revision, f"gh:{REPO}#111")
+    item_id = kernel.admit(conn, revision, f"gh:{REPO}#111", _allow_parallel_for_test=True)
     run = kernel.claim(conn, item_id)
     assert run["attempt"] == 1, run
     kernel.apply(conn, run["id"], {
@@ -254,7 +256,7 @@ def escalade_directe(conn, revision: str) -> int:
 def escalade_affamee(conn, revision: str) -> int:
     """8. `starved` est une issue noyau et escalade sans seconde tentative."""
     assert "starved" in graph.KERNEL_OUTCOMES
-    item_id = kernel.admit(conn, revision, f"gh:{REPO}#112")
+    item_id = kernel.admit(conn, revision, f"gh:{REPO}#112", _allow_parallel_for_test=True)
     run = kernel.claim(conn, item_id)
     assert run["attempt"] == 1, run
     kernel.apply(conn, run["id"], {

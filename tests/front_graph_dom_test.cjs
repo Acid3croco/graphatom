@@ -63,15 +63,23 @@ function executions(html) {
 
 const declared = render(
   { block: "ACT", config: { agent: { model: "sonnet" } } },
-  { cli: "claude", model: "opus" },
+  { cli: "claude", model: "opus", effort: "high" },
 );
-assert.deepEqual(executions(declared), ["claude · sonnet"]);
+assert.deepEqual(executions(declared), ["claude · sonnet · high"]);
 
 const shell = render(
   { block: "CHECK", config: { agent: { cmd: "printf explicite" } } },
   { cli: "codex", model: "gpt-5.6" },
 );
 assert.deepEqual(executions(shell), ["shell déterministe"]);
+
+// Un bloc sans objet `agent` garde son exécuteur déterministe interne. Les
+// défauts du graph ne l'activent pas implicitement.
+const stub = render(
+  { block: "ACT", config: {} },
+  { cli: "claude", model: "sonnet" },
+);
+assert.deepEqual(executions(stub), ["sans exécution"]);
 
 const none = render({ terminal: true }, { cli: "codex", model: "gpt-5.6" });
 assert.deepEqual(executions(none), ["sans exécution"]);
@@ -111,6 +119,21 @@ const apresMigration = Object.values(migrated.nodes).flatMap((node) =>
 );
 const avantMigration = ["claude · sonnet", "sans exécution", "sans exécution"];
 assert.deepEqual(apresMigration, avantMigration);
+
+// Le vrai graph de production a un wrapper shell, mais ce wrapper lance
+// bien chaque exécuteur déclaré. Les trois candidats doivent rester visibles.
+const codeTask = JSON.parse(
+  fs.readFileSync(path.join(root, "examples", "code-task.json"), "utf8"),
+);
+const implement = executions(
+  render(codeTask.nodes.implement, codeTask.agent),
+);
+assert.deepEqual(implement, [
+  "codex · gpt-5.6-luna · medium + shell",
+  "codex · gpt-5.6-sol · high + shell",
+  "opencode · deepseek-v4-flash-free + shell",
+]);
+assert.equal(implement.includes("shell déterministe"), false);
 
 console.log(
   "front graphs DOM : modèle, shell, absence, fan-out et rendu migré ✓",

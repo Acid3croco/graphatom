@@ -70,8 +70,9 @@ class GraphError(Exception):
 
 
 GRAPH_AGENT_KEYS = {"cli", "model", "effort", "timeout_s"}
-NODE_AGENT_KEYS = {"cli", "model", "effort", "cmd", "cmd_reason", "prompt",
-                   "timeout_s", "silence_s", "passation"}
+NODE_AGENT_KEYS = {"cli", "model", "effort", "cmd", "cmd_reason",
+                   "cmd_uses_executor", "prompt", "timeout_s", "silence_s",
+                   "passation"}
 
 
 def _validate_agent_values(place: str, agent: dict, allowed: set[str]) -> None:
@@ -98,6 +99,12 @@ def _validate_agent_values(place: str, agent: dict, allowed: set[str]) -> None:
         raise GraphError(f"{place} : timeout d'agent invalide {agent['timeout_s']!r}")
     if "cmd_reason" in agent and "cmd" not in agent:
         raise GraphError(f"{place} : cmd_reason sans cmd")
+    if "cmd_uses_executor" in agent:
+        if not isinstance(agent["cmd_uses_executor"], bool):
+            raise GraphError(
+                f"{place} : cmd_uses_executor doit être un booléen, "
+                f"vu {agent['cmd_uses_executor']!r}"
+            )
     if "passation" in agent and not isinstance(agent["passation"], bool):
         raise GraphError(
             f"{place} : passation doit être un booléen, vu {agent['passation']!r}"
@@ -116,16 +123,30 @@ def _validate_agents(bundle: dict) -> None:
         local = (spec.get("config") or {}).get("agent")
         fanout = (spec.get("config") or {}).get("fanout")
         variants = fanout.get("variants") or [] if isinstance(fanout, dict) else []
+        if local is not None:
+            _validate_agent_values(name, local, NODE_AGENT_KEYS)
+        effective = {**(defaults or {}), **(local or {})}
+        if local is not None:
+            if "cmd" not in effective and "cli" not in effective:
+                raise GraphError(f"{name} : agent sans cmd ni CLI structurée")
+            _validate_composed(name, effective)
         for index, variant in enumerate(variants):
             override = variant.get("agent") if isinstance(variant, dict) else None
-            if override is not None:
-                _validate_agent_values(f"{name}.fanout.variants[{index}]", override,
-                                       NODE_AGENT_KEYS)
-        if local is None:
-            continue
-        _validate_agent_values(name, local, NODE_AGENT_KEYS)
-        if "cmd" not in local and "cli" not in local and not (defaults or {}).get("cli"):
-            raise GraphError(f"{name} : agent sans cmd ni CLI structurée")
+            if override is None:
+                continue
+            place = f"{name}.fanout.variants[{index}]"
+            _validate_agent_values(place, override, NODE_AGENT_KEYS)
+            _validate_composed(place, {**effective, **override})
+
+
+def _validate_composed(place: str, agent: dict) -> None:
+    """Une commande composée nomme une commande et l'exécuteur qu'elle lance."""
+    if "cmd_uses_executor" not in agent:
+        return
+    if "cmd" not in agent:
+        raise GraphError(f"{place} : cmd_uses_executor sans cmd")
+    if agent["cmd_uses_executor"] and not agent.get("cli"):
+        raise GraphError(f"{place} : cmd_uses_executor sans CLI structurée")
 
 
 def canonical(bundle: dict) -> str:

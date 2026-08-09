@@ -46,7 +46,10 @@ from graphatom import channel, db, graph, kernel  # noqa: E402
 
 from outils import etat, git  # noqa: E402
 
-# hermétisme : les agents d'ici sont des scripts shell, ils n'ont pas de base
+# La base mère ne porte que la création de l'instance jetable. Les agents du
+# cycle, eux, sont des scripts shell et ne reçoivent pas cette capacité.
+ORIGINAL_AGENT_DSN = os.environ.get("GRAPHATOM_AGENT_DSN")
+AGENT_INSTANCE = ORIGINAL_AGENT_DSN or db.DSN
 os.environ.pop("GRAPHATOM_AGENT_DSN", None)
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,6 +58,7 @@ PROFIL = ROOT / "examples" / "code-task.json"
 # rend le scénario rejouable sans effacer ce diagnostic ni toucher un voisin.
 NUM = int(time.time_ns() % 1_000_000_000)
 TIMEOUT_S = 180.0
+TEST_DB_ID = 970000 + os.getpid() % 10000
 
 # Le chemin que l'item doit suivre, nœud par nœud. C'est la liste qu'on
 # vérifie à la fin : pas seulement « il est arrivé », mais « il est passé
@@ -227,7 +231,15 @@ def main() -> None:
     repo = depot(tmp)
     os.environ["GRAPHATOM_REPO_DIR"] = str(repo)
 
-    db.init_db()  # idempotent : ne détruit rien, rattrape juste le schéma
+    saved_dsn = db.DSN
+    saved_dsn_env = os.environ.get("GRAPHATOM_DSN")
+    os.environ["GRAPHATOM_AGENT_DSN"] = AGENT_INSTANCE
+    test_dsn = db.agent_dsn(TEST_DB_ID)
+    assert test_dsn, "aucune instance jetable : impossible d'isoler le cycle"
+    os.environ.pop("GRAPHATOM_AGENT_DSN", None)
+    db.DSN = test_dsn
+    os.environ["GRAPHATOM_DSN"] = test_dsn
+    db.init_db()
     proc = None
     try:
         with db.connect() as conn:
@@ -258,6 +270,17 @@ def main() -> None:
     finally:
         if proc is not None:
             tuer(proc)
+        os.environ["GRAPHATOM_AGENT_DSN"] = AGENT_INSTANCE
+        db.drop_agent_db()
+        db.DSN = saved_dsn
+        if saved_dsn_env is None:
+            os.environ.pop("GRAPHATOM_DSN", None)
+        else:
+            os.environ["GRAPHATOM_DSN"] = saved_dsn_env
+        if ORIGINAL_AGENT_DSN is None:
+            os.environ.pop("GRAPHATOM_AGENT_DSN", None)
+        else:
+            os.environ["GRAPHATOM_AGENT_DSN"] = ORIGINAL_AGENT_DSN
         shutil.rmtree(tmp, ignore_errors=True)
 
     print("\ncycle : OK — le profil code-task traverse keep_n et judge, "

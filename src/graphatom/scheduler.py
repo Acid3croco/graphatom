@@ -16,10 +16,10 @@ une file, comme celle du déploiement. La charge en vol et les plafonds se
 lisent hors de la base sur `/api/load`.
 
 Chaque bloc s'exécute dans son propre thread avec sa propre connexion :
-un agent qui travaille dix minutes ne bloque ni le faucheur ni les
-autres items. claim() garantit qu'un item n'a qu'une tentative à la
-fois — un seul run, ou les K candidats concurrents d'un nœud en fan-out,
-lancés ensemble et réduits à une seule issue avant que l'item n'avance.
+un agent qui travaille dix minutes ne bloque pas le faucheur. Un item
+complet tient la voie jusqu'à son terminal ; les K candidats d'un fan-out
+restent concurrents à l'intérieur de cet item, puis sont réduits à une seule
+issue avant qu'il n'avance.
 
 Tuer ce processus n'importe quand est un cas nominal, pas une panne :
 c'est le contrat que le crash-test vérifie. Perdre la base l'est aussi :
@@ -61,6 +61,10 @@ MAX_RUNS = int(os.environ.get("GRAPHATOM_MAX_RUNS")
 # pour la même raison.
 MAX_RUNS_PER_ITEM = int(os.environ.get("GRAPHATOM_MAX_RUNS_PER_ITEM")
                         or max(FANOUT_MAX_CANDIDATES, MAX_RUNS // 2))
+# Une instance complète à la fois. Ce n'est pas une surcharge d'environnement :
+# la production ne doit pas rouvrir le flot par une variable oubliée. Les
+# bancs d'essai des plafonds peuvent modifier la constante dans leur process.
+MAX_ACTIVE_ITEMS = 1
 
 
 def tick(conn: psycopg.Connection) -> int:
@@ -134,11 +138,17 @@ def _cause(exc: Exception) -> str:
 
 
 def _settle_waits(conn: psycopg.Connection) -> int:
+    head = kernel.active_item(conn)
+    if head is None:
+        return 0
+    item_id = head["id"]
     n = 0
     answered = conn.execute(
         "SELECT q.*, w.state AS item_state FROM question q "
         "JOIN work_item w ON w.id = q.item_id "
-        "WHERE q.state = 'answered' AND w.terminal_at IS NULL AND w.state = q.node"
+        "WHERE q.item_id = %s AND q.state = 'answered' "
+        "AND w.terminal_at IS NULL AND w.state = q.node",
+        (item_id,),
     ).fetchall()
     for q in answered:
         with conn.transaction():
@@ -148,8 +158,9 @@ def _settle_waits(conn: psycopg.Connection) -> int:
 
     expired = conn.execute(
         "SELECT q.* FROM question q JOIN work_item w ON w.id = q.item_id "
-        "WHERE q.state = 'open' AND q.deadline < now() "
-        "AND w.terminal_at IS NULL AND w.state = q.node"
+        "WHERE q.item_id = %s AND q.state = 'open' AND q.deadline < now() "
+        "AND w.terminal_at IS NULL AND w.state = q.node",
+        (item_id,),
     ).fetchall()
     for q in expired:
         with conn.transaction():
@@ -158,7 +169,9 @@ def _settle_waits(conn: psycopg.Connection) -> int:
         n += 1
 
     walled = conn.execute(
-        "SELECT id FROM work_item WHERE terminal_at IS NULL AND wall_deadline < now()"
+        "SELECT id FROM work_item WHERE id = %s AND terminal_at IS NULL "
+        "AND wall_deadline < now()",
+        (item_id,),
     ).fetchall()
     for row in walled:
         kernel.apply_item(conn, row["id"], "wall_deadline", kind="wall")
@@ -251,7 +264,7 @@ def etat_solo(conn: psycopg.Connection) -> dict[str, int]:
 
 
 def _dispatch(conn: psycopg.Connection) -> int:
-    """Réserve ce que les deux plafonds laissent passer. Le reste attend.
+    """Réserve la tête de voie dans ce que les deux plafonds laissent passer.
 
     Un run que le plafond retient n'est pas réservé du tout : aucun bail
     n'est posé, aucune tentative n'est comptée, rien n'échoue — le tick
@@ -272,7 +285,8 @@ def _dispatch(conn: psycopg.Connection) -> int:
 
     libre = MAX_RUNS - en_vol(conn)
     items = conn.execute(
-        "SELECT id FROM work_item WHERE terminal_at IS NULL ORDER BY id"
+        "SELECT id FROM work_item WHERE terminal_at IS NULL "
+        "ORDER BY id LIMIT %s", (MAX_ACTIVE_ITEMS,)
     ).fetchall()
     n = 0
     trop_larges = []

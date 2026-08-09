@@ -125,7 +125,9 @@ def survit_a_la_migration(conn, proc, revision: str, journal: Path) -> None:
 
 def en_vol(conn, revision: str, prefixe: str) -> dict:
     """Un run réservé par ce processus-ci, dont le bail vient d'expirer."""
-    item_id = kernel.admit(conn, revision, f"{prefixe}:{os.getpid()}")
+    item_id = kernel.admit(
+        conn, revision, f"{prefixe}:{os.getpid()}", _allow_parallel_for_test=True
+    )
     run = kernel.claim(conn, item_id)
     assert run is not None, "rien à réserver"
     conn.execute(

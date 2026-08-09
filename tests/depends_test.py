@@ -172,15 +172,16 @@ def main() -> None:
     conn, said = FakeConn(), set()
 
     # 3. tick 1 : #41 attend, #42 part — un commentaire, un label
-    blocked = gs._admit_labeled(conn, gh, "rev", said)
-    assert blocked == {41} and kernel.admitted == ["gh:o/r#42"], (blocked, kernel.admitted)
+    blocked, queued = gs._admit_labeled(conn, gh, "rev", said)
+    assert blocked == {41} and queued == set(), (blocked, queued)
+    assert kernel.admitted == ["gh:o/r#42"], kernel.admitted
     assert "en attente de #29" in gh.posted[0][1], gh.posted
     # le titre part avec l'admission : le canal l'a sous la main, le web
     # ne rappellera jamais GitHub pour l'obtenir
     assert kernel.titles == ["Le titre de #42"], kernel.titles
     assert conn.updated == [("code-task", "gh:o/r#41", "Le titre de #41"),
                             ("code-task", "gh:o/r#42", "Le titre de #42")], conn.updated
-    gs._paint_states(conn, gh, blocked, stalled=False)
+    gs._paint_states(conn, gh, blocked, queued, stalled=False)
     assert gh.labels == [("+", 41, gs.BLOCKED)], gh.labels
     print("3. dépendance ouverte : pas d'item, `rail:blocked`, un commentaire ✓")
 
@@ -188,17 +189,17 @@ def main() -> None:
     conn.known.add("gh:o/r#42")
     issues[0]["labels"] = [{"name": gs.BLOCKED}]
     gh.labels.clear()
-    assert gs._admit_labeled(conn, gh, "rev", said) == {41}
+    assert gs._admit_labeled(conn, gh, "rev", said) == ({41}, set())
     assert len(gh.posted) == 1 and kernel.admitted == ["gh:o/r#42"], gh.posted
-    gs._paint_states(conn, gh, {41}, stalled=False)
+    gs._paint_states(conn, gh, {41}, set(), stalled=False)
     assert gh.labels == [], gh.labels
 
     # 4. tick 3 : la dépendance ferme → admission normale, le label s'en va
     gh.states[29] = "closed"
-    blocked = gs._admit_labeled(conn, gh, "rev", said)
-    assert blocked == set(), blocked
+    blocked, queued = gs._admit_labeled(conn, gh, "rev", said)
+    assert blocked == queued == set(), (blocked, queued)
     assert kernel.admitted == ["gh:o/r#42", "gh:o/r#41"], kernel.admitted
-    gs._paint_states(conn, gh, blocked, stalled=False)
+    gs._paint_states(conn, gh, blocked, queued, stalled=False)
     assert gh.labels == [("-", 41, gs.BLOCKED)], gh.labels
     print("4. dépendance fermée : admission au tick suivant, label retiré ✓")
 
@@ -221,7 +222,7 @@ def main() -> None:
         {40: "closed"},
     )
     retries: dict[int, tuple[int, int]] = {}
-    assert gs._admit_labeled(conn, gh, "rev", set(), retries) == set()
+    assert gs._admit_labeled(conn, gh, "rev", set(), retries) == (set(), set())
     assert kernel.admitted == ["gh:o/r#50"], kernel.admitted
     assert retries == {1: (40, 7)}, retries
     new = blocks.item_workspace(1)
@@ -263,7 +264,9 @@ def main() -> None:
             states,
         )
         retries = {}
-        assert gs._admit_labeled(FakeConn(terminals), gh, "rev", set(), retries) == set()
+        assert gs._admit_labeled(
+            FakeConn(terminals), gh, "rev", set(), retries
+        ) == (set(), set())
         assert gs.kernel.admitted == ["gh:o/r#60"], (body, gs.kernel.admitted)
         assert retries == {} and len(gh.posted) == 1, (body, retries, gh.posted)
         assert word in gh.posted[0][1], (body, gh.posted)

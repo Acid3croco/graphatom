@@ -159,6 +159,17 @@ def attempt_log(workspace: Path, run: dict) -> Path:
     return workspace / f"agent-{attempt_name(run)}.log"
 
 
+def attempt_command(workspace: Path, run: dict) -> Path:
+    """La commande effective d'une tentative, hors de son journal de progrès.
+
+    Le chien de garde mesure le journal de l'agent. Y écrire la commande du
+    framework ferait donc passer un agent muet pour un agent actif. Cette
+    pièce séparée reste durable et exacte, sans devenir un faux signal de
+    travail produit par l'agent.
+    """
+    return workspace / f"command-{attempt_name(run)}.json"
+
+
 def failure_path(item_id: int) -> Path:
     """L'emplacement unique de la trace du dernier échec d'un item."""
     return item_workspace(item_id) / FAILURE_NAME
@@ -509,7 +520,9 @@ def _work_files(workspace: Path) -> list[str]:
     traces = {PGID_FILE, OUTCOME_NAME, STARVED_NAME, PROMPT_NAME, USAGE_NAME}
     return sorted(p.name for p in workspace.iterdir()
                   if p.is_file() and p.name not in traces
-                  and not p.name.startswith(("agent-", "prompt-", "usage-")))
+                  and not p.name.startswith(
+                      ("agent-", "command-", "prompt-", "usage-")
+                  ))
 
 
 def _git(worktree: Path, *args: str) -> tuple[int, str]:
@@ -765,6 +778,17 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
         resolved = replace(resolved, timeout_s=_agent_timeout_s(ctx.config))
     env.update(executors.environment(resolved))
     cmd = _fill(ctx, executors.command(resolved), subject)
+    uses_executor = resolved.cmd is None or resolved.cmd_uses_executor
+    attempt_command(workspace, ctx.run).write_text(json.dumps({
+        "kind": ("composed" if resolved.cmd_uses_executor else
+                 "shell" if resolved.cmd is not None else "model"),
+        "executor": ({
+            "cli": resolved.cli,
+            "model": resolved.model,
+            "effort": resolved.effort,
+        } if uses_executor else None),
+        "command": cmd,
+    }, ensure_ascii=False, indent=2) + "\n")
     with log.open("w") as out:
         # session dédiée : l'agent est chef de son groupe, ses descendants aussi
         proc = subprocess.Popen(

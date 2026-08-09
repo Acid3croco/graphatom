@@ -85,6 +85,19 @@ LEASE_SECONDS = 30
 # continue d'écrire dans un worktree dont l'item a été repris
 AGENT_LEASE_MARGIN_S = 60
 MAX_ATTEMPTS = 3  # défaut central, par passage : réessayer, puis escalader
+# « GRAPHATO » en ASCII, dans la plage signée de l'advisory lock PostgreSQL.
+# Toutes les voies d'admission nominales prennent la même clé : deux canaux
+# concurrents ne peuvent pas voir la place libre puis ouvrir deux items.
+ADMISSION_LOCK = 0x475241504841544F
+
+
+class LaneOccupied(RuntimeError):
+    """L'admission a trouvé l'unique voie occupée par un autre item."""
+
+    def __init__(self, item_id: int, state: str):
+        self.item_id = item_id
+        self.state = state
+        super().__init__(f"voie occupée par l'item {item_id} ({state})")
 
 
 def agent_timeout_s(config: dict, default: float) -> float:
@@ -122,20 +135,39 @@ def now() -> dt.datetime:
 # ---------------------------------------------------------------- admission
 
 
+def active_item(conn: psycopg.Connection) -> dict | None:
+    """L'unique item non terminal du rail, ou None quand la voie est libre."""
+    return conn.execute(
+        "SELECT id, state FROM work_item WHERE terminal_at IS NULL "
+        "ORDER BY id LIMIT 1"
+    ).fetchone()
+
+
 def admit(conn: psycopg.Connection, revision: str, subject_key: str,
           title: str | None = None,
-          prepare: Callable[[int], None] | None = None) -> int:
+          prepare: Callable[[int], None] | None = None, *,
+          _allow_parallel_for_test: bool = False) -> int:
     """Crée (ou retrouve) le sujet, ouvre une occurrence — si la lignée le permet.
 
     Le titre est celui que le canal a sous la main au moment de l'admission :
     il est stocké là, une fois, et personne n'ira le rechercher ailleurs. Un
     sujet sans titre — un autre canal, un autre format — reste sans titre.
 
+    Par défaut, un seul item non terminal existe dans tout le rail. Le verrou
+    de transaction ferme la course entre deux canaux d'admission.
+    `_allow_parallel_for_test` n'est qu'un outil de banc d'essai pour les
+    tests explicites des plafonds multi-items ; le nom privé et explicite
+    interdit de le confondre avec une option de production.
+
     `prepare`, s'il existe, prépare les ressources locales du nouvel item
     avant le commit. Une erreur annule ainsi l'admission au lieu de laisser
     un item admis sans les ressources dont son premier nœud a besoin.
     """
     with conn.transaction():
+        if not _allow_parallel_for_test:
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (ADMISSION_LOCK,))
+            if active := active_item(conn):
+                raise LaneOccupied(active["id"], active["state"])
         bundle = load_bundle(conn, revision)
         subject = conn.execute(
             "INSERT INTO subject (graph, subject_key, title) VALUES (%s, %s, %s) "

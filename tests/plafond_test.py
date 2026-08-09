@@ -86,9 +86,11 @@ def fake_execute(run_id: int, item_id: int) -> None:
 
 
 def seme(conn, k: int | None) -> int:
-    """Un item de plus, sur son nœud d'entrée — en fan-out de k, ou seul."""
+    """Un item factice de plus pour éprouver les plafonds multi-items."""
     revision = graph.publish(conn, bundle(k))
-    return kernel.admit(conn, revision, f"plafond:{uuid.uuid4().hex[:8]}")
+    return kernel.admit(
+        conn, revision, f"plafond:{uuid.uuid4().hex[:8]}", _allow_parallel_for_test=True
+    )
 
 
 def en_vol(conn) -> int:
@@ -303,6 +305,7 @@ def api_load(conn) -> None:
             time.sleep(0.1)
     assert charge is not None, f"{url} n'a jamais répondu"
     assert charge == {"running": 2, "max_runs": 3, "max_runs_per_item": 2,
+                      "max_active_items": scheduler.MAX_ACTIVE_ITEMS,
                       "solo": {"running": 0, "waiting": 0},
                       "builds": 0, "max_builds": quota.MAX_BUILDS}, charge
     print(f"5. GET /api/load → {charge} : runs et constructions en vol, "
@@ -323,10 +326,11 @@ def main() -> None:
     # fan-out n'ont alors rien à toucher, et rien de la production ne fuit
     os.environ["GRAPHATOM_REPO_DIR"] = str(workdir / "sans-depot")
     garde = (db.DSN, scheduler.MAX_RUNS, scheduler.MAX_RUNS_PER_ITEM,
-             scheduler._execute)
+             scheduler.MAX_ACTIVE_ITEMS, scheduler._execute)
     dsn = db.agent_dsn(ITEM_ID)
     assert dsn, "aucune instance jetable : impossible de compter seul"
     db.DSN = dsn
+    scheduler.MAX_ACTIVE_ITEMS = 100
     scheduler._execute = fake_execute
     try:
         db.init_db()
@@ -338,7 +342,7 @@ def main() -> None:
     finally:
         db.drop_agent_db()
         (db.DSN, scheduler.MAX_RUNS, scheduler.MAX_RUNS_PER_ITEM,
-         scheduler._execute) = garde
+         scheduler.MAX_ACTIVE_ITEMS, scheduler._execute) = garde
         shutil.rmtree(workdir, ignore_errors=True)
 
     print("\nplafonds : OK — la charge est bornée, et ce qu'elle retient attend")

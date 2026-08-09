@@ -82,6 +82,8 @@ uv run python tests/links_test.py                    # les liens du frontend ver
                                                      # dans la table, sans base
 uv run python tests/depends_test.py                  # `Depends-on: #N` : l'admission
                                                      # attend, sans base ni réseau
+uv run python tests/item_lane_test.py                # deux issues GitHub : une seule
+                                                     # instance, sa review, puis l'autre
 uv run python tests/split_deps_test.py               # une découpe reporte les
                                                      # dépendances de la mère sur la
                                                      # dernière fille, puis la ferme
@@ -252,8 +254,9 @@ Cinq services : Postgres, l'ordonnanceur, le canal GitHub (polling), le
 canal web (API et secours, port 8850) et le front Next.js (public, port
 8851). Ensuite tout se passe sur GitHub :
 
-1. poser le label `graphatom` sur une issue → admission (une seule fois par
-   issue ; différée si le corps déclare une dépendance encore ouverte)
+1. poser le label `graphatom` sur une issue → admission si la voie est libre
+   (une seule fois par issue ; différée si une dépendance est ouverte ou si
+   une instance précédente n'est pas terminale)
 2. le rail accuse la prise en charge en commentaire : item, graph, lien
    trajectoire — et pose le label d'état `rail:<état>`
 3. le rail pose sa question fermée en commentaire
@@ -279,6 +282,36 @@ transition, reconstruit depuis la base, jamais complété à l'aveugle ; une
 sans un seul mail. Aucun parsing de langage naturel, aucune lecture de
 GitHub comme état d'item. La démo : issues [#7](https://github.com/Acid3croco/graphatom/issues/7)
 et [#8](https://github.com/Acid3croco/graphatom/issues/8).
+
+### Une instance complète à la fois
+
+GitHub est la file d'attente. La plus ancienne issue admissible devient le
+seul item non terminal ; les suivantes restent hors de Postgres avec le label
+`rail:queued`. Elles n'ont donc ni run, ni bail, ni deadline. Le fan-out reste
+concurrent à l'intérieur de l'item actif.
+
+L'item garde la voie pendant son travail et pendant sa question `review`.
+L'option `merger` ouvre `release`, puis l'item va jusqu'à son terminal. Le tick
+GitHub suivant admet alors l'issue suivante et retire `rail:queued`.
+
+Deux défenses portent la même règle. `kernel.admit` prend un advisory lock de
+transaction et refuse une seconde occurrence non terminale, y compris si deux
+canaux voient la voie libre au même instant. Le dispatch ne regarde que le plus
+ancien item non terminal ; un item ancien ou une base issue d'une version
+précédente ne permet donc pas à un voisin de contourner une review.
+[`tests/item_lane_test.py`](tests/item_lane_test.py) joue ces quatre états avec
+la base réelle.
+
+Le worker tourne sur l'hôte, hors du compose : reconstruire `github-sync`,
+`web` et `front` ne recharge pas son Python. Une livraison qui change le noyau
+ou l'ordonnanceur garde donc l'admission arrêtée, vérifie qu'aucun item n'est
+non terminal, aligne le checkout du service sur le SHA mergé, puis redémarre
+`graphatom-worker.service`. Le redémarrage est validé seulement quand le
+battement `rail` revient et que `/api/load` rend `max_active_items: 1` ; le
+canal GitHub peut alors reprendre. Redémarrer le worker avant le terminal d'un
+item de release tuerait le processus qui livre cette même release : cette
+activation reste un geste d'exploitation après le merge, jamais un nœud du
+graph en cours.
 
 ### Dépendances entre tâches : `Depends-on: #N`
 
@@ -518,10 +551,11 @@ parti de lui-même, un simple nouveau démarrage passe — le test n'appelle
 
 ### Un seul déploiement à la fois : la concurrence est une file
 
-Le rail travaille couramment à quatre ou six items en parallèle, et cela
-marche partout **sauf sur `deploy`** : tous les autres nœuds agissent chacun
-sur son atelier, `deploy` est le seul à agir sur une cible unique, la
-production. Deux `docker compose up` concurrents sur le même projet se
+Le rail nominal ne travaille plus qu'un item à la fois. Le verrou de `deploy`
+reste nécessaire contre deux workers, deux rails sur le même clone, une
+commande manuelle ou une base ancienne qui porte encore plusieurs items.
+`deploy` agit sur une cible unique, la production. Deux `docker compose up`
+concurrents sur le même projet se
 disputent les noms de conteneurs, et docker refuse le second — un faux
 échec, qui escaladait chez l'humain alors que le déploiement était bon.
 
@@ -543,7 +577,7 @@ sans rien dire.
 **Exclusion mutuelle *et* attente bornée**, les deux, parce qu'elles
 répondent à deux questions différentes : la première dit qui passe, la
 seconde combien de temps on patiente avant de rendre la main. L'exclusion
-seule laisserait le second item pendu au bail d'un déploiement qui traîne —
+seule laisserait le second processus pendu au bail d'un déploiement qui traîne —
 le couperet le tuerait en `timed_out`, qui escalade sans compter les
 tentatives, c'est-à-dire exactement la panne qu'on veut supprimer.
 L'attente bornée seule ne sérialiserait rien. Passé
@@ -601,7 +635,15 @@ Une commande shell reste possible pour un cas spécial :
 }
 ```
 
-`cmd` a toujours priorité sur l'exécuteur structuré. Chaque occurrence
+`cmd` a toujours priorité sur l'exécuteur structuré. Chaque tentative écrit
+sa commande effective dans `command-<nœud>-<cycle>-<tentative>.json`, avec
+sa nature (`model`, `shell` ou `composed`), l'exécuteur configuré
+et la chaîne exacte exécutée après interpolation. Une commande shell pure ne
+prétend donc pas avoir exécuté le modèle qu'elle hérite. Un wrapper qui lance
+l'exécuteur déclaré pose `cmd_uses_executor: true` : le front montre alors la
+CLI, le modèle, l'effort et le wrapper, au lieu de le réduire à du shell. Cette trace est séparée
+du journal de l'agent : la commande du framework ne peut donc pas faire passer
+un agent muet pour un agent actif, ni inventer du travail à reprendre. Chaque occurrence
 restante porte `cmd_reason` : elle nomme la composition shell ou la porte
 déterministe qu'un adaptateur d'agent ne peut pas remplacer. Une CLI inconnue,
 ou une clé autre que `cli`, `model`, `effort` et `timeout_s` dans les valeurs
@@ -930,15 +972,15 @@ commite ce qui reste quand il reste quelque chose, et le corps de la PR porte
 `Closes #<num>` de toute façon.
 
 **`implement` est une course.** Le nœud déclare un `fanout` de trois
-variantes — *minimal* sur Luna medium, *test d'abord* sur Sol high, et
+variantes — *minimal* sur Luna medium, *minimal* sur Sol high, et
 *gratuit* sur DeepSeek V4 Flash — réduit par `keep_n: 2`. Trois candidats
 implémentent la même issue en même temps, chacun dans son atelier et avec son
 angle imposé. Les deux premiers qui rendent `done` après leurs portes vont au
 juge ; le troisième est révoqué en vol. Trois runs laissent assez de place,
 sous le plafond de huit, pour deux courses et deux portes concurrentes.
 
-**Un candidat qui ne coûte rien.** La variante *gratuit* ne change que sa
-commande : elle passe par [`scripts/agent-opencode.sh`](scripts/agent-opencode.sh)
+**Un candidat qui ne coûte rien.** La variante *gratuit* surcharge son
+exécuteur : elle passe par [`scripts/agent-opencode.sh`](scripts/agent-opencode.sh)
 sur `opencode/deepseek-v4-flash-free`, et hérite du prompt, des budgets et
 des portes de tout le monde. C'est une mesure, pas une économie : si le
 harnais fait le travail de fiabilité, un modèle gratuit suffit parfois, et
@@ -1175,7 +1217,7 @@ pas : on payait un modèle — du temps, des tokens, de la variance
 d'interprétation — pour ce qu'un shell fait à l'identique, plus vite et
 sans surprise. Ce sont maintenant des `cmd`, comme `cleanup` depuis
 toujours : le numéro d'issue tiré du sujet et un `worktree add` idempotent
-qui attend les verrous `.lock` des items voisins ; `docker compose up -d
+qui attend les verrous `.lock` laissés par un processus git ; `docker compose up -d
 --build` et son code de retour ; trois portes binaires (les deux services
 en marche, `/items` en 200, aucun `Traceback` dans les 50 dernières lignes
 du sync). Chacun écrit toujours son `outcome.json`, échec compris — c'est
@@ -1305,19 +1347,19 @@ l'état local. Tous les blocs de l'item partagent ce worktree (implement
 écrit, les tests vérifient sur place, release commite et pushe depuis là) ;
 seul **deploy** revient au clone de référence, qu'il aligne sur `origin/main`
 avant de reconstruire — c'est le merge qui part en prod, pas la branche.
-Deux items concurrents partent du même `origin/main` et divergent par leur
-branche ; s'ils touchent les mêmes fichiers, le second merge voit le conflit :
-release merge `origin/main` quand le merge passe tout seul, sort en `rebased`
-— retour aux tests — quand il a fallu résoudre à la main, et en `conflict`
-quand elle n'y arrive pas. Jamais un rebase : la branche est publique, seul
-le nom de l'issue est resté. Le retrait (worktree + branche locale) est un **nœud du
+L'issue suivante part du `origin/main` qui contient le merge précédent. Si
+une écriture extérieure change `main` pendant un item, release merge
+`origin/main` quand le merge passe tout seul, sort en `rebased` — retour aux
+tests — quand il a fallu résoudre à la main, et en `conflict` quand elle n'y
+arrive pas. Jamais un rebase : la branche est publique, seul le nom de
+l'issue est resté. Le retrait (worktree + branche locale) est un **nœud du
 graph** : toutes les sorties passent par `cleanup`,
 `cleanup_unresolved` ou `cleanup_split` avant leur terminal — le graph *est* la garantie de
 cleanup, le noyau n'en sait rien. Les agents demandent un worker sur
 l'hôte (voir le commentaire dans `docker-compose.yml`) ; le bail par nœud
 (`config.lease_s`) couvre leur durée, et l'ordonnanceur exécute chaque
-bloc dans son propre thread — un agent de dix minutes ne bloque ni le
-faucheur ni les autres items.
+bloc dans son propre thread — un agent de dix minutes ne bloque pas le
+faucheur, et les candidats d'un fan-out restent concurrents.
 
 ## Des myriades de modèles bon marché
 
@@ -1505,13 +1547,10 @@ grand des deux, et une course n'est donc jamais plus large que ce que le
 dispatch peut accueillir d'un coup. Le plafond borne le nombre de courses
 simultanées, jamais la largeur d'une seule.
 
-**Pourquoi un plafond par item.** Sans lui, un item en fan-out large occupe
-toute la capacité et affame les autres items sur des nœuds bon marché. La
-moitié du plafond global le tient sous celui-ci quand cette moitié dépasse le
-plancher ; en dessous, les deux coïncident (8 sur 12 cœurs) et le plafond par
-item ne fait plus que garantir qu'une course complète tient toujours — la
-place pour un autre item vient alors du tick suivant, pas d'une réserve
-strictement plus étroite.
+**Pourquoi un plafond par item.** Il borne un fan-out large et reste une
+défense pour une base ancienne ou un test qui porte plusieurs items. La voie
+nominale ne laisse qu'un item actif. En dessous du plancher, les deux plafonds
+coïncident et garantissent qu'une course complète tient toujours.
 
 **Ce que le plafond retient attend — rien n'échoue.** Un run retenu n'est pas
 réservé du tout : aucune ligne `node_run`, donc aucun bail posé, aucune
@@ -1567,14 +1606,15 @@ n'existe pas de place orpheline qui pourrait bloquer la file sans limite.
 
 **La charge se lit hors de la base.** `GET /api/load` rend les runs, les
 constructions et leurs plafonds effectifs — `{"running": 4, "max_runs": 8,
-"max_runs_per_item": 8, "builds": 2, "max_builds": 2}`. Une saturation ne
+"max_runs_per_item": 8, "max_active_items": 1, "builds": 2,
+"max_builds": 2}`. Une saturation ne
 se diagnostique plus à coups de `ps`.
 
 ## Ce qu'on ne fera jamais
 
 Périmètre négatif, assumé — ces refus *sont* le design :
 
-- **Pas de jointure, ni de fan-out de chemins** dans un item — le parallélisme entre travaux, c'est plusieurs items. Un état unique ne représente pas plusieurs prédécesseurs actifs, et deux branches d'un graph ne se rejoignent jamais : la jointure est refusée pour toujours. Ce qui est permis, en revanche, c'est le **fan-out de candidats** — plusieurs runs concurrents d'un *même* nœud, réduits à une seule issue avant que l'item n'avance (voir [des myriades de modèles bon marché](#des-myriades-de-modèles-bon-marché)). L'invariant d'état unique tient parce que rien ne fusionne : l'item garde un seul état, une seule révision, une seule issue de nœud, il n'est jamais sur deux nœuds à la fois ; les candidats ne se voient jamais, un seul travail finit sur la branche de l'item et les autres sont détruits. Quand la réduction est `keep_n`, plusieurs candidats survivent le temps qu'un nœud arbitre les départage — mais il en élit un, et un seul : c'est une sélection différée, jamais une jointure. Vu du noyau, un nœud en fan-out se comporte comme un nœud ordinaire.
+- **Pas de jointure, ni de fan-out de chemins** dans un item — les issues passent une par une. Un état unique ne représente pas plusieurs prédécesseurs actifs, et deux branches d'un graph ne se rejoignent jamais : la jointure est refusée pour toujours. Ce qui est permis, en revanche, c'est le **fan-out de candidats** — plusieurs runs concurrents d'un *même* nœud, réduits à une seule issue avant que l'item n'avance (voir [des myriades de modèles bon marché](#des-myriades-de-modèles-bon-marché)). L'invariant d'état unique tient parce que rien ne fusionne : l'item garde un seul état, une seule révision, une seule issue de nœud, il n'est jamais sur deux nœuds à la fois ; les candidats ne se voient jamais, un seul travail finit sur la branche de l'item et les autres sont détruits. Quand la réduction est `keep_n`, plusieurs candidats survivent le temps qu'un nœud arbitre les départage — mais il en élit un, et un seul : c'est une sélection différée, jamais une jointure. Vu du noyau, un nœud en fan-out se comporte comme un nœud ordinaire.
 - **Pas de conversation inter-agents** — la coordination est le graph. N agents qui discutent produisent un transcript inauditable.
 - **Pas de langage de workflow** — la déclaration reste de la configuration étroite au-dessus de blocs typés. Expressions et conditions arbitraires : non.
 - **Pas de question ouverte** aux humains — toute question est fermée, avec des options et une deadline.

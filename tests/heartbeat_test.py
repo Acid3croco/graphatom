@@ -146,19 +146,33 @@ def main() -> None:
               {"number": 8, "labels": []}]   # #8 : admission différée, pas d'item
 
     gh = FakeGitHub(issues)
-    gs._paint_states(FakeConn(items=items), gh, blocked={8}, stalled=True)
+    gs._paint_states(FakeConn(items=items), gh, blocked={8}, queued=set(),
+                     stalled=True)
     assert gh.labels == [("+", 7, gs.STALLED), ("+", 8, gs.BLOCKED)], gh.labels
 
     gh = FakeGitHub(issues)   # le worker ne bat toujours pas : rien à repeindre
     issues[0]["labels"].append({"name": gs.STALLED})
     issues[1]["labels"].append({"name": gs.BLOCKED})
-    gs._paint_states(FakeConn(items=items), gh, blocked={8}, stalled=True)
+    gs._paint_states(FakeConn(items=items), gh, blocked={8}, queued=set(),
+                     stalled=True)
     assert gh.labels == [], gh.labels
 
     gh = FakeGitHub(issues)   # le battement revient : seul `rail:stalled` part
-    gs._paint_states(FakeConn(items=items), gh, blocked={8}, stalled=False)
+    gs._paint_states(FakeConn(items=items), gh, blocked={8}, queued=set(),
+                     stalled=False)
     assert gh.labels == [("-", 7, gs.STALLED)], gh.labels
     print("5. `rail:stalled` posé à côté de l'état, retiré au retour du battement ✓")
+
+    # Deux processus de sync peuvent voir la voie libre. Le perdant reçoit
+    # « voie occupée » après l'admission du gagnant et classe brièvement le
+    # même numéro en file. La vérité active de la base doit gagner.
+    issues = [{"number": 7, "labels": [{"name": gs.QUEUED}]}]
+    gh = FakeGitHub(issues)
+    gs._paint_states(FakeConn(items=items), gh, blocked=set(), queued={7},
+                     stalled=False)
+    assert gh.labels == [("+", 7, "rail:implement"),
+                         ("-", 7, gs.QUEUED)], gh.labels
+    print("6. course de deux syncs : l'état actif gagne sur `rail:queued` ✓")
 
     # le rouge de l'alarme : la seule exception à la couleur unie des labels
     gh = RecordingGitHub()

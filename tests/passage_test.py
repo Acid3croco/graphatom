@@ -110,7 +110,9 @@ def chemin_nominal(conn) -> None:
     """Le budget paie les tours de boucle, pas la traversée du chemin."""
     # 6-7. budget zéro : la traversée passe, la boucle non
     rev = graph.publish(conn, bundle_nominal(escalations=0))
-    item_id = kernel.admit(conn, rev, f"nominal-0:{uuid.uuid4().hex[:8]}")
+    item_id = kernel.admit(
+        conn, rev, f"nominal-0:{uuid.uuid4().hex[:8]}", _allow_parallel_for_test=True
+    )
     item = avance(conn, item_id, "ok")
     assert item["state"] == "verif", item["state"]
     assert item["escalations"] == 0, item["escalations"]
@@ -126,7 +128,9 @@ def chemin_nominal(conn) -> None:
 
     # 8. avec du budget, c'est bien la re-entrée qui débite
     rev = graph.publish(conn, bundle_nominal(escalations=1))
-    item_id = kernel.admit(conn, rev, f"nominal-1:{uuid.uuid4().hex[:8]}")
+    item_id = kernel.admit(
+        conn, rev, f"nominal-1:{uuid.uuid4().hex[:8]}", _allow_parallel_for_test=True
+    )
     item = avance(conn, item_id, "ok")
     assert item["escalations"] == 1, "la première visite est gratuite"
     avance(conn, item_id, "fail")
@@ -141,7 +145,9 @@ def main() -> None:
     db.init_db()  # idempotent : ne détruit rien, rattrape juste le schéma
     with db.connect() as conn:
         rev = graph.publish(conn, BUNDLE)
-        item_id = kernel.admit(conn, rev, f"passage:{uuid.uuid4().hex[:8]}")
+        item_id = kernel.admit(
+            conn, rev, f"passage:{uuid.uuid4().hex[:8]}", _allow_parallel_for_test=True
+        )
         print(f"révision {rev[:12]}…, item {item_id}")
 
         # 1. le premier passage brûle sa marge, puis escalade

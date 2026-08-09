@@ -40,7 +40,7 @@ PR_URL = "https://github.com/Acid3croco/graphatom/pull/70"
 
 BUNDLE = {
     "name": "démo", "entry": "ingest", "budgets": {},
-    "agent": {"cli": "claude", "model": "opus"},
+    "agent": {"cli": "claude", "model": "opus", "effort": "high"},
     "on_kernel": {"escalate_to": "escalate", "exhausted_to": "closed"},
     "nodes": {
         "ingest": {"block": "FETCH", "edges": {"ok": "decide"}},
@@ -262,8 +262,8 @@ def main() -> None:
         assert labels == ["opus", "opus", "haiku", "haiku"], labels
         # la variante surcharge le modèle, les deux héritent la CLI du graph
         agents = [c["agent"] for c in fanout["candidates"]]
-        assert agents[0] == {"cli": "claude", "model": "opus"}, agents
-        assert agents[3] == {"cli": "claude", "model": "haiku"}, agents
+        assert agents[0] == {"cli": "claude", "model": "opus", "effort": "high"}, agents
+        assert agents[3] == {"cli": "claude", "model": "haiku", "effort": "high"}, agents
         assert all(c["cmd"] is None for c in fanout["candidates"]), fanout
         assert web._api_fanout(BUNDLE, {"block": "ACT", "config": {}}) is None
         print("   fanout projeté : 4 agents structurés effectifs ✓")
@@ -302,6 +302,7 @@ def main() -> None:
             4, builds=1, solo_running=1, solo_waiting=2))
         assert charge == {"running": 4, "max_runs": scheduler.MAX_RUNS,
                            "max_runs_per_item": scheduler.MAX_RUNS_PER_ITEM,
+                          "max_active_items": scheduler.MAX_ACTIVE_ITEMS,
                           "solo": {"running": 1, "waiting": 2},
                           "builds": 1, "max_builds": quota.MAX_BUILDS}, charge
         # Le plafond par item reste sous le global dès que la machine a de

@@ -825,8 +825,11 @@ def _api_candidate(bundle: dict, spec: dict, candidate: int,
     agent = {key: value for key, value in {
         "cli": resolved.cli,
         "model": resolved.model,
+        "effort": resolved.effort,
         "cmd": resolved.cmd,
-    }.items() if value is not None}
+        "cmd_uses_executor": resolved.cmd_uses_executor,
+    }.items() if value is not None
+             and not (key == "cmd_uses_executor" and value is False)}
     return {"variant": variant, "agent": agent, "cmd": resolved.cmd}
 
 
@@ -997,6 +1000,7 @@ def _api_load(conn) -> dict:
     return {"running": scheduler.en_vol(conn),
             "max_runs": scheduler.MAX_RUNS,
             "max_runs_per_item": scheduler.MAX_RUNS_PER_ITEM,
+            "max_active_items": scheduler.MAX_ACTIVE_ITEMS,
             "solo": scheduler.etat_solo(conn),
             "builds": quota.en_vol(conn),
             "max_builds": quota.MAX_BUILDS}
