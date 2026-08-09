@@ -28,6 +28,7 @@ lit — sans base ni ordonnanceur : seul le prompt du bloc agent est en jeu.
 Usage : uv run python tests/passation_test.py
 """
 
+import json
 import os
 import shutil
 import sys
@@ -46,6 +47,8 @@ os.environ.pop("GRAPHATOM_AGENT_DSN", None)
 ITEM = 4  # l'item du contexte de test : jamais un item de la base
 SUJET = "gh:test/passation#170"
 SECTIONS = ("## Fait", "## Appris", "## Pas fait")
+ROOT = Path(__file__).resolve().parents[1]
+BUNDLE = json.loads((ROOT / "examples" / "code-task.json").read_text())
 
 
 class FauxConn:
@@ -150,6 +153,81 @@ def passation_obligatoire(workdir: Path) -> None:
     assert "section '## Appris' vide" == blocks._passation_invalide(fichier)
     print("1 bis. vieille passation purgée ; succès refusé sans trois sections "
           "neuves, ordonnées, remplies et bornées ✓")
+
+
+def portes_de_pertinence(workdir: Path) -> None:
+    """1 ter. Les portes shell rendent le contrat complet sans modèle."""
+    repo = workdir / "repo"
+    atelier = repo / ".worktrees" / f"rail-item-{ITEM}"
+    scripts = atelier / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy2(ROOT / "scripts" / "agent-declared.sh",
+                 scripts / "agent-declared.sh")
+    (scripts / "agent-codex.sh").write_text(
+        "printf appelé > \"$GRAPHATOM_WORKSPACE/agent-called\"\n"
+        "printf '%s\\n' '{\"outcome\":\"pass\",\"summary\":\"agent appelé\"}' "
+        "> outcome.json\n"
+    )
+    outils = workdir / "bin"
+    outils.mkdir()
+    faux_git = outils / "git"
+    faux_git.write_text("#!/bin/sh\nprintf '%s\\n' \"${FAKE_DIFF:-}\"\n")
+    faux_git.chmod(0o755)
+
+    ancien_repo = os.environ.get("GRAPHATOM_REPO_DIR")
+    ancien_path = os.environ["PATH"]
+    os.environ["GRAPHATOM_REPO_DIR"] = str(repo)
+    os.environ["PATH"] = f"{outils}:{ancien_path}"
+    try:
+        for node in ("test_backend", "test_frontend"):
+            spec = BUNDLE["nodes"][node]
+            run = {"id": 70, "node": node, "cycle": 1, "attempt": 1,
+                   "candidate": None}
+            ctx = blocks.Context(FauxConn([], {}), run,
+                                 {"id": ITEM, "subject_id": 1}, spec, BUNDLE)
+            ctx.worktree = atelier
+            rapport = ctx.workspace / f"{node}.md"
+            passation = ctx.workspace / f"passation-{node}.md"
+            appel = ctx.workspace / "agent-called"
+
+            rapport.write_text("ancien rapport\n")
+            appel.unlink(missing_ok=True)
+            os.environ["FAKE_DIFF"] = "README.md"
+            resultat = blocks._attempt(ctx, ctx.workspace.resolve())
+            assert resultat["outcome"] == "pass", (node, resultat)
+            assert not appel.exists(), node
+            assert blocks._passation_invalide(passation) is None, node
+            assert "modèle n'a pas été appelé" in passation.read_text(), node
+            assert "README.md" in passation.read_text(), node
+            assert "non concerné" in rapport.read_text(), node
+            assert "ancien rapport" not in rapport.read_text(), node
+
+            os.environ["FAKE_DIFF"] = ""
+            resultat = blocks._attempt(ctx, ctx.workspace.resolve())
+            assert resultat["outcome"] == "fail", (node, resultat)
+            assert "diff vide" in resultat["summary"], (node, resultat)
+            assert "diff vide" in rapport.read_text(), node
+            assert blocks._passation_invalide(passation) is None, node
+
+            os.environ["FAKE_DIFF"] = (
+                "src/graphatom/web.py" if node == "test_frontend"
+                else "src/graphatom/kernel.py"
+            )
+            appel.unlink(missing_ok=True)
+            resultat = blocks._attempt(ctx, ctx.workspace.resolve())
+            assert appel.read_text() == "appelé", node
+            assert resultat["outcome"] == "crashed", (node, resultat)
+            assert "passation absente" in resultat["error"], (node, resultat)
+    finally:
+        os.environ.pop("FAKE_DIFF", None)
+        os.environ["PATH"] = ancien_path
+        if ancien_repo is None:
+            os.environ.pop("GRAPHATOM_REPO_DIR", None)
+        else:
+            os.environ["GRAPHATOM_REPO_DIR"] = ancien_repo
+
+    print("1 ter. backend et frontend : court-circuit complet sans modèle, "
+          "diff vide lisible et chemin pertinent soumis à la passation ✓")
 
 
 def transmission(workdir: Path) -> None:
@@ -282,6 +360,7 @@ def main() -> None:
     try:
         demande(workdir)
         passation_obligatoire(workdir)
+        portes_de_pertinence(workdir)
         transmission(workdir)
         noeud_d_entree(workdir)
         bornes(workdir)
