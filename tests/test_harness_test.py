@@ -28,6 +28,8 @@ def main() -> None:
     assert names == ["import", "crash_test.py", "reconnect_test.py"], names
     assert len(names) == len(set(names))
     assert HARNESS.backend_gates(["front/components/item.tsx"]) == []
+    assert any(path.startswith(HARNESS.FRONT_PREFIXES)
+               for path in ["scripts/test_harness.py"])
     print("1. le diff choisit une liste backend fermée, ordonnée et sans doublon ✓")
 
     root = Path(tempfile.mkdtemp(prefix="graphatom-harness-"))
@@ -69,6 +71,18 @@ def main() -> None:
     assert blocks.elected_failures(verdict) == [4]
     verdict.write_text(verdict.read_text().replace("**Raté.**", "**Tenu.**"))
     assert blocks.elected_failures(verdict) == []
+    verdict.write_text(
+        "## Finaliste B\n\n1) Tenu. oui\n4) Critère raté : preuve absente\n\n"
+        "## Verdict\n\nÉlu : finaliste B\n"
+    )
+    assert blocks.elected_failures(verdict) == [4]
+    verdict.write_text(
+        "## Finaliste B\n\n1. Tenu. oui\n- 4. Raté. preuve absente\n\n"
+        "## Verdict\n\nÉlu : finaliste B\n"
+    )
+    assert blocks.elected_failures(verdict) == [4]
+    verdict.write_text("Comparaison libre.\n\n## Verdict\n\nÉlu : finaliste B\n")
+    assert blocks.elected_failures(verdict) == [0]
     print("4. le faux positif #124 est bloqué tant que le juge élu garde un raté ✓")
 
     HARNESS._write(root, "backend", ["src/x.py"], evidence, "fail",

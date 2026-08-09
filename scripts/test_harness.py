@@ -24,7 +24,10 @@ from pathlib import Path
 TOTAL_S = float(os.environ.get("GRAPHATOM_TEST_HARNESS_S", "85"))
 TAIL_CHARS = 4000
 BACKEND_PREFIXES = ("src/", "schema.sql", "tests/", "examples/", "scripts/")
-FRONT_PREFIXES = ("front/", "src/graphatom/web.py", "tests/front", "scripts/front")
+FRONT_PREFIXES = (
+    "front/", "src/graphatom/web.py", "tests/front", "scripts/front",
+    "scripts/test_harness.py", "tests/test_harness_test.py",
+)
 
 
 def _git(repo: Path, *args: str) -> list[str]:
@@ -147,8 +150,14 @@ def _signal_tree(process: subprocess.Popen, sig: signal.Signals) -> list[int]:
 
 def _stop(processes: list[subprocess.Popen]) -> None:
     descendants = []
+    groups = []
     for process in reversed(processes):
-        if process.poll() is None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+            groups.append(process.pid)
+        except ProcessLookupError:
+            pass
+        if process.poll() is None and process.pid not in groups:
             descendants.extend(_signal_tree(process, signal.SIGTERM))
     deadline = time.monotonic() + 3
     for process in reversed(processes):
@@ -158,11 +167,24 @@ def _stop(processes: list[subprocess.Popen]) -> None:
             _signal_tree(process, signal.SIGKILL)
             process.wait()
     alive = descendants
+    active_groups = groups
     while time.monotonic() < deadline:
         alive = [pid for pid in descendants if Path(f"/proc/{pid}").exists()]
-        if not alive:
+        active_groups = []
+        for pgid in groups:
+            try:
+                os.killpg(pgid, 0)
+                active_groups.append(pgid)
+            except ProcessLookupError:
+                pass
+        if not alive and not active_groups:
             return
         time.sleep(0.05)
+    for pgid in active_groups:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
     for pid in alive:
         try:
             os.kill(pid, signal.SIGKILL)

@@ -996,16 +996,22 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
     if ctx.run["node"] == "validate" and outcome == "pass":
         failures = elected_failures(workspace / "verdict.md")
         if failures:
-            listed = ", ".join(str(number) for number in failures)
+            malformed = failures == [0]
+            listed = ("format du verdict" if malformed else
+                      ", ".join(str(number) for number in failures))
             result = {
                 "outcome": "fail",
-                "summary": ("le finaliste élu garde des critères ratés par le "
-                            f"juge : {listed}; un nouveau cycle doit les prouver"),
+                "summary": (("la section du finaliste élu ne donne aucun "
+                             "statut numéroté Tenu/Raté") if malformed else
+                            ("le finaliste élu garde des critères ratés par le "
+                             f"juge : {listed}; un nouveau cycle doit les prouver")),
             }
             outcome = "fail"
             try:
                 with (workspace / "validate.md").open("a") as report:
-                    report.write(f"\n- [ ] Critères {listed} : ratés par le juge élu.\n")
+                    report.write(
+                        f"\n- [ ] {listed} : preuve du juge élu insuffisante.\n"
+                    )
             except OSError:
                 pass
     if (ctx.config["agent"].get("passation") is not False
@@ -1115,14 +1121,28 @@ def elected_failures(path: Path) -> list[int]:
         return []
     letter = choices[-1]
     section = re.search(
-        rf"(?ms)^# Finaliste {re.escape(letter)}\s*$\n(.*?)(?=^# (?:Finaliste|Comparaison|Verdict)|\Z)",
+        rf"(?ms)^#{{1,6}}\s+Finaliste\s+{re.escape(letter)}\s*$\n"
+        rf"(.*?)(?=^#{{1,6}}\s+(?:Finaliste|Comparaison|Verdict)\b|\Z)",
         verdict,
     )
     if not section:
-        return []
-    return [int(number) for number in re.findall(
-        r"(?m)^(\d+)\.\s+\*\*Raté\.\*\*", section.group(1)
-    )]
+        return [0]
+    content = section.group(1)
+    entries = re.findall(
+        r"(?im)^\s*(?:[-*+]\s+)?(\d+)[.)]\s+(.+)$", content
+    )
+    if not entries:
+        return [0]
+    failed = {int(number) for number, status in entries
+              if re.search(r"\brat(?:é|ée|e|ee)\b", status, re.IGNORECASE)}
+    for line in content.splitlines():
+        if not re.search(r"\brat(?:é|ée|e|ee)\b", line, re.IGNORECASE):
+            continue
+        number = re.search(r"(?i)(?:critère\s*)?(\d+)", line)
+        if number is None:
+            return [0]
+        failed.add(int(number.group(1)))
+    return sorted(failed)
 
 
 def _starved(path: Path) -> dict | None:
