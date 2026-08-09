@@ -202,6 +202,18 @@ def portes_de_pertinence(workdir: Path) -> None:
             assert "non concerné" in rapport.read_text(), node
             assert "ancien rapport" not in rapport.read_text(), node
 
+            for diff in (
+                "## Fait",
+                "\n".join(f"docs/chemin-{index:03d}-{'x' * 120}.md"
+                          for index in range(220)),
+            ):
+                os.environ["FAKE_DIFF"] = diff
+                resultat = blocks._attempt(ctx, ctx.workspace.resolve())
+                assert resultat["outcome"] == "pass", (node, resultat)
+                assert blocks._passation_invalide(passation) is None, node
+                assert len(passation.read_text()) <= blocks.PASSATION_CHARS, node
+                assert "- ## Fait" in passation.read_text() or "- docs/" in passation.read_text(), node
+
             os.environ["FAKE_DIFF"] = ""
             resultat = blocks._attempt(ctx, ctx.workspace.resolve())
             assert resultat["outcome"] == "fail", (node, resultat)
