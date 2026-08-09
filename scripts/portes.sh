@@ -92,6 +92,7 @@ tests/links_test.py
 tests/live_test.py
 tests/failure_trace_test.py
 tests/agent_executor_test.py
+tests/test_harness_test.py
 tests/seed_test.py
 tests/graph_executor_migration_test.py
 tests/codex_routing_test.py

@@ -146,6 +146,7 @@ def bundle() -> dict:
     spec = json.loads(PROFIL.read_text())
     spec["name"] = "code-task-cycle-test"
     for node, cmd in DOUBLURES.items():
+        spec["nodes"][node]["config"].pop("harness_cmd", None)
         agent = spec["nodes"][node]["config"]["agent"]
         agent["cmd"] = cmd
         # les budgets d'origine sont ceux d'un vrai modèle : un quart d'heure

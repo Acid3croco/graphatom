@@ -180,7 +180,10 @@ def portes_de_pertinence(workdir: Path) -> None:
     os.environ["PATH"] = f"{outils}:{ancien_path}"
     try:
         for node in ("test_backend", "test_frontend"):
-            spec = BUNDLE["nodes"][node]
+            # Le harnais fermé a sa propre régression. Ici, on garde la
+            # commande historique comme fixture pour le contrat de passation.
+            spec = json.loads(json.dumps(BUNDLE["nodes"][node]))
+            spec["config"].pop("harness_cmd", None)
             run = {"id": 70, "node": node, "cycle": 1, "attempt": 1,
                    "candidate": None}
             ctx = blocks.Context(FauxConn([], {}), run,

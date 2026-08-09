@@ -453,7 +453,8 @@ def _demande_passation(ctx: Context, workspace: Path) -> str:
     # interface `agent` : ils n'apprennent rien et leur prompt dit « pas
     # d'agent ici ». Leur config l'annonce, au lieu de fabriquer une
     # passation creuse qui prétendrait venir d'un modèle.
-    if ctx.config["agent"].get("passation") is False:
+    if (ctx.config["agent"].get("passation") is False
+            or ctx.config.get("harness_cmd") is not None):
         return ""
     fichier = workspace / f"passation-{ctx.run['node']}.md"
     return (
@@ -992,7 +993,23 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
                     report.write(f"porte du noyau - {error}\n")
             except OSError:
                 pass  # le résultat durable porte déjà l'échec explicite
+    if ctx.run["node"] == "validate" and outcome == "pass":
+        failures = elected_failures(workspace / "verdict.md")
+        if failures:
+            listed = ", ".join(str(number) for number in failures)
+            result = {
+                "outcome": "fail",
+                "summary": ("le finaliste élu garde des critères ratés par le "
+                            f"juge : {listed}; un nouveau cycle doit les prouver"),
+            }
+            outcome = "fail"
+            try:
+                with (workspace / "validate.md").open("a") as report:
+                    report.write(f"\n- [ ] Critères {listed} : ratés par le juge élu.\n")
+            except OSError:
+                pass
     if (ctx.config["agent"].get("passation") is not False
+            and ctx.config.get("harness_cmd") is None
             and not is_failure_outcome(outcome)):
         if erreur := _passation_invalide(handoff_path):
             return _autopsy(proc, log, ValueError(erreur), timeout=False)
@@ -1085,6 +1102,27 @@ def deployed_service_shas(repo: Path) -> dict[str, str]:
             timeout=DEPLOY_PROBE_TIMEOUT_S,
         ) if containers else "")
     return seen
+
+
+def elected_failures(path: Path) -> list[int]:
+    """Rend les critères explicitement ratés dans la section du finaliste élu."""
+    try:
+        verdict = path.read_text()
+    except OSError:
+        return []
+    choices = re.findall(r"Élu\s*:\s*finaliste\s+([A-Z])", verdict)
+    if not choices:
+        return []
+    letter = choices[-1]
+    section = re.search(
+        rf"(?ms)^# Finaliste {re.escape(letter)}\s*$\n(.*?)(?=^# (?:Finaliste|Comparaison|Verdict)|\Z)",
+        verdict,
+    )
+    if not section:
+        return []
+    return [int(number) for number in re.findall(
+        r"(?m)^(\d+)\.\s+\*\*Raté\.\*\*", section.group(1)
+    )]
 
 
 def _starved(path: Path) -> dict | None:

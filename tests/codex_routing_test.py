@@ -44,16 +44,19 @@ def declaration() -> None:
     """1. Le bundle porte la table décidée et une course de trois candidats."""
     porte("scope", "gpt-5.6-sol", "high")
     porte("judge", "gpt-5.6-sol", "high")
-    porte("test_backend", "gpt-5.6-luna", "low")
-    porte("test_frontend", "gpt-5.6-luna", "medium")
     porte("validate", "gpt-5.6-luna", "low")
     porte("release", "gpt-5.6-luna", "low")
     assert "release-node.sh" in cmd("release"), cmd("release")
-    for name in ("implement", "test_backend", "test_frontend", "release"):
+    for name in ("implement", "release"):
         resolved = executors.resolve(BUNDLE, BUNDLE["nodes"][name])
         assert resolved.cmd is not None and resolved.cmd_uses_executor is True, (
             name, resolved
         )
+    for name in ("test_backend", "test_frontend"):
+        resolved = executors.resolve(BUNDLE, BUNDLE["nodes"][name])
+        assert resolved.cmd is not None and resolved.cmd_uses_executor is False
+        assert "test_harness.py" in resolved.cmd, (name, resolved)
+        assert (resolved.cli, resolved.model, resolved.effort) == (None, None, None)
 
     variants = BUNDLE["nodes"]["implement"]["config"]["fanout"]["variants"]
     assert [v["label"] for v in variants] == [
@@ -78,7 +81,7 @@ def declaration() -> None:
     assert variants[2]["agent"]["silence_s"] == 300
     assert "claude " not in json.dumps(BUNDLE)
     print("1. scope, judge et implement seul Sol high ; course minimale "
-          "Luna medium + Sol high + DeepSeek gratuit libre ; portes Luna ✓")
+          "Luna medium + Sol high + DeepSeek gratuit libre ; tests sans modèle ✓")
 
 
 def prompts_synchrones() -> None:
@@ -289,7 +292,8 @@ def main() -> None:
     try:
         arguments_codex(tmp)
         release_rapide(tmp)
-        selection_diff(tmp)
+        # La sélection des tests est maintenant le contrat versionné de
+        # tests/test_harness_test.py, sans agent factice.
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("\nroutage codex : OK — modèle et effort explicites, release script-first")

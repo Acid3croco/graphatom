@@ -164,6 +164,9 @@ export function NodeConfig({
 }) {
   const config = node.config ?? {};
   const agent = config.agent;
+  const effectiveAgent = typeof config.harness_cmd === "string"
+    ? { cmd: config.harness_cmd }
+    : agent;
   const fanout = config.fanout;
   const repeat = fanout?.repeat ?? 1;
   const edges = Object.entries(node.edges ?? {});
@@ -203,7 +206,10 @@ export function NodeConfig({
               {repeat > 1 && <Field name="répétition" value={repeat} />}
             </>
           ) : (
-            execField(agent === undefined ? undefined : graphAgent, agent)
+            execField(
+              effectiveAgent === undefined ? undefined : graphAgent,
+              effectiveAgent,
+            )
           )}
           {config.lease_s !== undefined && (
             <Field name="lease_s" value={`${config.lease_s} s`} />
