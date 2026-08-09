@@ -27,6 +27,7 @@ export function GraphView({ bundle }: { bundle: GraphBundle }) {
         <NodeConfig
           name={selected}
           node={node}
+          graphAgent={bundle.agent}
           onClose={() => setSelected(null)}
         />
       ) : (

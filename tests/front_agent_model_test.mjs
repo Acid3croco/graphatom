@@ -28,8 +28,11 @@ assert.deepEqual(execution(graph, { model: "sonnet" }), {
   model: "sonnet",
 });
 assert.deepEqual(
-  execution(graph, { model: "sonnet" }, { cli: "opencode" }),
-  { kind: "model", cli: "opencode", model: "sonnet" },
+  execution(graph, { model: "sonnet" }, {
+    cli: "opencode",
+    model: "opencode/deepseek-v4-flash-free",
+  }),
+  { kind: "model", cli: "opencode", model: "deepseek-v4-flash-free" },
 );
 assert.deepEqual(
   execution(graph, { model: "sonnet" }, { model: "deepseek-v4" }),

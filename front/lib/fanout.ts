@@ -156,11 +156,10 @@ export function steps(
     const candidates = [...batch]
       .sort((a, b) => a.candidate! - b.candidate!)
       .map((candidate) => {
-        const cmd = declared[candidate.candidate!]?.cmd ?? null;
+        const agent = declared[candidate.candidate!]?.agent;
         const end = candidate.finished_at;
-        // la commande dit la CLI et le modèle ensemble, ou ne dit ni l'une
-        // ni l'autre : un candidat en shell pur n'a aucun des deux
-        const exec = execution(cmd);
+        // l'API porte l'agent effectif : le client n'analyse aucune commande
+        const exec = execution(agent);
         return {
           run: candidate,
           index: candidate.candidate!,
