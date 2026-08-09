@@ -40,6 +40,7 @@ PR_URL = "https://github.com/Acid3croco/graphatom/pull/70"
 
 BUNDLE = {
     "name": "démo", "entry": "ingest", "budgets": {},
+    "agent": {"cli": "claude", "model": "opus"},
     "on_kernel": {"escalate_to": "escalate", "exhausted_to": "closed"},
     "nodes": {
         "ingest": {"block": "FETCH", "edges": {"ok": "decide"}},
@@ -56,16 +57,16 @@ BUNDLE = {
 
 
 # un nœud en fan-out, tel qu'un graph le déclare : deux variantes jouées
-# deux fois, dont une qui surcharge la commande du nœud
+# deux fois, dont une qui surcharge le modèle structuré du nœud
 FANOUT_NODE = {
     "block": "ACT",
     "config": {
-        "agent": {"cmd": "claude --model opus", "prompt": "le prompt du nœud"},
+        "agent": {"prompt": "le prompt du nœud"},
         "fanout": {
             "variants": [
                 {"label": "opus", "strategy": "raisonne longtemps"},
                 {"label": "haiku", "strategy": "va droit au but",
-                 "agent": {"cmd": "claude --model haiku"}},
+                 "agent": {"model": "haiku"}},
             ],
             "repeat": 2,
             "reduce": "first_pass",
@@ -254,16 +255,18 @@ def main() -> None:
         # le fan-out d'un nœud, un candidat par entrée : sans lui, le client
         # ne saurait pas nommer les candidats qu'il déplie
         assert all("fanout" not in n for n in graph["nodes"]), graph["nodes"]
-        fanout = web._api_fanout(FANOUT_NODE)
+        fanout = web._api_fanout(BUNDLE, FANOUT_NODE)
         assert fanout["reduce"] == "first_pass" and fanout["repeat"] == 2, fanout
         # variantes × répétition : chaque variante deux fois, dans l'ordre
         labels = [c["variant"]["label"] for c in fanout["candidates"]]
         assert labels == ["opus", "opus", "haiku", "haiku"], labels
-        # la variante qui surcharge `agent.cmd` joue la sienne, l'autre hérite
-        cmds = [c["cmd"] for c in fanout["candidates"]]
-        assert cmds[0] == "claude --model opus" and cmds[3] == "claude --model haiku", cmds
-        assert web._api_fanout({"block": "ACT", "config": {}}) is None
-        print("   fanout projeté : 4 candidats, la surcharge de cmd résolue ✓")
+        # la variante surcharge le modèle, les deux héritent la CLI du graph
+        agents = [c["agent"] for c in fanout["candidates"]]
+        assert agents[0] == {"cli": "claude", "model": "opus"}, agents
+        assert agents[3] == {"cli": "claude", "model": "haiku"}, agents
+        assert all(c["cmd"] is None for c in fanout["candidates"]), fanout
+        assert web._api_fanout(BUNDLE, {"block": "ACT", "config": {}}) is None
+        print("   fanout projeté : 4 agents structurés effectifs ✓")
 
         # les fichiers du workspace, avec l'URL qui les sert
         names = {f["name"]: f["href"] for f in payload["files"]}

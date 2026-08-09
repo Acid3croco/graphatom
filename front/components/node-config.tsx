@@ -7,11 +7,10 @@
  * ces cases sort quand même, en JSON : une clé qu'un bloc range dans sa
  * config se montre sous son nom plutôt que de disparaître de la vue.
  *
- * Une seule chose est lue plutôt que recopiée, et le bundle ne la porte
- * nulle part : **ce qui exécute le nœud**. Elle se lit dans la commande, et
- * elle est toujours dite — une CLI et son modèle, du shell déterministe, ou
- * rien du tout. Un nœud sans modèle n'a pas un champ vide : il a une nature
- * qui se nomme.
+ * **Ce qui exécute le nœud** se lit dans les champs structurés du graph, du
+ * nœud et de la variante. Il est toujours dit — une CLI et son modèle, du
+ * shell déterministe, ou rien du tout. Un nœud sans modèle n'a pas un champ
+ * vide : il a une nature qui se nomme.
  *
  * Un nœud en fan-out n'a pas d'exécutant unique et le panneau n'en invente
  * pas : son en-tête compte les candidats et dit la réduction qui les
@@ -73,9 +72,18 @@ function Block({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-/** Ce qui exécute une commande, en toutes lettres — jamais vide. */
-function execField(cmd: string | undefined) {
-  return <Field name="exécution" value={executionLabel(execution(cmd))} />;
+/** Ce qui exécute un agent effectif, en toutes lettres — jamais vide. */
+function execField(
+  graph: BundleAgent | undefined,
+  node?: BundleAgent,
+  variant?: BundleAgent,
+) {
+  return (
+    <Field
+      name="exécution"
+      value={executionLabel(execution(graph, node, variant))}
+    />
+  );
 }
 
 /**
@@ -91,35 +99,27 @@ function reduction(fanout: BundleFanout): string {
 }
 
 /**
- * La commande d'une variante : la sienne, ou celle du nœud.
- *
- * Une variante est un fragment de config — les clés qu'elle nomme
- * surchargent celles du nœud, celles qu'elle tait sont héritées. Une
- * variante qui ne surcharge pas `agent` court donc la commande du nœud, et
- * c'est bien le même exécutant qu'il faut lui afficher.
- */
-function variantCmd(variant: Variant, node: string | undefined) {
-  const agent = variant.agent as BundleAgent | undefined;
-  return agent?.cmd ?? node;
-}
-
-/**
  * Une variante déclarée : ce qui la distingue, et ce qui l'exécute.
  *
  * Trois choses la décrivent, et le fan-out les met toutes les trois dans la
- * config : son étiquette, la stratégie qu'on lui impose, et l'exécutant que
- * sa commande nomme. Le reste de ce qu'elle surcharge sort ensuite tel
- * qu'il est déclaré — c'est bien là que se lit ce que cette variante change.
+ * config : son étiquette, la stratégie qu'on lui impose, et son exécuteur
+ * effectif. Le reste de ce qu'elle surcharge sort ensuite tel qu'il est
+ * déclaré — c'est bien là que se lit ce que cette variante change.
  */
 function VariantConfig({
   variant,
   index,
-  cmd,
+  graphAgent,
+  nodeAgent,
 }: {
   variant: Variant;
   index: number;
-  cmd: string | undefined;
+  graphAgent: BundleAgent | undefined;
+  nodeAgent: BundleAgent | undefined;
 }) {
+  const variantAgent = variant.agent as BundleAgent | undefined;
+  const inherited =
+    nodeAgent === undefined && variantAgent === undefined ? undefined : graphAgent;
   const rest = Object.entries(variant).filter(([key]) => !VARIANT_KNOWN.has(key));
   const flat = rest.filter(
     ([, value]) => typeof value !== "object" || value === null,
@@ -134,7 +134,7 @@ function VariantConfig({
           name="étiquette"
           value={variant.label === undefined ? `c${index}` : String(variant.label)}
         />
-        {execField(variantCmd(variant, cmd))}
+        {execField(inherited, nodeAgent, variantAgent)}
         {flat.map(([key, value]) => (
           <Field key={key} name={key} value={String(value)} />
         ))}
@@ -154,10 +154,12 @@ function VariantConfig({
 export function NodeConfig({
   name,
   node,
+  graphAgent,
   onClose,
 }: {
   name: string;
   node: BundleNode;
+  graphAgent?: BundleAgent;
   onClose: () => void;
 }) {
   const config = node.config ?? {};
@@ -201,7 +203,7 @@ export function NodeConfig({
               {repeat > 1 && <Field name="répétition" value={repeat} />}
             </>
           ) : (
-            execField(agent?.cmd)
+            execField(agent === undefined ? undefined : graphAgent, agent)
           )}
           {config.lease_s !== undefined && (
             <Field name="lease_s" value={`${config.lease_s} s`} />
@@ -233,7 +235,8 @@ export function NodeConfig({
                   <VariantConfig
                     variant={variant}
                     index={index}
-                    cmd={agent?.cmd}
+                    graphAgent={graphAgent}
+                    nodeAgent={agent}
                   />
                 </li>
               ))}
