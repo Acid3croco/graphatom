@@ -127,9 +127,9 @@ def main() -> None:
     # le sujet d'un autre canal : deux cellules vides, et la ligne tient
     assert "<td></td><td></td>" in page, page
     assert "pipeline-x:oom" not in page, "aucun titre inventé pour un autre canal"
-    assert "<th>coût total $</th>" in page, page
+    assert "<th>coût rapporté $</th><th>coût API estimé $</th>" in page, page
     assert "<td>0.0168</td>" in page, page
-    assert "<td>0.0000</td>" in page, page
+    assert "<td>g1</td><td>—</td><td>—</td>" in page, page
     print("4. /items : #27 → GitHub, titre → /item/14, autre canal → vide ✓")
 
     # 5. la question dit de quoi il s'agit — le titre, pas seulement le numéro

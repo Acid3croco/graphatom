@@ -1,4 +1,4 @@
--- GraphAtom — milestone 1. Neuf tables, rien de volumineux en base.
+-- GraphAtom — tables durables du rail, rien de volumineux en base.
 
 CREATE TABLE IF NOT EXISTS graph_revision (
     id           TEXT PRIMARY KEY,            -- sha256 du bundle canonique
@@ -105,6 +105,40 @@ CREATE UNLOGGED TABLE IF NOT EXISTS database_incarnation (
     token     TEXT NOT NULL
 );
 
+-- Un relevé immuable des tarifs API publics. Plusieurs lignes par modèle
+-- gardent l'histoire : un run épingle une ligne précise et son estimation ne
+-- change donc pas lors de la relève quotidienne suivante.
+CREATE TABLE IF NOT EXISTS model_price (
+    id                        BIGSERIAL PRIMARY KEY,
+    provider                  TEXT        NOT NULL,
+    model                     TEXT        NOT NULL,
+    source_url                TEXT        NOT NULL,
+    fetched_at                TIMESTAMPTZ NOT NULL,
+    input_per_million         NUMERIC     NOT NULL CHECK (input_per_million >= 0),
+    cache_read_per_million    NUMERIC     NOT NULL CHECK (cache_read_per_million >= 0),
+    cache_write_per_million   NUMERIC     NOT NULL CHECK (cache_write_per_million >= 0),
+    output_per_million        NUMERIC     NOT NULL CHECK (output_per_million >= 0)
+);
+
+-- Le coût API équivalent d'un run, séparé du coût que son fournisseur a
+-- rapporté. Les quatre classes sont disjointes : aucun token de cache ou de
+-- raisonnement n'est compté deux fois.
+CREATE TABLE IF NOT EXISTS run_cost (
+    run_id                    BIGINT PRIMARY KEY REFERENCES node_run(id),
+    price_id                  BIGINT      NOT NULL REFERENCES model_price(id),
+    model_source              TEXT        NOT NULL,
+    input_tokens              BIGINT      NOT NULL CHECK (input_tokens >= 0),
+    cache_read_tokens         BIGINT      NOT NULL CHECK (cache_read_tokens >= 0),
+    cache_write_tokens        BIGINT      NOT NULL CHECK (cache_write_tokens >= 0),
+    output_tokens             BIGINT      NOT NULL CHECK (output_tokens >= 0),
+    input_cost_usd            NUMERIC     NOT NULL CHECK (input_cost_usd >= 0),
+    cache_read_cost_usd       NUMERIC     NOT NULL CHECK (cache_read_cost_usd >= 0),
+    cache_write_cost_usd      NUMERIC     NOT NULL CHECK (cache_write_cost_usd >= 0),
+    output_cost_usd           NUMERIC     NOT NULL CHECK (output_cost_usd >= 0),
+    estimated_cost_usd        NUMERIC     NOT NULL CHECK (estimated_cost_usd >= 0),
+    estimated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Le passage. `graphatom init-db` rejoue ce fichier à chaque déploiement, et
 -- un CREATE TABLE ne voit rien d'une table déjà là : tout ce qui arrive après
 -- coup s'écrit ici, idempotent, et vaut aussi bien sur une base neuve que sur
@@ -135,3 +169,5 @@ ALTER TABLE node_run  ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ;
 DROP INDEX IF EXISTS node_run_attempt_key;
 CREATE UNIQUE INDEX IF NOT EXISTS node_run_candidate_key
     ON node_run (item_id, node, cycle, attempt, candidate) NULLS NOT DISTINCT;
+CREATE INDEX IF NOT EXISTS model_price_latest
+    ON model_price (provider, model, fetched_at DESC, id DESC);

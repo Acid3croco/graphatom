@@ -139,7 +139,7 @@ def init_db(drop: bool = False) -> list[str]:
         conn.execute(sql.SQL("SET lock_timeout = {}").format(sql.Literal(LOCK_TIMEOUT)))
         if drop:
             conn.execute(
-                "DROP TABLE IF EXISTS question, effect, event, node_run, "
+                "DROP TABLE IF EXISTS question, effect, event, run_cost, model_price, node_run, "
                 "work_item, subject, graph_revision, heartbeat, "
                 "database_incarnation CASCADE"
             )

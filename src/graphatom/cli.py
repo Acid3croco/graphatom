@@ -27,6 +27,11 @@ def main() -> None:
 
     sub.add_parser("run", help="ordonnanceur, boucle infinie")
     sub.add_parser("tick", help="un seul tick d'ordonnanceur")
+    sp = sub.add_parser("pricing-sync", help="tarifs API quotidiens et estimation des runs")
+    sp.add_argument("--poll", type=float, default=60.0)
+    sp = sub.add_parser("refresh-pricing", help="relever les tarifs et chiffrer maintenant")
+    sp.add_argument("--force", action="store_true")
+    sub.add_parser("pricing-ready", help="vérifier que les tables de coût existent")
     sub.add_parser("items", help="lister les items")
     sub.add_parser("questions", help="questions ouvertes")
 
@@ -98,6 +103,10 @@ def main() -> None:
     if args.cmd == "run":
         scheduler.run_forever()
         return
+    if args.cmd == "pricing-sync":
+        from . import pricing
+        pricing.sync_forever(args.poll)
+        return
     if args.cmd == "serve":
         web.serve(port=args.port, by=args.by, notify_cmd=args.notify_cmd, host=args.host)
         return
@@ -126,6 +135,14 @@ def main() -> None:
             print(kernel.admit(conn, args.revision, args.subject_key))
         elif args.cmd == "tick":
             print(scheduler.tick(conn))
+        elif args.cmd == "refresh-pricing":
+            from . import pricing
+            prices, estimated, unknown = pricing.once(conn, force=args.force)
+            print(f"{prices} relevé(s), {estimated} run(s) chiffré(s), "
+                  f"{unknown} sans modèle ou tarif")
+        elif args.cmd == "pricing-ready":
+            from . import pricing
+            raise SystemExit(0 if pricing.ready(conn) else 1)
         elif args.cmd == "items":
             for r in conn.execute(
                 "SELECT w.id, s.subject_key, w.generation, w.state, w.version, "

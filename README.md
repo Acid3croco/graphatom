@@ -113,6 +113,10 @@ uv run python tests/criteria_test.py                 # le nœud scope qui parle 
 uv run python tests/api_test.py                      # l'API JSON du canal web : les
                                                      # mêmes vues en données, sans
                                                      # base ni serveur
+uv run python tests/pricing_test.py                  # tarifs publics : parsing,
+                                                     # cache et modèle, sans réseau
+uv run python tests/pricing_db_test.py               # estimation épinglée en base
+                                                     # et projetée dans l'API
 uv run python tests/answer_test.py                   # `/answer` : la première ligne
                                                      # décide, la prose passe, et la
                                                      # commande mal formée se dit
@@ -588,7 +592,7 @@ nœud, passé à 1260 s, donc dans son bail, passé à 1320 s.
 
 **Deux effets de bord du même mécanisme.** Le verrou obtenu, le shell
 compare le SHA visé à celui que portent les conteneurs — l'étiquette
-`com.graphatom.sha`, que le compose pose sur les trois services déployés :
+`com.graphatom.sha`, que le compose pose sur les quatre services déployés :
 si un voisin a déployé le même `main` pendant l'attente, il n'y a rien à
 reconstruire et l'issue est un succès. La vérité est ainsi lue sur le
 déploiement lui-même, jamais sur un fichier tenu à côté. Et si un `up`
@@ -1046,8 +1050,29 @@ changer au contrat du bloc.
 **Ce que coûte un cycle se lit sur la même page.** Chaque transition du
 journal porte sa durée — l'écart avec la précédente, tentatives comprises —,
 chaque run la sienne et ses tokens, et l'en-tête le temps total de l'item
-avec le total par type de token. Rien de nouveau en base : les durées
-sortent des horodatages du journal, les tokens du résultat des runs.
+avec le total par type de token. Les durées sortent des horodatages du
+journal, les tokens du résultat des runs.
+
+**Le coût rapporté et le coût API estimé ne sont pas la même donnée.** Une
+session Codex par abonnement ne rapporte aucun dollar ; un modèle OpenCode
+gratuit rapporte zéro. Le service `pricing-sync` relève donc une fois par
+jour les tarifs standard sur les pages officielles OpenAI et DeepSeek, sans
+clé API, puis chiffre les quatre classes disjointes : entrée, cache lu, cache
+écrit et sortie. Le raisonnement Codex est déjà inclus dans sa sortie ; celui
+d'OpenCode est séparé et rejoint la sortie. Aucun token ne paie deux fois.
+Le montant OpenAI emploie le tarif standard de base. Codex rapporte le total
+d'un tour, pas la taille d'entrée de chaque requête du tour ; le seuil de
+contexte long ne peut donc pas être appliqué sans inventer une répartition.
+
+Chaque run épingle son relevé dans `run_cost` : le coût d'hier ne change pas
+quand le tarif de demain arrive. La table `model_price` garde la source et la
+date du relevé. Le frontend montre les deux montants séparément et signale
+les runs sans modèle ou sans tarif. Un nouveau run est chiffré en moins d'une
+minute. Pour les anciens runs Codex qui n'avaient
+pas écrit leur modèle, `GRAPHATOM_LEGACY_CODEX_MODEL` permet une reprise
+explicite ; leur provenance reste `legacy_default`, donc visible comme une
+inférence. Une panne de page tarifaire conserve les anciens relevés et ne
+touche ni le worker, ni GitHub, ni le web.
 
 [`examples/code-task.json`](examples/code-task.json) est le graph qui fait
 tourner ce repo : **jugement de la taille et des critères** (`scope`),
@@ -1057,7 +1082,7 @@ implémentation par agent, **agent de test backend**
 un par un** (`validate`), puis review humaine —
 question fermée sur l'issue GitHub. La boucle se ferme ensuite toute
 seule : **release** (commit, push, PR, merge surveillé jusqu'au SHA),
-**deploy** (`docker compose up -d --build github-sync web front`) et
+**deploy** (`docker compose up -d --build github-sync pricing-sync web front`) et
 **verify_deploy** (conteneurs en marche, `/items` rendu par le front, le
 secours en 200, logs du sync propres) — ces deux derniers sans aucun
 modèle, comme la préparation du worktree : du shell.

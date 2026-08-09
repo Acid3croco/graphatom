@@ -55,7 +55,8 @@ MD=""            # portes.md, connu dès que le workspace l'est
 # `src/` tombe ici, avant même qu'un test soit choisi.
 MODULES="import graphatom.blocks, graphatom.channel, graphatom.cli, \
 graphatom.db, graphatom.github_sync, graphatom.graph, graphatom.heartbeat, \
-graphatom.kernel, graphatom.quota, graphatom.scheduler, graphatom.executors, graphatom.web, \
+graphatom.kernel, graphatom.pricing, graphatom.quota, graphatom.scheduler, \
+graphatom.executors, graphatom.web, \
 graphatom.worktree"
 
 # Ce qui rend la suite concernée : le diff du candidat touche du code, un
@@ -93,6 +94,7 @@ tests/failure_trace_test.py
 tests/agent_executor_test.py
 tests/graph_executor_migration_test.py
 tests/codex_routing_test.py
+tests/pricing_test.py
 tests/orphans_test.py
 tests/passation_test.py
 tests/starved_test.py
