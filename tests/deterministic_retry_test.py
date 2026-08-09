@@ -53,8 +53,21 @@ def command(run: dict, value: str = "exit 3") -> None:
     }))
 
 
-def crash(conn, run: dict, command_value: str = "exit 3") -> None:
+def crash(conn, run: dict, command_value: str = "exit 3",
+          human: str | None = None, provider_traces: bool = False) -> None:
     command(run, command_value)
+    workspace = blocks.run_workspace(run["item_id"], run)
+    if human is not None:
+        (workspace / f"{run['node']}.md").write_text(human)
+        blocks.passation_path(run["item_id"], run).write_text(f"passation {human}")
+    if provider_traces:
+        name = blocks.attempt_name(run)
+        (workspace / f"codex-{name}.jsonl").write_text('{"event":"same"}\n')
+        (workspace / f"opencode-events-{name}.jsonl").write_text(
+            '{"event":"same"}\n')
+        (workspace / "codex-errors.log").write_text(f"stderr codex {run['id']}\n")
+        (workspace / "opencode-errors.log").write_text(
+            f"stderr opencode {run['id']}\n")
     kernel.apply(conn, run["id"], {
         "outcome": "crashed", "error": "ValueError: passation absente",
         "timeout": False, "exit_code": 3,
@@ -71,9 +84,9 @@ def identique(conn, revision: str) -> None:
     """Deux erreurs identiques escaladent et nomment les deux runs."""
     item_id = item(conn, revision)
     first = kernel.claim(conn, item_id)
-    crash(conn, first)
+    crash(conn, first, human="première formulation", provider_traces=True)
     second = kernel.claim(conn, item_id)
-    crash(conn, second)
+    crash(conn, second, human="autre formulation", provider_traces=True)
 
     assert etat(conn, item_id)["state"] == "escalate"
     assert kernel.claim(conn, item_id) is None, "une troisième tentative existe"
@@ -113,6 +126,16 @@ def changement(conn, revision: str) -> None:
     crash(conn, kernel.claim(conn, item_id), too_large)
     crash(conn, kernel.claim(conn, item_id), too_large)
     assert etat(conn, item_id)["state"] == "travail"
+
+    item_id = item(conn, revision)
+    first = kernel.claim(conn, item_id)
+    workspace = blocks.run_workspace(item_id, first)
+    workspace.mkdir(parents=True, exist_ok=True)
+    for index in range(blocks.SIGNATURE_ENTRIES + 1):
+        (workspace / f"agent-ignore-{index}.log").write_text("")
+    crash(conn, first)
+    crash(conn, kernel.claim(conn, item_id))
+    assert etat(conn, item_id)["state"] == "travail"
     print("2. commande ou workspace différent, ou borne dépassée : relance conservée ✓")
 
 
@@ -147,6 +170,47 @@ def reduction(conn, revision: str) -> None:
     print("4. fan-out : seconde réduction identique escaladée sans troisième lot ✓")
 
 
+def reduction_avec_progres(conn, revision: str) -> None:
+    """Le progrès d'un seul candidat conserve la relance du lot entier."""
+    item_id = item(conn, revision)
+    first = [kernel.claim(conn, item_id), kernel.claim(conn, item_id)]
+    for run in first:
+        crash(conn, run)
+    second = [kernel.claim(conn, item_id), kernel.claim(conn, item_id)]
+    crash(conn, second[0])
+    crash(conn, second[1], command_value="exit 4")
+    assert etat(conn, item_id)["state"] == "travail"
+    third = [kernel.claim(conn, item_id), kernel.claim(conn, item_id)]
+    assert {run["attempt"] for run in third} == {3}
+    kernel.apply(conn, third[0]["id"], {"outcome": "ok"})
+    print("5. fan-out : progrès d'un candidat, troisième lot conservé ✓")
+
+
+def limites(conn, revision: str) -> None:
+    """Un autre item et un autre cycle ne peuvent fournir le précédent."""
+    first_item = item(conn, revision)
+    crash(conn, kernel.claim(conn, first_item))
+
+    other_item = item(conn, revision)
+    first = kernel.claim(conn, other_item)
+    crash(conn, first)
+    other_second = kernel.claim(conn, other_item)
+    assert other_second["attempt"] == 2
+    kernel.apply(conn, other_second["id"], {"outcome": "ok"})
+
+    second = kernel.claim(conn, first_item)
+    crash(conn, second)
+    assert etat(conn, first_item)["state"] == "escalate"
+    kernel.apply_item(conn, first_item, "retry", kind="answer")
+    next_cycle = kernel.claim(conn, first_item)
+    assert next_cycle["cycle"] == 2 and next_cycle["attempt"] == 1
+    crash(conn, next_cycle)
+    cycle_second = kernel.claim(conn, first_item)
+    assert cycle_second["attempt"] == 2
+    kernel.apply(conn, cycle_second["id"], {"outcome": "ok"})
+    print("6. limites : aucun run d'un autre item ou cycle n'est comparé ✓")
+
+
 def main() -> None:
     workspace = Path(tempfile.mkdtemp(prefix="graphatom-retry-identique-"))
     blocks.DATA_DIR = workspace
@@ -159,6 +223,8 @@ def main() -> None:
             changement(conn, revision)
             transitoire(conn, revision)
             reduction(conn, fanout_revision)
+            reduction_avec_progres(conn, fanout_revision)
+            limites(conn, revision)
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
 

@@ -111,6 +111,7 @@ TAIL_LINES = 20  # queue du log rendue dans l'autopsie d'une tentative crashée
 TAIL_CHARS = 2000
 REPORT_CHARS = 4000  # queue du compte rendu citée dans la trace d'échec
 SIGNATURE_FILES = 100  # au-delà, conserver la relance plutôt que mal comparer
+SIGNATURE_ENTRIES = 256  # borne aussi le parcours des traces ignorées
 SIGNATURE_BYTES = 64 * 1024  # borne par commande ou fichier durable
 # Le noyau a ses propres issues d'échec. Le domaine garde les noms négatifs
 # employés par les graphes. Une issue n'est un échec que si elle est dans l'un
@@ -215,6 +216,43 @@ def _files_digest(root: Path, names: list[str]) -> str | None:
     return hashlib.sha256(json.dumps(state, ensure_ascii=False).encode()).hexdigest()
 
 
+def _provider_trace(name: str) -> bool:
+    """Reconnaît un flux fournisseur actif ou archivé par tentative."""
+    return (name in EVENT_NAMES or name in {"codex-errors.log", "opencode-errors.log"}
+            or (name.startswith("codex-") and name.endswith(".jsonl"))
+            or (name.startswith("opencode-events-") and name.endswith(".jsonl")))
+
+
+def _workspace_digest(workspace: Path) -> str | None:
+    """Empreinte bornée du travail durable, sans prose ni traces d'agent.
+
+    Le Markdown du workspace est l'interface humaine des nœuds : critères,
+    rapports, verdicts et passations. Le travail durable, documentation
+    comprise, vit dans le worktree et reste donc comparé par sa propre
+    empreinte. La borne porte sur toutes les entrées parcourues, y compris
+    celles que l'on ignore, pour qu'un long historique ne rende pas le coût
+    de la comparaison implicite.
+    """
+    ignored = {PGID_FILE, OUTCOME_NAME, STARVED_NAME, PROMPT_NAME, USAGE_NAME,
+               FAILURE_NAME}
+    names = []
+    try:
+        for seen, path in enumerate(workspace.iterdir(), start=1):
+            if seen > SIGNATURE_ENTRIES:
+                return None
+            name = path.name
+            if (not path.is_file() or name in ignored or path.suffix == ".md"
+                    or _provider_trace(name)
+                    or name.startswith(("agent-", "command-", "prompt-", "usage-"))):
+                continue
+            names.append(name)
+            if len(names) > SIGNATURE_FILES:
+                return None
+    except OSError:
+        return None
+    return _files_digest(workspace, names)
+
+
 def retry_signature(item_id: int, run: dict, outcome: str) -> str | None:
     """Signature bornée d'un échec, limitée à son item, cycle et candidat.
 
@@ -232,16 +270,7 @@ def retry_signature(item_id: int, run: dict, outcome: str) -> str | None:
     if command is None or len(encoded) > SIGNATURE_BYTES:
         return None
 
-    ignored = {PGID_FILE, OUTCOME_NAME, STARVED_NAME, PROMPT_NAME, USAGE_NAME,
-               FAILURE_NAME}
-    try:
-        names = [path.name for path in workspace.iterdir()
-                 if path.is_file() and path.name not in ignored
-                 and not path.name.startswith(
-                     ("agent-", "command-", "prompt-", "usage-"))]
-    except OSError:
-        return None
-    workspace_state = _files_digest(workspace, names)
+    workspace_state = _workspace_digest(workspace)
 
     tree = run_worktree(item_id, run)
     if tree is None:

@@ -644,6 +644,64 @@ def _boucle(conn, item, nodes: dict, target: str, cycle: int) -> bool:
     ).fetchone() is not None
 
 
+def _retry_batch(conn, item: dict, run: dict, attempt: int) -> dict | None:
+    """Rend candidat → (run, signature) pour un lot entièrement comparable."""
+    rows = conn.execute(
+        "SELECT id, candidate, result FROM node_run WHERE item_id = %s "
+        "AND node = %s AND cycle = %s AND attempt = %s ORDER BY candidate",
+        (item["id"], run["node"], run["cycle"], attempt),
+    ).fetchall()
+    batch = {}
+    for row in rows:
+        signature = (row.get("result") or {}).get("_retry_signature")
+        if row.get("candidate") is None or not signature:
+            return None
+        batch[row["candidate"]] = (row["id"], signature)
+    return batch or None
+
+
+def _repeated_failure(conn, item: dict, run: dict, outcome: str) -> int | None:
+    """Rend le run antérieur si toute la tentative répète le même échec.
+
+    Un nœud simple compare son run précédent. Un fan-out compare les lots
+    complets, candidat par candidat : le progrès d'un seul candidat suffit à
+    conserver la relance du lot entier.
+    """
+    result = run.get("result") or {}
+    signature = result.get("_retry_signature")
+    if outcome not in ("crashed", "invalid_result") or not signature:
+        return None
+    if run.get("candidate") is None:
+        previous = conn.execute(
+            "SELECT id, result FROM node_run WHERE item_id = %s AND node = %s "
+            "AND cycle = %s AND candidate IS NULL AND attempt < %s "
+            "ORDER BY attempt DESC LIMIT 1",
+            (item["id"], run["node"], run["cycle"], run["attempt"]),
+        ).fetchone()
+        if (previous and (previous.get("result") or {}).get("_retry_signature")
+                == signature):
+            return previous["id"]
+        return None
+
+    previous = conn.execute(
+        "SELECT max(attempt) AS attempt FROM node_run WHERE item_id = %s "
+        "AND node = %s AND cycle = %s AND attempt < %s",
+        (item["id"], run["node"], run["cycle"], run["attempt"]),
+    ).fetchone()
+    previous_attempt = previous["attempt"] if previous else None
+    if previous_attempt is None:
+        return None
+    current_batch = _retry_batch(conn, item, run, run["attempt"])
+    previous_batch = _retry_batch(conn, item, run, previous_attempt)
+    if (current_batch is None or previous_batch is None
+            or set(current_batch) != set(previous_batch)):
+        return None
+    if any(current_batch[candidate][1] != previous_batch[candidate][1]
+           for candidate in current_batch):
+        return None
+    return previous_batch[run["candidate"]][0]
+
+
 def _route(conn, item, bundle, run, outcome: str, kind: str) -> None:
     """Résout l'arête, débite l'escalade, ouvre le passage, bouge l'item.
 
@@ -657,27 +715,16 @@ def _route(conn, item, bundle, run, outcome: str, kind: str) -> None:
     # échéances passent aussi ici, mais n'inventent pas une tentative. La
     # trace se prend avant une éventuelle conversion en `budget_exhausted` :
     # elle dit l'issue que le nœud a réellement rendue.
-    repeated = None
     result = run.get("result") or {}
-    if (outcome in ("crashed", "invalid_result")
-            and run.get("id") is not None
-            and result.get("_retry_signature")):
-        previous = conn.execute(
-            "SELECT id, result FROM node_run WHERE item_id = %s AND node = %s "
-            "AND cycle = %s AND candidate IS NOT DISTINCT FROM %s "
-            "AND attempt < %s ORDER BY attempt DESC LIMIT 1",
-            (item["id"], run["node"], run["cycle"], run.get("candidate"),
-             run["attempt"]),
-        ).fetchone()
-        if (previous and (previous.get("result") or {}).get("_retry_signature")
-                == result["_retry_signature"]):
-            repeated = previous["id"]
-            message = (f"relance identique supprimée — runs {repeated} "
-                       f"et {run['id']}")
-            result = {**result, "retry": message}
-            run = {**run, "result": result}
-            conn.execute("UPDATE node_run SET result = %s WHERE id = %s",
-                         (json.dumps(result), run["id"]))
+    repeated = (_repeated_failure(conn, item, run, outcome)
+                if run.get("id") is not None else None)
+    if repeated is not None:
+        message = (f"relance identique supprimée — runs {repeated} "
+                   f"et {run['id']}")
+        result = {**result, "retry": message}
+        run = {**run, "result": result}
+        conn.execute("UPDATE node_run SET result = %s WHERE id = %s",
+                     (json.dumps(result), run["id"]))
 
     if run.get("id") is not None:
         write_failure_trace(item["id"], run, outcome)
