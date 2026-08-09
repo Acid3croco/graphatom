@@ -65,7 +65,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote
 
-from . import channel, db, heartbeat, scheduler
+from . import channel, db, executors, heartbeat, scheduler
 from .blocks import item_workspace
 from .graph import candidate_node, fanout_variants, judge_source, load_bundle
 
@@ -295,10 +295,35 @@ ITEM_SELECT = (
 )
 
 
+def _reported_cost(run: dict) -> int | float:
+    """Le coût numérique rapporté par un run, ou zéro."""
+    result = run.get("result")
+    usage = result.get("usage") if isinstance(result, dict) else None
+    value = usage.get("total_cost_usd") if isinstance(usage, dict) else None
+    return value if type(value) in (int, float) else 0
+
+
 def _items_data(conn) -> list[dict]:
     """Tous les items, du plus récent au plus ancien — même requête pour la
-    page et pour l'API : une seule lecture, deux rendus."""
-    return conn.execute(ITEM_SELECT + "ORDER BY w.id DESC").fetchall()
+    page et pour l'API : une seule lecture, deux rendus.
+
+    Le coût prend tous les runs de chaque item, quel que soit leur statut.
+    Un usage absent ou un coût qui n'est pas un nombre vaut zéro.
+    """
+    rows = [dict(row) for row in
+            conn.execute(ITEM_SELECT + "ORDER BY w.id DESC").fetchall()]
+    costs = {row["id"]: 0.0 for row in rows}
+    if rows:
+        runs = conn.execute(
+            "SELECT item_id, result FROM node_run WHERE item_id = ANY(%s)",
+            ([row["id"] for row in rows],),
+        ).fetchall()
+        for run in runs:
+            if run.get("item_id") in costs:
+                costs[run["item_id"]] += _reported_cost(run)
+    for row in rows:
+        row["total_cost_usd"] = costs[row["id"]]
+    return rows
 
 
 def _items_page(conn, beat: dt.datetime | None) -> str:
@@ -313,6 +338,7 @@ def _items_page(conn, beat: dt.datetime | None) -> str:
             f"<td>{_title(r['id'], r['title'])}</td>"
             f"<td>{_e(r['graph'])}</td>"
             f"<td>g{r['generation']}</td>"
+            f"<td>{r['total_cost_usd']:.4f}</td>"
             f"<td><span class='badge {'terminal' if r['terminal_at'] else 'active'}'>"
             f"{_e(r['state'])}</span></td>"
             f"<td>v{r['version']}</td><td>{r['escalations']}</td>"
@@ -320,6 +346,7 @@ def _items_page(conn, beat: dt.datetime | None) -> str:
             for r in rows)
         body.append("<table><tr><th>item</th><th>issue</th><th>titre</th>"
                     "<th>graph</th><th>gén.</th>"
+                    "<th>coût total $</th>"
                     "<th>état</th><th>version</th><th>escalades</th><th>fin</th></tr>"
                     f"{lines}</table>")
     version = max((r["version"] for r in rows), default=0)
@@ -604,6 +631,8 @@ def _item_data(conn, item_id: int) -> dict | None:
     runs = conn.execute(
         "SELECT * FROM node_run WHERE item_id = %s ORDER BY id", (item_id,)
     ).fetchall()
+    item = dict(item)
+    item["total_cost_usd"] = sum(_reported_cost(run) for run in runs)
     effects = conn.execute(
         "SELECT * FROM effect WHERE item_id = %s ORDER BY op_id", (item_id,)
     ).fetchall()
@@ -756,6 +785,7 @@ def _api_item_row(row: dict) -> dict:
         "version": row["version"],
         "cycle": row["cycle"],
         "escalations": row["escalations"],
+        "total_cost_usd": row["total_cost_usd"],
         "issue_url": _issue_href(row["subject_key"]),
         "pr_url": _pr_url(row["id"]),
         "terminal_at": row["terminal_at"],
@@ -768,14 +798,14 @@ def _api_items(conn) -> list[dict]:
     return [_api_item_row(r) for r in _items_data(conn)]
 
 
-def _api_fanout(spec: dict) -> dict | None:
+def _api_fanout(bundle: dict, spec: dict) -> dict | None:
     """Le fan-out d'un nœud, un candidat par entrée — `None` sans fan-out.
 
     Un candidat se lit par son numéro : l'entrée `k` de `candidates` est
     celle du run qui porte `candidate = k`. Elle dit ce qui le distingue —
-    sa variante telle qu'elle est déclarée — et la commande qu'il joue
-    vraiment, variante posée sur celle du nœud. Le client y lit le modèle
-    et la CLI sans refaire la surcharge.
+    sa variante telle qu'elle est déclarée — et son agent effectif, variante
+    posée sur le nœud puis sur les valeurs du graph. Le client lit ces champs
+    structurés sans analyser la commande shell.
     """
     fanout = (spec.get("config") or {}).get("fanout")
     if not fanout:
@@ -783,13 +813,21 @@ def _api_fanout(spec: dict) -> dict | None:
     return {
         "reduce": fanout["reduce"],
         "repeat": fanout.get("repeat", 1),
-        "candidates": [
-            {"variant": variant,
-             "cmd": ((candidate_node(spec, k).get("config") or {})
-                     .get("agent") or {}).get("cmd")}
-            for k, variant in enumerate(fanout_variants(spec))
-        ],
+        "candidates": [_api_candidate(bundle, spec, k, variant)
+                       for k, variant in enumerate(fanout_variants(spec))],
     }
+
+
+def _api_candidate(bundle: dict, spec: dict, candidate: int,
+                   variant: dict) -> dict:
+    """Une variante et les champs de son exécuteur résolu."""
+    resolved = executors.resolve(bundle, candidate_node(spec, candidate))
+    agent = {key: value for key, value in {
+        "cli": resolved.cli,
+        "model": resolved.model,
+        "cmd": resolved.cmd,
+    }.items() if value is not None}
+    return {"variant": variant, "agent": agent, "cmd": resolved.cmd}
 
 
 def _api_graph(bundle: dict, current: str) -> dict:
@@ -812,7 +850,8 @@ def _api_graph(bundle: dict, current: str) -> dict:
         "nodes": [{"name": n, "block": spec.get("block"),
                    "terminal": bool(spec.get("terminal")),
                    "escalade": bool(spec.get("escalade"))}
-                  | ({"fanout": fanout} if (fanout := _api_fanout(spec)) else {})
+                  | ({"fanout": fanout}
+                     if (fanout := _api_fanout(bundle, spec)) else {})
                   # un nœud arbitre nomme sa source : c'est ce qui permet au
                   # client de séparer le prix du jugement de celui des candidats
                   | ({"finalists_from": source} if (source := judge_source(spec))

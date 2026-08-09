@@ -44,10 +44,13 @@ class FakeCursor:
 class FakeConn:
     """La base : elle rend les items qu'on lui donne, et rien d'autre."""
 
-    def __init__(self, items: list[dict]):
+    def __init__(self, items: list[dict], runs: list[dict] | None = None):
         self.items = items
+        self.runs = runs or []
 
     def execute(self, sql: str, params: tuple = ()):
+        if "FROM node_run" in sql:
+            return FakeCursor(self.runs)
         return FakeCursor(self.items)
 
 
@@ -110,8 +113,12 @@ def main() -> None:
     # 4. la table des items, dans le DOM rendu : le numéro vers GitHub, le
     #    titre vers la page de l'item
     page = web._items_page(
-        FakeConn([item_row(14, "gh:Acid3croco/graphatom#27", TITRE),
-                  item_row(9, "pipeline-x:oom", None)]),
+        FakeConn(
+            [item_row(14, "gh:Acid3croco/graphatom#27", TITRE),
+             item_row(9, "pipeline-x:oom", None)],
+            [{"item_id": 14, "result": {"usage": {"total_cost_usd": 0.0123}}},
+             {"item_id": 14, "result": {"usage": {"total_cost_usd": 0.0045}}},
+             {"item_id": 9, "result": {"usage": {"input_tokens": 10}}}]),
         dt.datetime.now(dt.timezone.utc))
     assert "<th>issue</th><th>titre</th>" in page, page
     assert f"<a href='{ISSUE_URL}'>#27</a>" in page, page
@@ -120,6 +127,9 @@ def main() -> None:
     # le sujet d'un autre canal : deux cellules vides, et la ligne tient
     assert "<td></td><td></td>" in page, page
     assert "pipeline-x:oom" not in page, "aucun titre inventé pour un autre canal"
+    assert "<th>coût total $</th>" in page, page
+    assert "<td>0.0168</td>" in page, page
+    assert "<td>0.0000</td>" in page, page
     print("4. /items : #27 → GitHub, titre → /item/14, autre canal → vide ✓")
 
     # 5. la question dit de quoi il s'agit — le titre, pas seulement le numéro

@@ -34,6 +34,7 @@ export type Item = {
   version: number;
   cycle: number;
   escalations: number;
+  total_cost_usd: number;
   issue_url: string | null;
   pr_url: string | null;
   terminal_at: string | null;
@@ -72,8 +73,12 @@ export type ItemHead = Item & {
  */
 export type Variant = Record<string, unknown>;
 
-/** Un candidat d'un nœud en fan-out : sa variante, et la commande qu'il joue. */
-export type FanoutCandidate = { variant: Variant; cmd: string | null };
+/** Un candidat d'un nœud en fan-out : sa variante et son agent effectif. */
+export type FanoutCandidate = {
+  variant: Variant;
+  agent?: BundleAgent;
+  cmd: string | null;
+};
 
 /** Le fan-out d'un nœud tel que l'API le projette, un candidat par entrée. */
 export type NodeFanout = {
@@ -181,11 +186,16 @@ export type GraphRevision = {
   items: number;
 };
 
-/** L'agent d'un nœud : sa commande, son prompt, sa borne de temps. */
+/** Les réglages structurés et explicites d'un agent. */
 export type BundleAgent = {
+  cli?: string;
+  model?: string;
+  effort?: string | null;
   cmd?: string;
+  cmd_reason?: string;
   prompt?: string;
   timeout_s?: number;
+  silence_s?: number;
 };
 
 /**
@@ -232,6 +242,7 @@ export type GraphBundle = {
   entry: string;
   budgets: Record<string, number>;
   on_kernel: Record<string, string>;
+  agent?: BundleAgent;
   nodes: Record<string, BundleNode>;
 };
 
