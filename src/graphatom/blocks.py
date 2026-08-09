@@ -77,6 +77,7 @@ import os
 import signal
 import subprocess
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import psycopg
@@ -578,6 +579,8 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
     pgid_file = workspace / PGID_FILE
     watched = (log, workspace, ctx.worktree)
     resolved = executors.resolve(ctx.bundle, ctx.node)
+    if resolved.timeout_s is None:
+        resolved = replace(resolved, timeout_s=_agent_timeout_s(ctx.config))
     env.update(executors.environment(resolved))
     cmd = _fill(ctx, executors.command(resolved), subject)
     with log.open("w") as out:

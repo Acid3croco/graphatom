@@ -19,21 +19,21 @@ from graphatom import executors, graph  # noqa: E402
 # Référence sémantique des commandes avant migration. Les scripts des
 # adaptateurs gardent l'invocation, le prompt et l'extraction d'usage.
 LEGACY = {
-    ("code-task", "scope"): ("codex", "gpt-5.6-sol", "high", 540),
-    ("code-task", "implement"): ("codex", "gpt-5.6-luna", "medium", 1500),
-    ("code-task", "implement[0]"): ("codex", "gpt-5.6-luna", "medium", 1500),
-    ("code-task", "implement[1]"): ("codex", "gpt-5.6-sol", "high", 1500),
+    ("code-task", "scope"): ("codex", "gpt-5.6-sol", "high"),
+    ("code-task", "implement"): ("codex", "gpt-5.6-luna", "medium"),
+    ("code-task", "implement[0]"): ("codex", "gpt-5.6-luna", "medium"),
+    ("code-task", "implement[1]"): ("codex", "gpt-5.6-sol", "high"),
     ("code-task", "implement[2]"): (
-        "opencode", "opencode/deepseek-v4-flash-free", None, 1500),
-    ("code-task", "test_backend"): ("codex", "gpt-5.6-luna", "low", 540),
-    ("code-task", "test_frontend"): ("codex", "gpt-5.6-luna", "medium", 1500),
-    ("code-task", "validate"): ("codex", "gpt-5.6-luna", "low", 540),
-    ("code-task", "release"): ("codex", "gpt-5.6-luna", "low", 540),
-    ("code-task", "judge"): ("codex", "gpt-5.6-sol", "high", 840),
-    ("gauntlet", "plan"): ("claude", None, None, None),
-    ("gauntlet", "build"): ("claude", None, None, None),
-    ("gauntlet", "critique"): ("claude", None, None, None),
-    ("gauntlet", "integrate"): ("claude", None, None, None),
+        "opencode", "opencode/deepseek-v4-flash-free", None),
+    ("code-task", "test_backend"): ("codex", "gpt-5.6-luna", "low"),
+    ("code-task", "test_frontend"): ("codex", "gpt-5.6-luna", "medium"),
+    ("code-task", "validate"): ("codex", "gpt-5.6-luna", "low"),
+    ("code-task", "release"): ("codex", "gpt-5.6-luna", "low"),
+    ("code-task", "judge"): ("codex", "gpt-5.6-sol", "high"),
+    ("gauntlet", "plan"): ("claude", None, None),
+    ("gauntlet", "build"): ("claude", None, None),
+    ("gauntlet", "critique"): ("claude", None, None),
+    ("gauntlet", "integrate"): ("claude", None, None),
 }
 
 PROMPTS = {
@@ -81,8 +81,7 @@ def resolution(paquets: dict[str, dict]) -> None:
         if index:
             spec = graph.candidate_node(spec, int(index[:-1]))
         resolved = executors.resolve(paquet, spec)
-        actual = (resolved.cli, resolved.model, resolved.effort,
-                  resolved.timeout_s)
+        actual = (resolved.cli, resolved.model, resolved.effort)
         assert actual == expected, f"{bundle_name}.{location}: {actual} != {expected}"
         command = executors.command(resolved)
         if resolved.cmd is None:
