@@ -646,7 +646,12 @@ Le modèle se donne en argument, ou par `OPENCODE_MODEL` ; à défaut c'est
 ne demandent **aucun identifiant** — rien à configurer, rien à mettre dans
 le dépôt. `OPENCODE_TIMEOUT_S` borne l'attente (300 s par défaut),
 `OPENCODE_BIN` désigne le binaire quand le PATH ne suffit pas, et
-`OPENCODE_DIR` le répertoire de travail du modèle.
+`OPENCODE_DIR` le répertoire de travail du modèle. Chaque run reçoit aussi
+sa propre base SQLite par `OPENCODE_DB`, sous
+`$GRAPHATOM_WORKSPACE/.opencode/` : deux candidats parallèles ne peuvent
+plus se bloquer avec `database is locked`. La configuration, les
+identifiants et le cache OpenCode restent ceux de la session de l'hôte.
+`OPENCODE_STATE_DIR` permet de déplacer cette seule base si nécessaire.
 
 Le script est déterministe, et ne juge jamais : si le modèle a écrit
 `outcome.json`, il n'y touche pas ; si le modèle a dicté son issue dans
@@ -665,6 +670,7 @@ sortie et son message sur `stderr` :
 | 4 | borne d'attente dépassée — le modèle fautif est nommé |
 | 5 | opencode a échoué, et aucune issue n'a été rendue |
 | 6 | opencode a fini sans rendre la moindre issue |
+| 7 | le répertoire de la base locale n'a pas pu être créé |
 
 Le code 4 n'est pas théorique : `opencode/north-mini-code-free` ne rend
 rien du tout. Un candidat muet ne doit jamais retenir quoi que ce soit —
@@ -1135,8 +1141,11 @@ donnée qui tranche, pas l'intuition.
 cycle est le test frontend (~8 min de navigateur) et il tournait même pour
 une issue qui ne touche que du JSON de graph. Les deux `cmd` de test
 commencent donc par quelques lignes de shell — pas du jugement d'agent —
-qui lisent le diff de l'item (`git diff --name-only origin/main` plus les
-fichiers neufs non encore suivis) et décident :
+qui lisent seulement le travail de la branche depuis son point commun avec
+main (`git diff --name-only origin/main...HEAD`), puis les modifications
+suivies et les fichiers neufs non encore suivis. Un commit arrivé sur main
+après la création de l'item n'est donc jamais pris pour un changement de
+l'item. Les portes décident ensuite :
 
 - le diff ne touche aucun fichier front (`src/graphatom/web.py` et `front/`,
   liste en tête du `cmd`) → `outcome` `pass`, « diff sans src/graphatom/web.py
