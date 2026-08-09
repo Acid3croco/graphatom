@@ -244,8 +244,34 @@ rmdir "${OPENCODE_DB}.verrou"
     assert {champs[4] for champs in vus} == {str(cache)}, vus
     assert all((espace / "outcome.json").exists() for espace in espaces)
 
+    relatif = tmp / "c-relatif"
+    atelier_relatif = tmp / "atelier-relatif"
+    relatif.mkdir()
+    atelier_relatif.mkdir()
+    (relatif / "prompt.md").write_text("rends done\n")
+    done = subprocess.run(
+        ["/bin/bash", str(ROOT / ADAPTATEUR), MODELE], cwd=relatif,
+        env=os.environ | {
+            "CHECK_DIR": str(coordination),
+            "GRAPHATOM_WORKSPACE": str(relatif),
+            "OPENCODE_BIN": str(binaire),
+            "OPENCODE_DIR": str(atelier_relatif),
+            "OPENCODE_STATE_DIR": "etat-relatif",
+            "OPENCODE_TIMEOUT_S": "5",
+            "XDG_DATA_HOME": str(donnees),
+            "XDG_STATE_HOME": str(etat),
+            "XDG_CACHE_HOME": str(cache),
+        },
+        capture_output=True, text=True, timeout=10,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    champs = (coordination / "departs").read_text().splitlines()[-1].split("|")
+    assert champs[1] == str(relatif / "etat-relatif" / "opencode.db"), champs
+    assert Path(champs[1]).is_absolute(), champs
+
     print("3. deux adaptateurs concurrents : deux bases locales, configuration "
-          "et cache partagés, aucun verrou croisé ✓")
+          "et cache partagés, aucun verrou croisé ; override relatif rendu "
+          "absolu ✓")
 
 
 def main() -> None:

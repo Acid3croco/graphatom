@@ -72,6 +72,10 @@ mkdir -p "$ETAT" || {
     echo "agent-opencode: impossible de créer l'état local dans $ETAT" >&2
     exit 7
 }
+ETAT=$(cd "$ETAT" && pwd -P) || {
+    echo "agent-opencode: impossible de résoudre l'état local dans $ETAT" >&2
+    exit 7
+}
 export OPENCODE_DB="$ETAT/opencode.db"
 
 texte() {  # le texte du modèle, extrait du flux d'événements d'opencode

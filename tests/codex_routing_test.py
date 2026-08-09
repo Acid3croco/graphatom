@@ -196,6 +196,13 @@ printf '%s\n' '{"outcome":"pass","summary":"agent appelé"}' > outcome.json
         "GRAPHATOM_WORKSPACE": str(workspace),
     }
 
+    portes = (ROOT / "scripts" / "portes.sh").read_text()
+    for fragment in ("git diff --name-only origin/main...HEAD",
+                     "git diff --name-only HEAD",
+                     "git ls-files --others --exclude-standard"):
+        assert fragment in portes, fragment
+    assert "git diff --name-only origin/main;" not in portes
+
     for node in ("test_backend", "test_frontend"):
         (workspace / "outcome.json").unlink(missing_ok=True)
         (workspace / "agent-called").unlink(missing_ok=True)
@@ -206,19 +213,30 @@ printf '%s\n' '{"outcome":"pass","summary":"agent appelé"}' > outcome.json
         assert outcome["outcome"] == "pass", (node, outcome)
         assert not (workspace / "agent-called").exists(), node
 
+    def agents_appeles() -> None:
+        """Les deux tests doivent appeler leur agent pour ce diff pertinent."""
+        for node in ("test_backend", "test_frontend"):
+            (workspace / "outcome.json").unlink(missing_ok=True)
+            (workspace / "agent-called").unlink(missing_ok=True)
+            done = subprocess.run(cmd(node), shell=True, cwd=workspace, env=env,
+                                  text=True, capture_output=True, timeout=10)
+            assert done.returncode == 0, (node, done.stdout, done.stderr)
+            assert (workspace / "agent-called").read_text() == "appelé", node
+
     source = worktree / "src" / "graphatom"
     source.mkdir(parents=True)
     (source / "web.py").write_text("changement non commité\n")
-    for node in ("test_backend", "test_frontend"):
-        (workspace / "outcome.json").unlink(missing_ok=True)
-        (workspace / "agent-called").unlink(missing_ok=True)
-        done = subprocess.run(cmd(node), shell=True, cwd=workspace, env=env,
-                              text=True, capture_output=True, timeout=10)
-        assert done.returncode == 0, (node, done.stdout, done.stderr)
-        assert (workspace / "agent-called").read_text() == "appelé", node
+    agents_appeles()  # fichier neuf non suivi
+    git(worktree, "add", "src/graphatom/web.py")
+    agents_appeles()  # fichier neuf indexé
+    git(worktree, "commit", "-qm", "branche pertinente")
+    agents_appeles()  # changement pertinent commité sur la branche
+    (source / "web.py").write_text("changement suivi non commité\n")
+    agents_appeles()  # fichier suivi modifié
 
-    print("4. un main plus récent ne déclenche aucun test ; un changement "
-          "local de src/ déclenche backend et frontend ✓")
+    print("4. un main plus récent ne déclenche aucun test ; un fichier src/ "
+          "non suivi, indexé, commité ou modifié déclenche les deux tests ; "
+          "les portes utilisent la même sélection ✓")
 
 
 def main() -> None:
