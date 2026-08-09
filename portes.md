@@ -1,18 +1,21 @@
-portes du candidat — atelier /home/jack/projects/graphatom/.claude/worktrees/imperative-crunching-conway/.worktrees/rail-item-103
-$ uv run python -c import graphatom.blocks, graphatom.channel, graphatom.cli, graphatom.db, graphatom.github_sync, graphatom.graph, graphatom.heartbeat, graphatom.kernel, graphatom.scheduler, graphatom.web, graphatom.worktree
+portes du candidat — atelier /home/jack/projects/graphatom/.claude/worktrees/imperative-crunching-conway/.worktrees/rail-item-113
+$ uv run python -c import graphatom.blocks, graphatom.channel, graphatom.cli, graphatom.db, graphatom.github_sync, graphatom.graph, graphatom.heartbeat, graphatom.kernel, graphatom.quota, graphatom.scheduler, graphatom.executors, graphatom.web, graphatom.worktree
 porte « import » passée en 0 s
-$ uv run python tests/validate_test.py
-1. exemples validés : code-task.json, gauntlet.json, github-pilot.json, supervision.json ✓
+$ uv run graphatom build-quota -- uv run python tests/validate_test.py
+quota de constructions : place 1/2 prise après 0.0 s
+1. exemples validés : code-task.json, executor.json, gauntlet.json, github-pilot.json, supervision.json ✓
 2. cible parasite refusée : on_kernel.notify_to → nœud non déclaré nowhere ✓
    clés du noyau toujours obligatoires ✓
 3. _layers() couvre exactement les nœuds déclarés ✓
 4. file sans arête réflexive refusée : deploy : file sans arête sur lui-même ✓
    boucle longue par la file refusée : cycle hors escalade via verify_deploy → deploy ✓
+5. solo accepté sur deploy et refusé sur WAIT : escalate : un nœud WAIT ne peut pas être solo ✓
 
 validation : OK — une cible on_kernel fantôme ne se publie plus
 porte « tests/validate_test.py » passée en 0 s
-$ uv run python tests/fanout_config_test.py
-1. fan-out bien formé sur `implement` publié : révision c5e76f268e0d… ✓
+$ uv run graphatom build-quota -- uv run python tests/fanout_config_test.py
+quota de constructions : place 1/2 prise après 0.0 s
+1. fan-out bien formé sur `implement` publié : révision 3cf601758728… ✓
 2. fan-out sur un WAIT refusé : clarify : un nœud WAIT ne peut pas être en fan-out ✓
 3. table bloc → réductions : ['first_pass', 'keep_n'] livrées, keep_n sur ACT seul, WAIT au jeu vide ✓
    réduction 'vote' refusée : implement : réduction 'vote' refusée sur un bloc ACT — permises : ['first_pass', 'keep_n'] ✓
@@ -50,7 +53,8 @@ $ uv run python tests/fanout_config_test.py
 
 fan-out : OK — la déclaration existe, et une config fautive ne se publie pas
 porte « tests/fanout_config_test.py » passée en 1 s
-$ uv run python tests/answer_test.py
+$ uv run graphatom build-quota -- uv run python tests/answer_test.py
+quota de constructions : place 1/2 prise après 0.0 s
 #87 ← q9-receipt
 1. première ligne valide + prose : réponse prise, reçu posté ✓
 #87 ← reply-1001
@@ -67,7 +71,8 @@ $ uv run python tests/answer_test.py
 
 /answer : OK — la prose passe, le raté parle, le reste se tait
 porte « tests/answer_test.py » passée en 0 s
-$ uv run python tests/api_test.py
+$ uv run graphatom build-quota -- uv run python tests/api_test.py
+quota de constructions : place 1/2 prise après 0.0 s
 1. /api/items : id, titre, état, status, issue, PR ✓
 2. autre canal, item actif : aucun lien inventé, status actif ✓
 3. /api/item/14 : les sept clés, et l'inconnu rend None ✓
@@ -76,13 +81,14 @@ $ uv run python tests/api_test.py
 5. files : nom + href, et criteria.md servi tel quel ✓
 6. /api/questions : le jeton sort du HTML, les options avec ✓
 7. /api/heartbeat, et le payload sérialisable en ISO 8601 ✓
-7b. /api/load : 4 runs en vol pour un plafond de 8 (8 par item) ✓
+7b. /api/load : 4 runs et 1 construction en vol ; plafonds 8 et 2 ✓
 8. /api/graphs : nom, révision, date, items qui la portent ✓
 9. /api/graph/<rév> : le bundle entier, l'inconnue rend None ✓
 
 api : OK — les pages se lisent en JSON, sans dépendance ni écriture
-porte « tests/api_test.py » passée en 1 s
-$ uv run python tests/checklist_test.py
+porte « tests/api_test.py » passée en 0 s
+$ uv run graphatom build-quota -- uv run python tests/checklist_test.py
+quota de constructions : place 1/2 prise après 0.0 s
 1. test_frontend → validate → review / implement, cycle borné ✓
 #60 ← q5
 #60 ← q5
@@ -94,8 +100,9 @@ $ uv run python tests/checklist_test.py
 4. citation bornée à 40 lignes, le reste compté ✓
 
 validate : OK — les critères sont cochés, puis lus par l'humain
-porte « tests/checklist_test.py » passée en 0 s
-$ uv run python tests/criteria_test.py
+porte « tests/checklist_test.py » passée en 1 s
+$ uv run graphatom build-quota -- uv run python tests/criteria_test.py
+quota de constructions : place 1/2 prise après 0.0 s
 1. scope → clarify : `go` / `reformuler`, retour borné par `escalade` ✓
 2. le prompt de scope : l'exception, le corps intouché, la spec ✓
 #87 ← q9
@@ -110,7 +117,8 @@ $ uv run python tests/criteria_test.py
 
 critères : OK — le rail dit sa lecture avant d'écrire une ligne
 porte « tests/criteria_test.py » passée en 0 s
-$ uv run python tests/depends_test.py
+$ uv run graphatom build-quota -- uv run python tests/depends_test.py
+quota de constructions : place 1/2 prise après 0.0 s
 1. `Depends-on: #N` lu, task list et prose ignorées ✓
 #1 ← code-task-depends-invalid
 #1 ← code-task-depends-invalid
@@ -127,8 +135,9 @@ $ uv run python tests/depends_test.py
 4. dépendance fermée : admission au tick suivant, label retiré ✓
 
 dépendances : OK — l'admission attend, puis part toute seule
-porte « tests/depends_test.py » passée en 0 s
-$ uv run python tests/split_deps_test.py
+porte « tests/depends_test.py » passée en 1 s
+$ uv run graphatom build-quota -- uv run python tests/split_deps_test.py
+quota de constructions : place 1/2 prise après 0.0 s
 1. seule la ligne `Depends-on: #<mère>` est réécrite ✓
 #20 ← reparent-10
 #20 ← Depends-on: #13 (était #10)
@@ -151,7 +160,8 @@ $ uv run python tests/split_deps_test.py
 
 découpe : OK — les dépendances suivent la dernière fille, et la mère ferme en dernier
 porte « tests/split_deps_test.py » passée en 0 s
-$ uv run python tests/heartbeat_test.py
+$ uv run graphatom build-quota -- uv run python tests/heartbeat_test.py
+quota de constructions : place 1/2 prise après 0.0 s
 1. un UPSERT par batteur, une lecture d'une ligne ✓
 2. vivant à 3 s, à l'arrêt à 2 min, à l'arrêt sans battement ✓
 3. /api/heartbeat : les deux battements, horodatage, âge, périmé ✓
@@ -163,7 +173,8 @@ $ uv run python tests/heartbeat_test.py
 
 battement : OK — le silence de chaque processus se voit
 porte « tests/heartbeat_test.py » passée en 0 s
-$ uv run python tests/postgres_recovery_test.py
+$ uv run graphatom build-quota -- uv run python tests/postgres_recovery_test.py
+quota de constructions : place 1/2 prise après 0.0 s
 1. marqueur stable : reconnexion sans signal de reprise ✓
 2. jeton changé : une ligne de reprise distincte ✓
 3. plusieurs opérations après la reconnexion : une seule ligne ✓
@@ -171,7 +182,8 @@ $ uv run python tests/postgres_recovery_test.py
 
 reprise Postgres : OK — reprise et reconnexion restent distinctes
 porte « tests/postgres_recovery_test.py » passée en 1 s
-$ uv run python tests/links_test.py
+$ uv run graphatom build-quota -- uv run python tests/links_test.py
+quota de constructions : place 1/2 prise après 0.0 s
 1. sujet gh → https://github.com/Acid3croco/graphatom/issues/27 ✓
 2. sujet quelconque : texte brut, échappé ✓
 3. release.json → https://github.com/Acid3croco/graphatom/pull/31 ✓
@@ -180,35 +192,62 @@ $ uv run python tests/links_test.py
 
 liens : OK — l'issue, la PR et le titre sont lisibles depuis le frontend
 porte « tests/links_test.py » passée en 0 s
-$ uv run python tests/live_test.py
+$ uv run graphatom build-quota -- uv run python tests/live_test.py
+quota de constructions : place 1/2 prise après 0.0 s
 1. meta marqueur + conteneur #live + script, refresh en noscript ✓
 2. version de l'item, ou la plus haute des items listés ✓
 3. marqueur stable à données égales, changé par la version ou l'arrêt ✓
 4. onglet caché et focus respectés, conteneur remplacé, aucun canal ✓
 
 rafraîchissement : OK — la page se suit sans se recharger
-porte « tests/live_test.py » passée en 0 s
-$ uv run python tests/failure_trace_test.py
+porte « tests/live_test.py » passée en 1 s
+$ uv run graphatom build-quota -- uv run python tests/failure_trace_test.py
+quota de constructions : place 1/2 prise après 0.0 s
 1. agent Codex : échec rendu relu dans failure.json, quatre champs bornés ✓
-2. shell sans issue : crashed au même chemin, qui ne porte que ce dernier échec ✓
-3. règle explicite vérifiée ; item neuf et réussite sans trace inventée ✓
+2. panne fournisseur : failure.json garde fournisseur et raison exacte ✓
+3. shell sans issue : crashed au même chemin, qui ne porte que ce dernier échec ✓
+4. règle explicite vérifiée ; item neuf et réussite sans trace inventée ✓
 porte « tests/failure_trace_test.py » passée en 0 s
-$ uv run python tests/codex_routing_test.py
-1. scope et judge Sol high ; course Luna medium + Sol high + DeepSeek gratuit ; portes légères sur Luna ✓
-2. agent-codex transmet gpt-5.6-luna et effort medium à la CLI ✓
-3. release nominale sans modèle ; panne confiée à Luna low ✓
+$ uv run graphatom build-quota -- uv run python tests/agent_executor_test.py
+quota de constructions : place 1/2 prise après 0.0 s
+1. héritage complet, surcharges partielles et priorité de cmd ✓
+2. claude, codex et opencode : invocation, prompt et usage ✓
+3. la commande CLI + modèle effectivement exécutée est journalisée ✓
+4. le bloc exécute cmd en priorité sur l'adaptateur structuré ✓
+5. une CLI inconnue est refusée et nommée ✓
+7. les réglages structurés refusent toute clé sensible ou inconnue ✓
+6. les variantes produisent deux commandes sans contamination ✓
+
+exécuteurs structurés : OK
+porte « tests/agent_executor_test.py » passée en 0 s
+$ uv run graphatom build-quota -- uv run python tests/graph_executor_migration_test.py
+quota de constructions : place 1/2 prise après 0.0 s
+1 et 4. inventaire des défauts, surcharges et exceptions ✓
+2 et 3. héritage du modèle et équivalence de migration ✓
+
+migration des graphes : OK
+porte « tests/graph_executor_migration_test.py » passée en 1 s
+$ uv run graphatom build-quota -- uv run python tests/codex_routing_test.py
+quota de constructions : place 1/2 prise après 0.0 s
+1. scope, judge et implement seul Sol high ; course minimale Luna medium + Sol high + DeepSeek gratuit libre ; portes Luna ✓
+2. cinq prompts synchrones rendus avec de vrais retours de ligne ✓
+3. agent-codex transmet gpt-5.6-luna et effort medium à la CLI ✓
+4. release nominale sans modèle ; panne confiée à Luna low ✓
+4. un main plus récent ne déclenche aucun test ; un fichier src/ non suivi, indexé, commité ou modifié déclenche les deux tests ; les portes utilisent la même sélection ✓
 
 routage codex : OK — modèle et effort explicites, release script-first
-porte « tests/codex_routing_test.py » passée en 0 s
-$ uv run python tests/orphans_test.py
+porte « tests/codex_routing_test.py » passée en 1 s
+$ uv run graphatom build-quota -- uv run python tests/orphans_test.py
+quota de constructions : place 1/2 prise après 0.0 s
 1. agent fauché au timeout après 2.0s, autopsie -15 ✓
-2. groupe 2393602 entièrement révoqué ✓
+2. groupe 547779 entièrement révoqué ✓
 3. traces agent-travail-1-1.log et prompt-travail-1-1.md écrites ✓
 4. agent nominal appliqué, usage fusionné : {'outcome': 'ok', 'summary': 'fait', 'usage': {'input_tokens': 12, 'output_tokens': 3456}} ✓
 4 bis. agent sans usage.json : résultat inchangé ✓
-5. autopsie du crash : sortie 42, queue « Execution error » ✓
-6. worker tué, agent orphelin toujours vivant : groupe 2393943 ✓
-orphelin révoqué : groupe 2393943 (ps -o pgid= -p $$ > pgid.txt; sleep 300 & sleep 300)
+5. autopsie du crash : sortie 42, queue « $ echo 'Execution error' >&2; exit 42
+Execution error » ✓
+6. worker tué, agent orphelin toujours vivant : groupe 548113 ✓
+orphelin révoqué : groupe 548113 (ps -o pgid= -p $$ > pgid.txt; sleep 300 & sleep 300)
 7. orphelin révoqué par le faucheur, trace effacée ✓
 8. trace d'une autre tentative : ni suivie ni effacée ✓
 9. identité périmée (naissance, boot) : le faucheur ne tue personne ✓
@@ -216,7 +255,18 @@ orphelin révoqué : groupe 2393943 (ps -o pgid= -p $$ > pgid.txt; sleep 300 & s
 
 orphelins : OK — ni le bail ni la mort du worker ne laissent d'agent
 porte « tests/orphans_test.py » passée en 3 s
-$ uv run python tests/timeout_marge_test.py
+$ uv run graphatom build-quota -- uv run python tests/starved_test.py
+quota de constructions : place 1/2 prise après 0.0 s
+1. starved.json antérieur purgé, absence nouvelle → crashed ✓
+2. starved.json valide sans outcome.json → starved, raison intacte ✓
+3. fichier starved mal formé → crashed ; outcome valide prioritaire ✓
+4. opencode : sortie enregistrée → starved.json, raison intacte ✓
+4. codex : sortie enregistrée → starved.json, raison intacte ✓
+
+starved : OK — l'adaptateur détecte, le bloc lit, la raison reste exacte
+porte « tests/starved_test.py » passée en 0 s
+$ uv run graphatom build-quota -- uv run python tests/timeout_marge_test.py
+quota de constructions : place 1/2 prise après 0.0 s
 1. 6 paires de l'issue — [(120, 60), (180, 120), (600, 540), (900, 840), (1020, 960), (1800, 1740)] — la dérivation les calcule toutes ✓
 2. un nœud sans `lease_s` garde le défaut de 570 s ✓
 3. un `timeout_s` explicite est honoré, quel que soit le bail ✓
@@ -226,12 +276,13 @@ $ uv run python tests/timeout_marge_test.py
 
 timeout_marge : OK — le couperet descend du bail, une seule marge, les douze valeurs de l'issue inchangées
 porte « tests/timeout_marge_test.py » passée en 0 s
-$ uv run python tests/timeout_test.py
+$ uv run graphatom build-quota -- uv run python tests/timeout_test.py
+quota de constructions : place 1/2 prise après 0.0 s
 1. 1 appel sortant, borné par TIMEOUT_S = 30.0 s ✓
 2. timeout à 2.0 s : appel rendu en 2.0 s — timed out ✓
 3. tick rendu en 30.0 s, jamais gelé (< 60 s) ✓
 4. incident réseau nominal, aucun traceback : github injoignable : timed out — on réessaie ✓
 
 timeout : OK — un serveur muet coûte un tick, plus l'éternité
-porte « tests/timeout_test.py » passée en 32 s
+porte « tests/timeout_test.py » passée en 33 s
 PORTES OK — le candidat peut rendre son issue de succès

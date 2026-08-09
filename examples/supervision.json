@@ -1,50 +1,99 @@
 {
   "name": "supervision",
   "entry": "ingest",
-  "budgets": { "escalations": 4, "wall_deadline_hours": 168 },
-  "on_kernel": { "escalate_to": "escalate", "exhausted_to": "close_unresolved" },
+  "budgets": {
+    "escalations": 4,
+    "wall_deadline_hours": 168
+  },
+  "on_kernel": {
+    "escalate_to": "escalate",
+    "exhausted_to": "close_unresolved"
+  },
   "nodes": {
     "ingest": {
       "block": "FETCH",
-      "config": { "materialize": ["logs"] },
-      "edges": { "ok": "diagnose" }
+      "config": {
+        "materialize": [
+          "logs"
+        ]
+      },
+      "edges": {
+        "ok": "diagnose"
+      }
     },
     "diagnose": {
       "block": "JUDGE",
-      "config": { "stub_outcome": "cause_found" },
-      "edges": { "cause_found": "decide" }
+      "config": {
+        "stub_outcome": "cause_found"
+      },
+      "edges": {
+        "cause_found": "decide"
+      }
     },
     "decide": {
       "block": "JUDGE",
-      "config": { "stub_outcome": "fix" },
-      "edges": { "fix": "produce", "raise": "escalate", "known": "close" }
+      "config": {
+        "stub_outcome": "fix"
+      },
+      "edges": {
+        "fix": "produce",
+        "raise": "escalate",
+        "known": "close"
+      }
     },
     "produce": {
       "block": "ACT",
-      "config": { "duration_s": 4 },
-      "edges": { "ok": "verify" }
+      "config": {
+        "duration_s": 4
+      },
+      "edges": {
+        "ok": "verify"
+      }
     },
     "verify": {
       "block": "CHECK",
-      "edges": { "pass": "commit", "fail": "escalate" }
+      "edges": {
+        "pass": "commit",
+        "fail": "escalate"
+      }
     },
     "commit": {
       "block": "EFFECT",
-      "config": { "intent": "open_change", "target": "stub://outbox" },
-      "edges": { "applied": "close", "uncertain": "escalate" }
+      "config": {
+        "intent": "open_change",
+        "target": "stub://outbox"
+      },
+      "edges": {
+        "applied": "close",
+        "uncertain": "escalate"
+      }
     },
     "escalate": {
       "block": "WAIT",
       "escalade": true,
       "config": {
         "question": "L'item est bloqué : on retente la production ou on abandonne ?",
-        "options": ["retry", "abandon"],
+        "options": [
+          "retry",
+          "abandon"
+        ],
         "owner": "oncall",
         "deadline_minutes": 240
       },
-      "edges": { "retry": "decide", "abandon": "close_unresolved", "expired": "close_unresolved" }
+      "edges": {
+        "retry": "decide",
+        "abandon": "close_unresolved",
+        "expired": "close_unresolved"
+      }
     },
-    "close": { "terminal": true },
-    "close_unresolved": { "terminal": true }
+    "close": {
+      "terminal": true
+    },
+    "close_unresolved": {
+      "terminal": true
+    }
+  },
+  "agent": {
+    "cli": "claude"
   }
 }

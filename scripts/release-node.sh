@@ -19,7 +19,4 @@ if bash "$WT/scripts/release.sh"; then
     exit 0
 fi
 
-CODEX_MODEL="${CODEX_MODEL:-gpt-5.6-luna}" \
-CODEX_REASONING_EFFORT="${CODEX_REASONING_EFFORT:-low}" \
-CODEX_TIMEOUT_S="${CODEX_TIMEOUT_S:-540}" \
-bash "$WT/scripts/agent-codex.sh"
+bash "$WT/scripts/agent-declared.sh"
