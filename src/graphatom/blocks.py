@@ -400,7 +400,7 @@ def _prompt(ctx: Context, workspace: Path, subject: str) -> str:
     outcome_path = workspace / OUTCOME_NAME
     return os.path.expandvars(
         _fill(ctx, ctx.config["agent"]["prompt"], subject)
-    ) + ctx.extra + (
+    ) + ctx.extra + _phase_contract(ctx) + (
         "\n\n--- Contrat GraphAtom ---\n"
         f"Tu es le bloc « {ctx.run['node']} » d'un rail d'exécution. "
         f"Ton workspace : {workspace}\n"
@@ -410,6 +410,33 @@ def _prompt(ctx: Context, workspace: Path, subject: str) -> str:
         "Sans ce fichier, ta tentative est classée crashed et sera retentée."
         + _demande_passation(ctx, workspace)
     ) + _passation(ctx) + _reprise(ctx, workspace)
+
+
+def _phase_contract(ctx: Context) -> str:
+    """N'exige pas d'une validation une preuve créée par une phase future."""
+    if ctx.run["node"] != "validate":
+        return ""
+    nodes = ctx.bundle.get("nodes") or {}
+    pending = list((ctx.node.get("edges") or {}).values())
+    seen = set()
+    while pending:
+        node = pending.pop()
+        if node in seen:
+            continue
+        seen.add(node)
+        if node == "deploy":
+            return (
+                "\n\n--- Contrat de phase pré-déploiement ---\n"
+                "Le nœud `deploy` est encore en aval. Son rapport réel "
+                "`deploy.md` ne peut donc pas exister à cette phase. Pour un "
+                "critère de déploiement, rejoue la preuve déterministe et "
+                "versionnée qui le simule. Ne laisse pas une case vide pour "
+                "la seule absence de `deploy.md`. La porte `verify_deploy` "
+                "contrôlera ensuite le checkout, le worker et les services "
+                "réels ; tu ne remplaces pas cette porte.\n"
+            )
+        pending.extend((nodes.get(node) or {}).get("edges", {}).values())
+    return ""
 
 
 def _demande_passation(ctx: Context, workspace: Path) -> str:

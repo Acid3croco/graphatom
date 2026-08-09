@@ -312,6 +312,22 @@ def profondeur(workdir: Path) -> None:
           "test_frontend, son prédécesseur immédiat ✓")
 
 
+def phase_predeploiement(workdir: Path) -> None:
+    """5 bis. Une validation ne demande pas le rapport d'un nœud futur."""
+    spec = BUNDLE["nodes"]["validate"]
+    ctx = blocks.Context(
+        FauxConn([], {}),
+        {"id": 98, "node": "validate", "cycle": 1, "attempt": 1},
+        {"id": ITEM, "subject_id": 1}, spec, BUNDLE,
+    )
+    texte = blocks._prompt(ctx, ctx.workspace.resolve(), SUJET)
+    assert "Contrat de phase pré-déploiement" in texte, texte
+    assert "Ne laisse pas une case vide pour la seule absence de `deploy.md`" in texte
+    assert "verify_deploy" in texte, texte
+    print("5 bis. validate accepte la preuve simulée avant deploy ; la porte "
+          "réelle reste à verify_deploy ✓")
+
+
 def relance(workdir: Path) -> None:
     """6. relancé, un nœud lit sa propre tentative précédente."""
     avant = {"id": 41, "node": "implement", "cycle": 1, "attempt": 1,
@@ -377,6 +393,7 @@ def main() -> None:
         noeud_d_entree(workdir)
         bornes(workdir)
         profondeur(workdir)
+        phase_predeploiement(workdir)
         relance(workdir)
         fan_out(workdir)
         sans_passation(workdir)
