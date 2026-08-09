@@ -323,9 +323,15 @@ def _settle_waits(conn: psycopg.Connection) -> int:
         (item_id,),
     ).fetchall()
     for q in answered:
-        with conn.transaction():
-            conn.execute("UPDATE question SET state = 'closed' WHERE id = %s", (q["id"],))
-            kernel.apply_item(conn, q["item_id"], q["answer"], kind="answer")
+        kernel.apply_item(
+            conn,
+            q["item_id"],
+            q["answer"],
+            kind="answer",
+            before_route=lambda qid=q["id"]: conn.execute(
+                "UPDATE question SET state = 'closed' WHERE id = %s", (qid,)
+            ),
+        )
         n += 1
 
     expired = conn.execute(
@@ -335,9 +341,15 @@ def _settle_waits(conn: psycopg.Connection) -> int:
         (item_id,),
     ).fetchall()
     for q in expired:
-        with conn.transaction():
-            conn.execute("UPDATE question SET state = 'expired' WHERE id = %s", (q["id"],))
-            kernel.apply_item(conn, q["item_id"], "expired", kind="deadline")
+        kernel.apply_item(
+            conn,
+            q["item_id"],
+            "expired",
+            kind="deadline",
+            before_route=lambda qid=q["id"]: conn.execute(
+                "UPDATE question SET state = 'expired' WHERE id = %s", (qid,)
+            ),
+        )
         n += 1
 
     walled = conn.execute(

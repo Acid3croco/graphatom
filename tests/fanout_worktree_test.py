@@ -40,6 +40,7 @@ Le test ne détruit rien de la production : son dépôt est jetable, et
 Usage : uv run python tests/fanout_worktree_test.py
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -156,6 +157,14 @@ def ancetre(repo: Path, sha: str, branche: str) -> bool:
     """Le commit est-il atteignable depuis la branche ?"""
     return subprocess.run(["git", "-C", str(repo), "merge-base",
                            "--is-ancestor", sha, branche]).returncode == 0
+
+
+def groupe_vivant(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 def item_sur(conn, repo: Path, spec: dict) -> tuple[int, str, Path]:
@@ -297,6 +306,8 @@ def echeance(conn, workdir: Path, repo: Path) -> None:
 
     prets = [workspace / f"c{k}" / "pret" for k in range(2)]
     assert attendre(lambda: all(p.is_file() for p in prets)), "candidats jamais partis"
+    pgids = [json.loads((workspace / f"c{k}" / blocks.PGID_FILE).read_text())["pgid"]
+             for k in range(2)]
     table = inscrits(repo)
     ateliers = [item_wt.with_name(f"{item_wt.name}-c{k}") for k in range(2)]
     assert all(c in table for c in ateliers), f"les deux ateliers doivent courir : {table}"
@@ -310,6 +321,20 @@ def echeance(conn, workdir: Path, repo: Path) -> None:
     item = conn.execute("SELECT * FROM work_item WHERE id = %s", (item_id,)).fetchone()
     assert item["state"] == "abandon", item["state"]
     assert item["terminal_at"] is not None, "wall_deadline mène au terminal"
+    version = item["version"]
+    classes = conn.execute(
+        "SELECT status, finished_at FROM node_run WHERE item_id = %s ORDER BY id",
+        (item_id,),
+    ).fetchall()
+    assert all(run["status"] == "superseded" for run in classes), classes
+    assert all(run["finished_at"] is not None for run in classes), classes
+    assert attendre(lambda: all(not groupe_vivant(pgid) for pgid in pgids)), pgids
+
+    assert kernel.apply(
+        conn, runs[0]["id"], {"outcome": "ok", "usage": {"input_tokens": 1}}
+    ) == "superseded"
+    stable = conn.execute("SELECT * FROM work_item WHERE id = %s", (item_id,)).fetchone()
+    assert stable["version"] == version and stable["state"] == "abandon", stable
 
     table = inscrits(repo)
     restants = [c for c in table if c.name.startswith(f"{item_wt.name}-c")]
@@ -320,10 +345,6 @@ def echeance(conn, workdir: Path, repo: Path) -> None:
         "l'atelier de l'item survit : c'est le cleanup du graph qui le retire"
     print(f"6. item {item_id} : wall_deadline en pleine course → les 2 ateliers "
           "et leurs branches détruits, celui de l'item intact ✓")
-
-    for run in runs:  # les agents courent encore : on ne laisse pas d'orphelin
-        blocks.revoke_orphan(item_id, run["id"])
-
 
 def leurres(conn, repo: Path) -> None:
     """7. hors de `.worktrees/`, ou sur une autre branche : jamais détruit."""
