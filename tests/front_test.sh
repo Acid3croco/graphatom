@@ -106,5 +106,26 @@ done
 printf '   jugement %s, candidats %s, total %s — trois lignes, trois prix ✓\n' \
     "$JUGEMENT" "$CANDIDATS" "$TOTAL"
 
+echo "4. la décision du juge sous les candidats"
+for cas in \
+    '1|finalisteB→c1|raisonduchoix:Bcouvrelespreuvesdemandées|ComparaisoncomplètedesfinalistesAetB.|modèlegpt-5.6-sol·CLIcodex·efforthigh' \
+    '2|finalisteuniquechoisimécaniquement|finalisteA→c0|aucunmodèlejugenaétéappelé.' \
+    '3|aucunfinaliste|aucunchoixnaétépossible.'; do
+    id=${cas%%|*}
+    attendus=${cas#*|}
+    rendu=$(curl -sf "http://127.0.0.1:$WEB_PORT/item/$id")
+    rendu=$(printf '%s' "$rendu" | sed 's/<!-- -->//g; s/’/'"'"'/g; s/[[:space:]]//g')
+    while [ -n "$attendus" ]; do
+        attendu=${attendus%%|*}
+        case $rendu in
+            *"$attendu"*) ;;
+            *) echo "ÉCHEC : item $id, « $attendu » absent du DOM rendu" >&2; exit 1 ;;
+        esac
+        [ "$attendus" = "$attendu" ] && break
+        attendus=${attendus#*|}
+    done
+done
+printf '   B → c1, voie mécanique, voie sans finaliste et verdict intégré ✓\n'
+
 echo
-echo "front : OK — l'image builde, tient dans son budget, et sépare les deux coûts"
+echo "front : OK — l'image builde, tient dans son budget, sépare les coûts et montre la décision"

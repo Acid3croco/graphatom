@@ -27,6 +27,7 @@ import type {
   Effect,
   Graph,
   ItemHead,
+  JudgeDecision,
   JournalEntry,
   Question,
   Run,
@@ -359,6 +360,50 @@ function Candidates({ candidates }: { candidates: Candidate[] }) {
   );
 }
 
+/** La décision du juge, rendue seulement après son choix. */
+function Decision({ decision }: { decision: JudgeDecision }) {
+  const selected = decision.selected;
+  return (
+    <div data-testid="decision-juge" className="mt-3 flex flex-col gap-1 text-sm">
+      {decision.type === "chosen" ? (
+        <>
+          <b>jugement de plusieurs finalistes</b>
+          <p>finaliste {selected?.letter} → c{selected?.candidate}</p>
+          <p>raison du choix : {decision.summary || "aucune raison rendue"}</p>
+          {decision.judge && (
+            <p className="text-muted-foreground">
+              juge : modèle {decision.judge.model || "inconnu"} · CLI{" "}
+              {decision.judge.cli || "inconnue"} · effort{" "}
+              {decision.judge.effort || "inconnu"}
+            </p>
+          )}
+        </>
+      ) : decision.type === "sole" ? (
+        <>
+          <b>finaliste unique choisi mécaniquement</b>
+          {selected && <p>finaliste {selected.letter} → c{selected.candidate}</p>}
+          <p>aucun modèle juge n’a été appelé.</p>
+        </>
+      ) : (
+        <>
+          <b>aucun finaliste</b>
+          <p>aucun choix n’a été possible.</p>
+        </>
+      )}
+      {decision.verdict && (
+        <details>
+          <summary className="cursor-pointer underline">
+            comparaison détaillée du juge
+          </summary>
+          <pre className="mt-2 max-h-96 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap">
+            {decision.verdict}
+          </pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
 /**
  * Le journal, une ligne par version, et ce que chaque step a coûté.
  *
@@ -374,20 +419,32 @@ export function ItemJournal({
   initial,
 }: {
   id: number;
-  initial: { journal: JournalEntry[]; runs: Run[]; graph: Graph };
+  initial: {
+    journal: JournalEntry[];
+    runs: Run[];
+    graph: Graph;
+    decision: JudgeDecision | null;
+  };
 }) {
   // les runs sont dans la tranche parce que les colonnes de tokens les
   // lisent : le journal dit quel run a produit le step, le run porte son
   // usage — la jointure se fait ici, une fois. Le graph nomme les
   // candidats d'un nœud en fan-out ; il vient donc avec.
-  const { journal, runs, graph } = useItem(
+  const { journal, runs, graph, decision } = useItem(
     id,
-    (view) => ({ journal: view.journal, runs: view.runs, graph: view.graph }),
+    (view) => ({
+      journal: view.journal,
+      runs: view.runs,
+      graph: view.graph,
+      decision: view.decision,
+    }),
     initial,
   );
   // les étapes dépliées ; l'ouverture vit ici et survit aux tours de sondage
-  const [open, setOpen] = useState<number[]>([]);
-  const rows = steps(journal, runs, graph);
+  const [open, setOpen] = useState<number[]>(
+    decision ? journal.map((entry) => entry.version) : [],
+  );
+  const rows = steps(journal, runs, graph, decision);
   // les totaux du pied de table sont la somme de ce que les lignes montrent,
   // pas un second calcul : un step sans LLM y pèse zéro, et ça se voit
   const sum = (key: string) =>
@@ -475,6 +532,9 @@ export function ItemJournal({
                   <TableRow>
                     <TableCell colSpan={10} className="bg-muted/40">
                       <Candidates candidates={candidates} />
+                      {decision?.source === candidates[0].run.node && (
+                        <Decision decision={decision} />
+                      )}
                     </TableCell>
                   </TableRow>
                 )}

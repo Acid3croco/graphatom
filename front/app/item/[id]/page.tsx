@@ -62,6 +62,7 @@ export default async function ItemPage({
           journal: view.journal,
           runs: view.runs,
           graph: view.graph,
+          decision: view.decision,
         }}
       />
       <ItemRuns id={item} initial={view.runs} />

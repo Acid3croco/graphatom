@@ -83,10 +83,39 @@ ITEM = {
          "duration_s": 600.0, "usage": JUGEMENT, "result": {"outcome": "chosen"}},
     ],
     "effects": [], "questions": [], "criteria": None, "files": [],
+    "decision": {
+        "type": "chosen", "source": "implement",
+        "finalists": [{"letter": "A", "candidate": 0},
+                       {"letter": "B", "candidate": 1}],
+        "selected": {"letter": "B", "candidate": 1},
+        "summary": "B couvre les preuves demandées",
+        "verdict": "Comparaison complète des finalistes A et B.",
+        "judge": {"model": "gpt-5.6-sol", "cli": "codex", "effort": "high"},
+    },
+}
+
+SOLE = json.loads(json.dumps(ITEM))
+SOLE["item"]["id"] = 2
+SOLE["decision"] = {
+    "type": "sole", "source": "implement",
+    "finalists": [{"letter": "A", "candidate": 0}],
+    "selected": {"letter": "A", "candidate": 0},
+    "summary": "finaliste unique — traversé sans appel de modèle",
+    "verdict": "Un seul finaliste.", "judge": None,
+}
+
+NONE = json.loads(json.dumps(ITEM))
+NONE["item"]["id"] = 3
+NONE["decision"] = {
+    "type": "none", "source": "implement", "finalists": [],
+    "selected": None, "summary": "aucun finaliste", "verdict": None,
+    "judge": None,
 }
 
 ROUTES = {
     "/api/item/1": ITEM,
+    "/api/item/2": SOLE,
+    "/api/item/3": NONE,
     "/api/questions": {"token": "doublure", "questions": []},
     "/api/heartbeat": {"rail": {"at": None, "ago_s": 0.0, "stale": True},
                        "github-sync": {"at": None, "ago_s": 0.0, "stale": True}},
