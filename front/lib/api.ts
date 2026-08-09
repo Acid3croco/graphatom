@@ -15,6 +15,8 @@ export type Beat = {
   at: string | null;
   ago_s: number;
   stale: boolean;
+  sha?: string | null;
+  started_at?: string | null;
 };
 
 /** Un battement par producteur, sous son identité en base. */

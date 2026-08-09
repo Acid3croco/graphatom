@@ -388,7 +388,8 @@ def main() -> None:
         # 5. le battement, et tout le reste sérialisable tel quel
         beat = web._api_heartbeat(None, None)
         assert set(beat) == {"rail", "github-sync"}, beat
-        assert beat["rail"] == {"at": None, "ago_s": None, "stale": True}, beat
+        assert beat["rail"] == {"at": None, "ago_s": None, "stale": True,
+                                "sha": None, "started_at": None}, beat
         old = web._api_heartbeat(T0, T0)
         assert old["rail"]["stale"] is True, "un vieux battement est à l'arrêt"
         assert old["github-sync"]["stale"] is True, "et celui du canal aussi"

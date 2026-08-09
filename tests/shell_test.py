@@ -66,7 +66,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import db, executors, graph, kernel  # noqa: E402
+from graphatom import blocks, db, executors, graph, kernel, scheduler  # noqa: E402
 from graphatom.blocks import AGENT_TIMEOUT_S  # noqa: E402
 
 from outils import git  # noqa: E402
@@ -211,12 +211,19 @@ def faux_docker(tmp: Path, nom: str, services: str, log: str = "sync au repos\n"
     faux.write_text(
         "#!/bin/sh\n"
         f"ICI={binaires}\n"
-        'for MOT in "$@"; do\n'
-        '  case "$MOT" in\n'
-        '    ps) cat "$ICI/services.txt"; exit 0 ;;\n'
-        '    logs) cat "$ICI/log.txt"; exit 0 ;;\n'
-        '  esac\n'
-        "done\n"
+        'for MOT in "$@"; do DERNIER="$MOT"; done\n'
+        'if [ "$1" = inspect ]; then\n'
+        '  if [ "${GRAPHATOM_TEST_BAD_SERVICE:-}" = "${DERNIER#id-}" ]; then\n'
+        '    echo mauvais-sha\n'
+        '  else printf "%s\\n" "$GRAPHATOM_WORKER_SHA"; fi\n'
+        '  exit 0\n'
+        'fi\n'
+        'if [ "$2" = ps ]; then\n'
+        '  case " $* " in *" -q "*) printf "id-%s\\n" "$DERNIER" ;;\n'
+        '    *) cat "$ICI/services.txt" ;; esac\n'
+        '  exit 0\n'
+        'fi\n'
+        'if [ "$2" = logs ]; then cat "$ICI/log.txt"; exit 0; fi\n'
         'echo "commande inconnue : $*" >&2\n'
         "exit 1\n"
     )
@@ -277,6 +284,23 @@ def faux_deploiement(dossier: Path, duree: str = "0", etiquette: bool = True,
     jeton.write_text('#!/bin/sh\necho "jeton-de-test"\n')
     jeton.chmod(0o755)
     return f"{dossier}:{os.environ['PATH']}"
+
+
+def faux_systemctl(dossier: Path) -> tuple[Path, Path, Path]:
+    """Un systemctl étroit qui note sa commande et rend le code demandé."""
+    dossier.mkdir()
+    journal = dossier / "journal.txt"
+    code = dossier / "code.txt"
+    journal.write_text("")
+    code.write_text("1")
+    outil = dossier / "systemctl"
+    outil.write_text(
+        "#!/bin/sh\n"
+        f'printf "%s\\n" "$*" >> "{journal}"\n'
+        f'exit "$(cat "{code}")"\n'
+    )
+    outil.chmod(0o755)
+    return outil, journal, code
 
 
 def montees(dossier: Path) -> list[tuple[int, int]]:
@@ -356,12 +380,17 @@ def joue(node: str, repo: Path, workspace: Path, subject: str = SUJET,
     lisant le `cmd`, pas en les subissant.
     """
     (workspace / "outcome.json").unlink(missing_ok=True)
+    worker = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True, text=True,
+    ).stdout.strip()
     subprocess.run(
         BUNDLE["nodes"][node]["config"]["agent"]["cmd"],
         shell=True, cwd=workspace, check=False, capture_output=True,
         env=os.environ | {"GRAPHATOM_REPO_DIR": str(repo),
                           "GRAPHATOM_WORKSPACE": str(workspace),
                           "GRAPHATOM_SUBJECT_KEY": subject,
+                          "GRAPHATOM_WORKER_SHA": worker,
                           "GRAPHATOM_WEB_URL": "http://127.0.0.1:9",
                           "GRAPHATOM_FRONT_URL": "http://127.0.0.1:9",
                           "GRAPHATOM_PORTES_DELAI_S": "4",
@@ -494,7 +523,7 @@ def main() -> None:
     assert outcome["outcome"] == "failed", outcome
     assert "pas 2" in outcome["summary"], outcome  # le jeton, pas le garde-fou
     assert "$ git switch --detach origin/main" in (workspace / "deploy.md").read_text()
-    assert sha_deploye(workspace) == git(reference, "rev-parse", "--short", "origin/main")
+    assert sha_deploye(workspace) == git(reference, "rev-parse", "origin/main")
     print(f"6. {outcome['summary']} ✓")
 
     # 7. le même worktree, mais `main` est tenue par le checkout principal :
@@ -504,7 +533,7 @@ def main() -> None:
     outcome = joue("deploy", prise, workspace, plus={"PATH": sans_gh(tmp)})
     assert outcome["outcome"] == "failed", outcome
     assert "pas 2" in outcome["summary"], outcome  # les pas git ont tous passé
-    assert sha_deploye(workspace) == git(prise, "rev-parse", "--short", "origin/main")
+    assert sha_deploye(workspace) == git(prise, "rev-parse", "origin/main")
     print(f"7. {outcome['summary']} ✓")
 
     # 8. le script de release sort sur le code du pas qui a lâché
@@ -695,25 +724,67 @@ def main() -> None:
     #    arriver au lieu de conclure sur le refus de connexion
     portes = tmp / "portes"
     portes.mkdir()
+    cible_portes = depot(tmp / "cible-portes")
+    sha_portes = git(cible_portes, "rev-parse", "HEAD")
+    with db.connect() as conn:
+        conn.execute(
+            "INSERT INTO heartbeat (who, at, worker_sha, worker_started_at) "
+            "VALUES ('rail', now(), %s, now()) ON CONFLICT (who) DO UPDATE "
+            "SET at = now(), worker_sha = EXCLUDED.worker_sha, "
+            "worker_started_at = EXCLUDED.worker_started_at",
+            (sha_portes,),
+        )
     docker = faux_docker(tmp, "docker-en-marche", "github-sync\npricing-sync\nweb\nfront\n")
     lent, secours = Serveur(delai=4.0), Serveur(corps="{}")
     lent.start()
     secours.start()
-    outcome = joue("verify_deploy", tmp, portes, plus={
+    outcome = joue("verify_deploy", cible_portes, portes, plus={
         "PATH": docker, "GRAPHATOM_FRONT_URL": lent.url,
-        "GRAPHATOM_WEB_URL": secours.url, "GRAPHATOM_PORTES_DELAI_S": "30"})
+        "GRAPHATOM_WEB_URL": secours.url, "GRAPHATOM_PORTES_DELAI_S": "30",
+        "GRAPHATOM_HEARTBEAT_DSN": VERROU_DSN})
     assert outcome["outcome"] == "pass", outcome
     rapport = (portes / "verify_deploy.md").read_text()
     assert attente(rapport, 2) >= 3, rapport  # elle a bien attendu le front
+
+    with db.connect() as conn:
+        conn.execute("DELETE FROM heartbeat WHERE who = 'rail'")
+    outcome = joue("verify_deploy", cible_portes, portes, plus={
+        "PATH": docker, "GRAPHATOM_FRONT_URL": lent.url,
+        "GRAPHATOM_WEB_URL": secours.url,
+        "GRAPHATOM_HEARTBEAT_DSN": VERROU_DSN})
+    assert outcome["outcome"] == "fail" and "worker" in outcome["summary"], outcome
+    with db.connect() as conn:
+        conn.execute(
+            "INSERT INTO heartbeat (who, at, worker_sha, worker_started_at) "
+            "VALUES ('rail', now(), 'mauvais-sha', now())"
+        )
+    outcome = joue("verify_deploy", cible_portes, portes, plus={
+        "PATH": docker, "GRAPHATOM_FRONT_URL": lent.url,
+        "GRAPHATOM_WEB_URL": secours.url,
+        "GRAPHATOM_HEARTBEAT_DSN": VERROU_DSN})
+    assert outcome["outcome"] == "fail" and "worker" in outcome["summary"], outcome
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE heartbeat SET worker_sha = %s WHERE who = 'rail'", (sha_portes,)
+        )
+    for service in ("github-sync", "pricing-sync", "web", "front"):
+        outcome = joue("verify_deploy", cible_portes, portes, plus={
+            "PATH": docker, "GRAPHATOM_FRONT_URL": lent.url,
+            "GRAPHATOM_WEB_URL": secours.url,
+            "GRAPHATOM_HEARTBEAT_DSN": VERROU_DSN,
+            "GRAPHATOM_TEST_BAD_SERVICE": service})
+        assert outcome["outcome"] == "fail" and service in outcome["summary"], outcome
     lent.stop()
-    print(f"11. {outcome['summary']} ✓")
+    print("11. concordance complète, worker absent ou faux et quatre étiquettes "
+          "discordantes contrôlés ✓")
 
     # 12. le service qui ne répond jamais : la porte échoue, mais après avoir
     #    épuisé le budget, et elle dit combien de temps elle a tenu
     sourd = Serveur()  # jamais démarré : le port est réservé, rien n'écoute
-    outcome = joue("verify_deploy", tmp, portes, plus={
+    outcome = joue("verify_deploy", cible_portes, portes, plus={
         "PATH": docker, "GRAPHATOM_FRONT_URL": sourd.url,
-        "GRAPHATOM_WEB_URL": secours.url, "GRAPHATOM_PORTES_DELAI_S": "6"})
+        "GRAPHATOM_WEB_URL": secours.url, "GRAPHATOM_PORTES_DELAI_S": "6",
+        "GRAPHATOM_HEARTBEAT_DSN": VERROU_DSN})
     assert outcome["outcome"] == "fail", outcome
     assert "porte 2" in outcome["summary"], outcome
     tenu = re.search(r"après (\d+) s d'attente", outcome["summary"])
@@ -730,9 +801,10 @@ def main() -> None:
             ("le stdlib", Serveur(corps="<html>le web stdlib</html>"), "_next")):
         serveur.start()
         depart = time.monotonic()
-        outcome = joue("verify_deploy", tmp, portes, plus={
+        outcome = joue("verify_deploy", cible_portes, portes, plus={
             "PATH": docker, "GRAPHATOM_FRONT_URL": serveur.url,
-            "GRAPHATOM_WEB_URL": secours.url, "GRAPHATOM_PORTES_DELAI_S": "60"})
+            "GRAPHATOM_WEB_URL": secours.url, "GRAPHATOM_PORTES_DELAI_S": "60",
+            "GRAPHATOM_HEARTBEAT_DSN": VERROU_DSN})
         ecoule = time.monotonic() - depart
         assert outcome["outcome"] == "fail", outcome
         assert "porte 2" in outcome["summary"] and marque in outcome["summary"], outcome
@@ -797,7 +869,7 @@ def main() -> None:
         assert outcome["outcome"] == "done", outcome
     assert len(montees(memes / "bin")) == 1, montees(memes / "bin")
     assert "déjà déployé" in outcome["summary"], outcome
-    sha = git(stable, "rev-parse", "--short", "origin/main")
+    sha = git(stable, "rev-parse", "origin/main")
     rapport = (memes / "deux" / "deploy.md").read_text()
     assert f"front porte {sha} - voulu {sha}" in rapport, rapport
     print(f"16. {outcome['summary']} ✓")
@@ -911,6 +983,266 @@ def main() -> None:
     assert montees(nu / "bin") == [], "un `up` est passé sans le verrou"
     print("21. le python du PATH n'a pas psycopg : celui du clone de "
           "référence prend le verrou quand même ✓")
+
+    # 22. l'activation vient du résultat appliqué, jamais du HEAD vu pendant
+    # le shell. Une erreur reste durable et le tick suivant la rejoue ; seul
+    # le heartbeat du worker neuf acquitte la demande.
+    activation = tmp / "activation"
+    activation.mkdir()
+    cible = depot(activation)
+    wanted = git(cible, "rev-parse", "HEAD")
+    outil, journal, code = faux_systemctl(activation / "systemctl")
+    deploiement = activation / "bin"
+    faux_deploiement(deploiement)
+    for service in scheduler.DEPLOYED_SERVICES:
+        (deploiement / f"sha-{service}.txt").write_text(wanted)
+    donnees, ancienne_data = activation / "data", blocks.DATA_DIR
+    blocks.DATA_DIR = donnees
+    ancien_sha = scheduler.WORKER_SHA
+    ancien_repo = os.environ.get("GRAPHATOM_REPO_DIR")
+    ancien_systemctl = os.environ.get("GRAPHATOM_SYSTEMCTL")
+    ancien_docker = os.environ.get("GRAPHATOM_DOCKER")
+    ancien_gh = os.environ.get("GRAPHATOM_GH")
+    ancienne_reprise = os.environ.get("GRAPHATOM_ACTIVATION_RETRY_S")
+    os.environ["GRAPHATOM_REPO_DIR"] = str(cible)
+    os.environ["GRAPHATOM_SYSTEMCTL"] = str(outil)
+    os.environ["GRAPHATOM_DOCKER"] = str(deploiement / "docker")
+    os.environ["GRAPHATOM_GH"] = str(deploiement / "gh")
+    os.environ["GRAPHATOM_ACTIVATION_RETRY_S"] = "0"
+    try:
+        bundle = {
+            "name": f"activation-{os.getpid()}",
+            "entry": "deploy",
+            "budgets": {"escalations": 1, "wall_deadline_hours": 1},
+            "on_kernel": {"escalate_to": "abandon", "exhausted_to": "abandon"},
+            "nodes": {
+                "deploy": {"block": "ACT", "edges": {"done": "fini"}},
+                "fini": {"terminal": True},
+                "abandon": {"terminal": True},
+            },
+        }
+        with db.connect() as conn:
+            revision = graph.publish(conn, bundle)
+            item_id = kernel.admit(
+                conn, revision, f"activation:{os.getpid()}",
+                _allow_parallel_for_test=True,
+            )
+            workspace = blocks.item_workspace(item_id)
+            workspace.mkdir(parents=True)
+            (workspace / "deploy.md").write_text("résultat du shell rendu\n")
+            run = kernel.claim(conn, item_id)
+            assert run is not None
+            brut = workspace / "outcome.json"
+            brut.write_text(json.dumps({
+                "outcome": "done", "summary": "release prête",
+                "deploy_sha": wanted,
+            }))
+            submitted = blocks.read_outcome(brut)
+            assert submitted["deploy_sha"] == wanted
+            assert kernel.apply(conn, run["id"], submitted) == "applied"
+            event = conn.execute(
+                "SELECT kind FROM event WHERE run_id = %s", (run["id"],)
+            ).fetchone()
+            assert event == {"kind": "result"}, event
+            assert journal.read_text() == "", "restart avant le résultat durable"
+
+            conn.execute(
+                "INSERT INTO heartbeat (who, at, worker_sha) "
+                "VALUES ('rail', now(), %s) ON CONFLICT (who) DO UPDATE SET "
+                "at = now(), worker_sha = EXCLUDED.worker_sha",
+                (wanted,),
+            )
+            assert blocks.verify_deploy_error(conn, item_id, cible) is None
+            conn.execute("UPDATE heartbeat SET worker_sha = %s WHERE who = 'rail'",
+                         ("0" * 40,))
+            assert "worker" in blocks.verify_deploy_error(conn, item_id, cible)
+            conn.execute(
+                "UPDATE node_run SET result = jsonb_set(result, "
+                "'{deploy_sha}', %s::jsonb) WHERE id = %s",
+                (json.dumps("0" * 40), run["id"]),
+            )
+            assert "checkout" in blocks.verify_deploy_error(conn, item_id, cible)
+            conn.execute(
+                "UPDATE node_run SET result = jsonb_set(result, "
+                "'{deploy_sha}', %s::jsonb) WHERE id = %s",
+                (json.dumps(wanted), run["id"]),
+            )
+            conn.execute("UPDATE heartbeat SET worker_sha = %s WHERE who = 'rail'",
+                         (wanted,))
+
+            for service in scheduler.DEPLOYED_SERVICES:
+                label = deploiement / f"sha-{service}.txt"
+                label.write_text("0" * 40)
+                assert scheduler._activation_worker(conn) == 0
+                assert journal.read_text() == "", \
+                    "restart malgré une image discordante"
+                saved = conn.execute(
+                    "SELECT result FROM node_run WHERE id = %s", (run["id"],)
+                ).fetchone()["result"]
+                assert saved["worker_activation"]["error"] == \
+                    f"services discordants : {service}", saved
+                label.write_text(wanted)
+
+            scheduler.tick(conn)  # reprise après le commit, comme au démarrage suivant
+            assert journal.read_text().splitlines() == [
+                "--user restart graphatom-worker.service"
+            ]
+            saved = conn.execute(
+                "SELECT result FROM node_run WHERE id = %s", (run["id"],)
+            ).fetchone()["result"]
+            assert saved["worker_activation"]["status"] == "error", saved
+
+            code.write_text("0")
+            assert scheduler._activation_worker(conn) == 1
+            assert len(journal.read_text().splitlines()) == 2, journal.read_text()
+            scheduler.WORKER_SHA = wanted
+            assert scheduler._activation_worker(conn) == 0
+            assert scheduler._activation_worker(conn) == 0
+            assert len(journal.read_text().splitlines()) == 2, \
+                "le worker neuf a relancé une demande déjà acquittée"
+            saved = conn.execute(
+                "SELECT result FROM node_run WHERE id = %s", (run["id"],)
+            ).fetchone()["result"]
+            assert saved["worker_activation"] == {
+                "status": "active", "worker_sha": wanted,
+            }, saved
+            rapport = (workspace / "deploy.md").read_text()
+            for service in scheduler.DEPLOYED_SERVICES:
+                assert f"{service} porte finalement {wanted}" in rapport
+
+            # Deux releases proches : le réconciliateur ne lit que la plus
+            # récente et converge vers elle sous le même verrou de cible.
+            (cible / "seconde.txt").write_text("release plus récente\n")
+            git(cible, "add", "seconde.txt")
+            git(cible, "commit", "-qm", "seconde release")
+            newest = git(cible, "rev-parse", "HEAD")
+            for service in scheduler.DEPLOYED_SERVICES:
+                (deploiement / f"sha-{service}.txt").write_text(newest)
+            second_id = kernel.admit(
+                conn, revision, f"activation-plus-recente:{os.getpid()}",
+                _allow_parallel_for_test=True,
+            )
+            second_workspace = blocks.item_workspace(second_id)
+            second_workspace.mkdir(parents=True)
+            (second_workspace / "deploy.md").write_text("seconde release rendue\n")
+            second_run = kernel.claim(conn, second_id)
+            assert second_run is not None
+            assert kernel.apply(conn, second_run["id"], {
+                "outcome": "done", "summary": "seconde release",
+                "deploy_sha": newest,
+            }) == "applied"
+            before = len(journal.read_text().splitlines())
+            assert scheduler._activation_worker(conn) == 1
+            assert len(journal.read_text().splitlines()) == before + 1
+            scheduler.WORKER_SHA = newest
+            assert scheduler._activation_worker(conn) == 0
+            assert scheduler._activation_worker(conn) == 0
+            latest = conn.execute(
+                "SELECT result FROM node_run WHERE id = %s", (second_run["id"],)
+            ).fetchone()["result"]
+            assert latest["worker_activation"] == {
+                "status": "active", "worker_sha": newest,
+            }, latest
+
+            # Le chemin complet `_execute` doit lire outcome.json, appliquer
+            # et router, puis seulement appeler le vrai réconciliateur.
+            (cible / "troisieme.txt").write_text("release du chemin réel\n")
+            git(cible, "add", "troisieme.txt")
+            git(cible, "commit", "-qm", "troisième release")
+            target = git(cible, "rev-parse", "HEAD")
+            for service in scheduler.DEPLOYED_SERVICES:
+                (deploiement / f"sha-{service}.txt").write_text(target)
+            real_bundle = {
+                "name": f"activation-reelle-{os.getpid()}",
+                "entry": "deploy",
+                "budgets": {"escalations": 1, "wall_deadline_hours": 1},
+                "on_kernel": {"escalate_to": "abandon",
+                              "exhausted_to": "abandon"},
+                "nodes": {
+                    "deploy": {
+                        "block": "ACT",
+                        "config": {"lease_s": 30, "agent": {
+                            "cmd": "printf '%s\\n' '" + json.dumps({
+                                "outcome": "done", "summary": "chemin réel",
+                                "deploy_sha": target,
+                            }) + "' > outcome.json",
+                            "prompt": "Doublure déterministe du déploiement.",
+                            "timeout_s": 10, "silence_s": 10,
+                            "passation": False,
+                        }},
+                        "edges": {"done": "fini"},
+                    },
+                    "fini": {"terminal": True},
+                    "abandon": {"terminal": True},
+                },
+            }
+            real_revision = graph.publish(conn, real_bundle)
+            real_item = kernel.admit(
+                conn, real_revision, f"activation-reelle:{os.getpid()}",
+                _allow_parallel_for_test=True,
+            )
+            real_run = kernel.claim(conn, real_item)
+            assert real_run is not None
+            observations = []
+            real_activation = scheduler._activation_worker
+
+            def observe_after_apply(observed_conn):
+                stored = observed_conn.execute(
+                    "SELECT status, result FROM node_run WHERE id = %s",
+                    (real_run["id"],),
+                ).fetchone()
+                event = observed_conn.execute(
+                    "SELECT kind FROM event WHERE run_id = %s",
+                    (real_run["id"],),
+                ).fetchone()
+                observations.append((stored, event))
+                return real_activation(observed_conn)
+
+            scheduler._activation_worker = observe_after_apply
+            before = len(journal.read_text().splitlines())
+            try:
+                scheduler._execute(real_run["id"], real_item)
+            finally:
+                scheduler._activation_worker = real_activation
+            assert len(observations) == 1, observations
+            assert observations[0][0]["status"] == "applied", observations
+            assert observations[0][0]["result"]["deploy_sha"] == target
+            assert observations[0][1] == {"kind": "result"}, observations
+            assert len(journal.read_text().splitlines()) == before + 1
+            scheduler.WORKER_SHA = target
+            assert scheduler._activation_worker(conn) == 0
+
+            brut.write_text(json.dumps({
+                "outcome": "done", "summary": "SHA tronqué",
+                "deploy_sha": wanted[:12],
+            }))
+            try:
+                blocks.read_outcome(brut)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("un deploy_sha tronqué a été accepté")
+        assert "systemctl" not in BUNDLE["nodes"]["deploy"]["config"]["agent"]["cmd"]
+        print("22. résultat durable puis activation --user, erreur rejouée, "
+              "acquittement idempotent par le worker neuf ✓")
+    finally:
+        scheduler.WORKER_SHA = ancien_sha
+        blocks.DATA_DIR = ancienne_data
+        if ancien_repo is None:
+            os.environ.pop("GRAPHATOM_REPO_DIR", None)
+        else:
+            os.environ["GRAPHATOM_REPO_DIR"] = ancien_repo
+        if ancien_systemctl is None:
+            os.environ.pop("GRAPHATOM_SYSTEMCTL", None)
+        else:
+            os.environ["GRAPHATOM_SYSTEMCTL"] = ancien_systemctl
+        for nom, ancienne in (("GRAPHATOM_DOCKER", ancien_docker),
+                              ("GRAPHATOM_GH", ancien_gh),
+                              ("GRAPHATOM_ACTIVATION_RETRY_S", ancienne_reprise)):
+            if ancienne is None:
+                os.environ.pop(nom, None)
+            else:
+                os.environ[nom] = ancienne
 
     shutil.rmtree(tmp, ignore_errors=True)
     print("\nnœuds shell : OK — déterministes, et jamais sans outcome")

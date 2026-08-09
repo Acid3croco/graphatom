@@ -1193,14 +1193,21 @@ def _api_beat(at: dt.datetime | None) -> dict:
     return {"at": at, "ago_s": heartbeat.age_s(at), "stale": heartbeat.stalled(at)}
 
 
-def _api_heartbeat(rail: dt.datetime | None, sync: dt.datetime | None) -> dict:
+def _api_heartbeat(rail: dt.datetime | dict | None, sync: dt.datetime | None) -> dict:
     """Les deux battements, pour un client qui pose l'en-tête lui-même.
 
     Un objet par batteur, sous son identité en base : le worker et le canal
     GitHub sont deux processus séparés, chacun peut mourir seul, et un
     client qui n'en lit qu'un ne verrait pas l'autre se taire.
     """
-    return {heartbeat.RAIL: _api_beat(rail), heartbeat.GITHUB_SYNC: _api_beat(sync)}
+    if isinstance(rail, dict):
+        worker = _api_beat(rail.get("at")) | {
+            "sha": rail.get("worker_sha"),
+            "started_at": rail.get("worker_started_at"),
+        }
+    else:
+        worker = _api_beat(rail) | {"sha": None, "started_at": None}
+    return {heartbeat.RAIL: worker, heartbeat.GITHUB_SYNC: _api_beat(sync)}
 
 
 def _api_load(conn) -> dict:
@@ -1292,7 +1299,7 @@ def serve(port: int = 8848, by: str = "web", notify_cmd: str | None = None,
                         return self._json(200, _api_questions(conn, token))
                     if path == "/api/heartbeat":
                         return self._json(200, _api_heartbeat(
-                            heartbeat.last(conn, heartbeat.RAIL),
+                            heartbeat.worker(conn),
                             heartbeat.last(conn, heartbeat.GITHUB_SYNC)))
                     if path == "/api/load":
                         return self._json(200, _api_load(conn))
