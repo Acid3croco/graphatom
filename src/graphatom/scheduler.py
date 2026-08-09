@@ -217,6 +217,39 @@ def _largeur(conn: psycopg.Connection, item_id: int) -> int:
     return max(1, len(fanout_variants(spec)))
 
 
+def _solo(conn: psycopg.Connection, item_id: int) -> bool:
+    """Vrai si l'état courant de l'item demande la voie entière."""
+    item = conn.execute(
+        "SELECT state, revision, terminal_at FROM work_item WHERE id = %s", (item_id,)
+    ).fetchone()
+    if item is None or item["terminal_at"] is not None:
+        return False
+    spec = load_bundle(conn, item["revision"])["nodes"].get(item["state"]) or {}
+    return (spec.get("config") or {}).get("solo") is True
+
+
+def etat_solo(conn: psycopg.Connection) -> dict[str, int]:
+    """Les nœuds solo actifs, séparés entre le vol et l'attente.
+
+    Le compte porte sur les items, pas sur les candidats d'un fan-out : un
+    nœud reste une seule course, même quand plusieurs runs la composent.
+    """
+    items = conn.execute(
+        "SELECT id, state, revision FROM work_item "
+        "WHERE terminal_at IS NULL ORDER BY id"
+    ).fetchall()
+    running = {
+        row["item_id"] for row in conn.execute(
+            "SELECT DISTINCT item_id FROM node_run WHERE status = 'running'"
+        ).fetchall()
+    }
+    solo = [row["id"] for row in items
+            if (load_bundle(conn, row["revision"])["nodes"].get(row["state"], {})
+                .get("config") or {}).get("solo") is True]
+    return {"running": sum(item_id in running for item_id in solo),
+            "waiting": sum(item_id not in running for item_id in solo)}
+
+
 def _dispatch(conn: psycopg.Connection) -> int:
     """Réserve ce que les deux plafonds laissent passer. Le reste attend.
 
@@ -231,6 +264,12 @@ def _dispatch(conn: psycopg.Connection) -> int:
     puis faire avancer l'item avant que les deux autres ne naissent. On ne
     réserve les K candidats que si la place les accueille tous.
     """
+    # Le verrou est symétrique. Un solo en vol ferme immédiatement le rail ;
+    # un solo qui arrive ne passe que sur un rail vide. Dans les deux cas,
+    # `claim` n'est jamais appelé pour ce qui attend.
+    if etat_solo(conn)["running"]:
+        return 0
+
     libre = MAX_RUNS - en_vol(conn)
     items = conn.execute(
         "SELECT id FROM work_item WHERE terminal_at IS NULL ORDER BY id"
@@ -242,10 +281,15 @@ def _dispatch(conn: psycopg.Connection) -> int:
             break
         place = min(libre, MAX_RUNS_PER_ITEM - _en_vol_item(conn, row["id"]))
         largeur = _largeur(conn, row["id"])
+        solo = _solo(conn, row["id"])
+        if solo and en_vol(conn) > 0:
+            continue
         if place < largeur:
             trop_larges.append((row["id"], largeur))
             continue  # la course ne tient pas : elle attend, entière
         n += _reserve(conn, row["id"], place)
+        if solo and n:
+            return n  # rien d'autre ne naît sous cette course
         libre = MAX_RUNS - en_vol(conn)
 
     # Dernier recours : une course plus large que le plafond lui-même. La
