@@ -68,7 +68,8 @@ from urllib.parse import parse_qs, quote, unquote
 from . import channel, db, executors, heartbeat, scheduler
 from .blocks import (attempt_command, attempt_log, attempt_name, item_workspace,
                      run_workspace)
-from .graph import candidate_node, fanout_variants, judge_source, load_bundle
+from .graph import (KERNEL_OUTCOMES, candidate_node, fanout_variants,
+                    judge_source, load_bundle)
 
 STYLE = """
 body { font-family: system-ui, sans-serif; max-width: 58rem; margin: 2rem auto;
@@ -700,7 +701,9 @@ def _decision(item_id: int, bundle: dict, runs: list[dict]) -> dict | None:
     batch = max(((r["cycle"], r["attempt"]) for r in source_runs), default=None)
     finalists = sorted(
         (r for r in source_runs
-         if (r["cycle"], r["attempt"]) == batch and r["status"] == "applied"),
+         if (r["cycle"], r["attempt"]) == batch
+         and r["candidate"] is not None and r["status"] == "applied"
+         and r["outcome"] and r["outcome"] not in KERNEL_OUTCOMES),
         key=lambda r: (r["finished_at"], r["id"]),
     )
     mapping = [{"letter": letter, "candidate": r["candidate"]}

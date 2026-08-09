@@ -333,6 +333,9 @@ def main() -> None:
             },
         }
         chosen_runs = [
+            {"id": 18, "node": "implement", "cycle": 1, "attempt": 1,
+             "candidate": 2, "status": "applied", "outcome": "timed_out",
+             "finished_at": T0},
             {"id": 20, "node": "implement", "cycle": 1, "attempt": 1,
              "candidate": 1, "status": "applied", "outcome": "done",
              "finished_at": T0 + dt.timedelta(seconds=2)},
@@ -359,14 +362,14 @@ def main() -> None:
             "cli": "codex", "model": "sol", "effort": "high",
         }, decision
 
-        sole = web._decision(116, decision_bundle, [chosen_runs[1],
-            chosen_runs[2] | {"outcome": "sole", "result": {
+        sole = web._decision(116, decision_bundle, [chosen_runs[2],
+            chosen_runs[3] | {"outcome": "sole", "result": {
                 "summary": "finaliste unique — traversé sans appel de modèle"}}])
         assert sole["selected"] == {"letter": "A", "candidate": 0}, sole
         assert sole["judge"] is None, sole
         none = web._decision(117, decision_bundle, [
-            chosen_runs[1] | {"status": "superseded"},
-            chosen_runs[2] | {"outcome": "none", "result": {
+            chosen_runs[2] | {"status": "superseded"},
+            chosen_runs[3] | {"outcome": "none", "result": {
                 "summary": "aucun finaliste — retour en amont sans jugement"}},
         ])
         assert none["finalists"] == [] and none["selected"] is None, none
