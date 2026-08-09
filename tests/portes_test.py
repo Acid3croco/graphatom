@@ -1,25 +1,26 @@
 """Le test des portes déterministes d'un candidat d'`implement`.
 
-`implement` est une course : cinq candidats concurrents, et `first_pass`
-promeut le premier qui rend une issue de succès. Sans porte, ce serait le
-premier à *prétendre* — on sélectionnerait le plus rapide à se déclarer
-fini, pas le plus correct. Le `cmd` du nœud lance donc `scripts/portes.sh`
-après l'agent, et retire son `outcome.json` quand une porte lâche.
+`implement` est une course : trois candidats concurrents, et `keep_n`
+garde deux finalistes dont les issues de succès ont passé leurs portes. Sans
+porte, on sélectionnerait les plus rapides à *prétendre*, pas les plus
+corrects. Le `cmd` du nœud lance donc `scripts/portes.sh` après l'agent, et
+retire son `outcome.json` quand une porte lâche. Le scénario réduit la course
+par `first_pass` pour pouvoir trancher avec un seul candidat sain.
 
-Les portes sont celles de tout le monde, le modèle n'y change rien : trois
-candidats appellent `claude`, le quatrième passe par l'adaptateur
-`scripts/agent-opencode.sh` sur un modèle gratuit, le cinquième par
-`scripts/agent-codex.sh`, et le même jeu de portes tranche les cinq.
+Les portes sont celles de tout le monde, le modèle n'y change rien : deux
+candidats passent par `scripts/agent-codex.sh`, le troisième par
+`scripts/agent-opencode.sh` sur un modèle gratuit, et le même jeu de portes
+tranche les trois.
 
 Le `cmd` joué ici est celui d'`examples/code-task.json`, tel quel : seule la
-ligne d'appel du modèle — `claude` pour les trois stratégies, l'adaptateur
-pour la variante gratuite — est remplacée par un agent factice qui écrit
-dans l'atelier du candidat ce que le test veut y voir. Tout ce qui suit —
-les portes et le retrait de l'issue — est le vrai.
+ligne d'appel du modèle — Codex pour deux stratégies, OpenCode pour la
+variante gratuite — est remplacée par un agent factice qui écrit dans
+l'atelier du candidat ce que le test veut y voir. Tout ce qui suit — les
+portes et le retrait de l'issue — est le vrai.
 
 Scénario, sur la base et sur une copie jetable du dépôt :
 
-  1. les quatre variantes donnent quatre prompts différents, chacun portant
+  1. les trois variantes donnent trois prompts différents, chacun portant
      sa stratégie ; aucun `{label}` ni `{strategy}` littéral ne survit au
      rendu
   2. le candidat qui casse un module du paquet : la porte d'import lâche,
@@ -73,13 +74,10 @@ INUTILE = shutil.ignore_patterns(".git", ".venv", "node_modules", ".next",
 #
 #   c0 — une ligne de documentation : rien de cassé, et un diff sans code
 #   c1 — un module du paquet rendu illisible : la porte d'import doit tomber
-#   c2 — un test rendu illisible : c'est la porte de la suite qui doit tomber
-#   c3 — le candidat gratuit, un module du paquet rendu illisible lui aussi :
-#        sa commande passe par l'adaptateur opencode, ses portes non
-#   c4 — le candidat codex, sain comme c0 : la diversité de fournisseur ne
-#        change rien aux portes, c'est ce qu'on regarde
+#   c2 — le candidat gratuit rend un test illisible : sa commande passe par
+#        l'adaptateur opencode, ses portes non
 #
-# Les cinq se déclarent finis : c'est aux portes de les départager.
+# Les trois se déclarent finis : c'est aux portes de les départager.
 FAUX_AGENT = """WS=$(pwd)
 K=$(basename "$WS"); K=${K#c}
 printf '%s\\n' '{"type":"result","result":"agent factice",\
@@ -90,9 +88,6 @@ case "$K" in
 >> "$GRAPHATOM_WORKTREE/README.md" ;;
   1) printf '\\ndef casse(:\\n' >> "$GRAPHATOM_WORKTREE/src/graphatom/channel.py" ;;
   2) printf '\\ndef casse(:\\n' >> "$GRAPHATOM_WORKTREE/tests/validate_test.py" ;;
-  3) printf '\\ndef casse(:\\n' >> "$GRAPHATOM_WORKTREE/src/graphatom/heartbeat.py" ;;
-  4) printf '\\nUne ligne de documentation, et rien de plus.\\n' \
->> "$GRAPHATOM_WORKTREE/README.md" ;;
 esac
 git -C "$GRAPHATOM_WORKTREE" add -A
 git -C "$GRAPHATOM_WORKTREE" commit -qm "candidat $K"
@@ -100,9 +95,9 @@ printf '{"outcome": "done", "summary": "candidat %s : je me déclare fini"}' "$K
 > outcome.json
 RC=0"""
 
-# La ligne d'appel du modèle, dans le `cmd` d'un candidat : `claude` pour les
-# trois stratégies, l'adaptateur opencode pour la variante gratuite, codex
-# pour la cinquième. C'est elle, et elle seule, que l'agent factice remplace.
+# La ligne d'appel du modèle, dans le `cmd` d'un candidat : codex pour deux
+# stratégies, opencode pour la variante gratuite. C'est elle, et elle seule,
+# que l'agent factice remplace.
 APPEL = re.compile(r"^(?:claude |OPENCODE_\w+=|CODEX_\w+=).*$", re.M)
 
 
@@ -128,6 +123,8 @@ def bundle_portes() -> dict:
         propre = (variante.get("agent") or {}).get("cmd")
         if propre is not None:
             variante["agent"]["cmd"] = cmd_teste(propre)
+    node["config"]["fanout"]["reduce"] = "first_pass"
+    node["config"]["fanout"].pop("n", None)
     node["config"]["agent"]["timeout_s"] = 300  # l'agent est factice, les portes non
     node["config"]["lease_s"] = 600
     node["edges"] = {"done": "fini"}
@@ -191,7 +188,7 @@ def runs_de(conn, item_id: int) -> dict[int, dict]:
 
 
 def course(conn, workdir: Path, repo: Path) -> None:
-    """1 à 4 : quatre candidats, trois recalés par leurs portes, un gagnant."""
+    """1 à 4 : trois candidats, deux recalés par leurs portes, un gagnant."""
     item_id = nouvel_item(conn, repo)
     runs = {}
     while (run := kernel.claim(conn, item_id)) is not None:
@@ -228,8 +225,7 @@ def course(conn, workdir: Path, repo: Path) -> None:
     # 2 et 3. les recalés : pas d'outcome.json, pas d'issue de succès
     for point, k, porte, casse in ((2, 1, "import", "src/graphatom/channel.py"),
                                    (3, 2, "tests/validate_test.py",
-                                    "tests/validate_test.py"),
-                                   (2, 3, "import", "src/graphatom/heartbeat.py")):
+                                    "tests/validate_test.py")):
         cw = workspace / f"c{k}"
         assert not (cw / blocks.OUTCOME_NAME).exists(), \
             f"c{k} garde un outcome.json alors que ses portes ont lâché"

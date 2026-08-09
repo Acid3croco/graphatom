@@ -194,11 +194,10 @@ def plafond_par_item(conn) -> None:
     """4 : un fan-out large ne prend pas toute la place — l'autre item démarre.
 
     Et il ne part **jamais en morceaux** : une course se réserve entière ou
-    attend. Une course coupée en deux serait pire qu'une course différée —
-    `keep_n` attend « tout le monde » en constatant qu'aucun run du lot ne
-    tourne, or ce lot est ce qui existe en base et non ce qui devrait exister.
-    Deux candidats sur quatre finissent, plus rien ne tourne, la réduction
-    tranche sur une course amputée, et les deux autres ne naîtront jamais.
+    attend. Une course coupée en deux serait pire qu'une course différée :
+    une réduction ne voit que le lot qui existe en base, non celui qui devrait
+    exister. Deux candidats sur quatre pourraient suffire à `keep_n`, faire
+    avancer l'item, et empêcher les deux autres de naître.
     """
     scheduler.MAX_RUNS, scheduler.MAX_RUNS_PER_ITEM = 3, 2
     large = seme(conn, 4)   # K = 4, au-dessus de son plafond de 2

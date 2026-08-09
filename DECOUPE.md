@@ -379,7 +379,7 @@ travail du juge ; sous une agrégation, il ferait celui de git.
 | `blocks.py` — `VARIANT_TOKENS` | un jeton de plus, `paths`, pour qu'un prompt puisse nommer le périmètre fermé de son morceau. `label` sert déjà. |
 | `kernel.py` — `_reduce` | deux branches de plus, sur le même modèle que les deux existantes. |
 | `kernel.py` — `_unanimous` | monotone comme `_first_pass` : décide dès qu'un morceau s'écarte de `on`, révoque les frères par `_revoke_losers`. |
-| `kernel.py` — `_concat` | attend tout le monde comme `_keep_n` ; tous en succès et la preuve de disjonction tenue → l'issue commune est routée ; sinon l'issue d'échec, sans rien fusionner. |
+| `kernel.py` — `_concat` | attend tout le monde, contrairement au `keep_n` qui tranche à sa n-ième réussite ; tous en succès et la preuve de disjonction tenue → l'issue commune est routée ; sinon l'issue d'échec, sans rien fusionner. |
 | `kernel.py` — `_ateliers` | le cas `concat` : fusionner les branches des morceaux dans l'ordre déclaré au lieu de promouvoir un gagnant, puis `discard` comme aujourd'hui. |
 | `worktree.py` — une fonction à côté de `promote` | la preuve de disjonction (`git diff --name-only`, périmètres déclarés, intersections) et les fusions successives. Le refus se dit à voix haute et laisse la branche de l'item intacte, comme le fait déjà `promote`. |
 | `tests/` | un test sans base sur la validation de `pieces` — dans la lignée de `fanout_config_test.py` —, et un test de la preuve de disjonction sur un dépôt jetable. |
