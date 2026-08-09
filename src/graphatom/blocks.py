@@ -766,8 +766,6 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
     env.update(executors.environment(resolved))
     cmd = _fill(ctx, executors.command(resolved), subject)
     with log.open("w") as out:
-        out.write(f"$ {cmd}\n")
-        out.flush()
         # session dédiée : l'agent est chef de son groupe, ses descendants aussi
         proc = subprocess.Popen(
             cmd, shell=True, cwd=workspace, env=env, start_new_session=True,

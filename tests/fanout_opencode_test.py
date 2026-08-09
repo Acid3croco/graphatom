@@ -41,12 +41,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import blocks, db, graph, kernel, scheduler  # noqa: E402
+from graphatom import blocks, db, executors, graph, kernel, scheduler  # noqa: E402
 
 from outils import git  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-REEL = json.loads((ROOT / "examples" / "code-task.json").read_text())["nodes"]["implement"]
+PAQUET = json.loads((ROOT / "examples" / "code-task.json").read_text())
+REEL = PAQUET["nodes"]["implement"]
 VARIANTES = REEL["config"]["fanout"]["variants"]
 
 ADAPTATEUR = "scripts/agent-opencode.sh"
@@ -57,9 +58,13 @@ os.environ.pop("GRAPHATOM_AGENT_DSN", None)
 
 
 def gratuits() -> list[int]:
-    """Le rang du candidat qui passe par l'adaptateur gratuit."""
-    rangs = [k for k, v in enumerate(VARIANTES)
-             if ADAPTATEUR in ((v.get("agent") or {}).get("cmd") or "")]
+    """Le rang du candidat qui déclare l'exécuteur gratuit."""
+    rangs = []
+    for rang in range(len(VARIANTES)):
+        candidat = graph.candidate_node(REEL, rang)
+        resolu = executors.resolve(PAQUET, candidat)
+        if resolu.cli == "opencode" and resolu.model == MODELE:
+            rangs.append(rang)
     assert len(rangs) == 1, f"un candidat gratuit attendu, vu {rangs}"
     return rangs
 
@@ -123,14 +128,18 @@ def declaration() -> None:
     assert candidats <= graph.FANOUT_MAX_CANDIDATES, candidats
 
     for rang in gratuits():
-        cmd = VARIANTES[rang]["agent"]["cmd"]
-        assert ADAPTATEUR in cmd, cmd
-        assert MODELE in cmd, cmd
-        assert "OPENCODE_DIR=\"${GRAPHATOM_WORKTREE" in cmd, \
-            f"la variante ne donne pas l'atelier du candidat au script : {cmd}"
+        candidat = graph.candidate_node(REEL, rang)
+        resolu = executors.resolve(paquet, candidat)
+        env = executors.environment(resolu)
+        cmd = candidat["config"]["agent"]["cmd"]
+        assert (resolu.cli, resolu.model, resolu.effort) == \
+            ("opencode", MODELE, None), resolu
+        assert env["GRAPHATOM_AGENT_CLI"] == "opencode", env
+        assert env["OPENCODE_MODEL"] == MODELE, env
+        assert "agent-declared.sh" in cmd, cmd
         assert "portes.sh" in cmd, f"la variante ne lance pas ses portes : {cmd}"
         for mot in ("KEY", "TOKEN", "SECRET", "PASSWORD", "api_key", "Bearer"):
-            assert mot not in cmd, f"un identifiant dans la commande : {mot}"
+            assert mot not in json.dumps(env), f"un identifiant déclaré : {mot}"
 
     labels = ", ".join(VARIANTES[r]["label"] for r in gratuits())
     print(f"1. candidats gratuits « {labels} » : {ADAPTATEUR} sur {MODELE}, "
