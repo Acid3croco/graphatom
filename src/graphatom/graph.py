@@ -122,6 +122,18 @@ def _validate_fanout(name: str, spec: dict) -> None:
                          f"FANOUT_MAX_CANDIDATES = {FANOUT_MAX_CANDIDATES}")
 
 
+def _validate_solo(name: str, spec: dict) -> None:
+    """Le drapeau d'exclusion d'un nœud : un booléen, jamais sur un WAIT."""
+    config = spec.get("config") or {}
+    if "solo" not in config:
+        return
+    solo = config["solo"]
+    if not isinstance(solo, bool):
+        raise GraphError(f"{name} : solo doit être un booléen, vu {solo!r}")
+    if solo and spec["block"] == "WAIT":
+        raise GraphError(f"{name} : un nœud WAIT ne peut pas être solo")
+
+
 def _validate_keep_n(name: str, fanout: dict) -> None:
     """Le `n` de `keep_n` : présent, entier, et dans la borne dure.
 
@@ -248,6 +260,7 @@ def validate(bundle: dict) -> None:
             continue
         if spec.get("block") not in BLOCK_KINDS:
             raise GraphError(f"{name} : bloc inconnu {spec.get('block')}")
+        _validate_solo(name, spec)
         _validate_fanout(name, spec)
         _validate_judge(name, spec, nodes)
         edges = spec.get("edges") or {}
