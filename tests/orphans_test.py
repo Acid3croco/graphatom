@@ -18,6 +18,7 @@ par le faucheur sont en jeu :
  9. garde-fou : une identité qui ne colle plus (naissance ou boot) ne tue personne
 10. une trace illisible ou amputée ne fait pas tomber le faucheur
 11. les trois adaptateurs gardent leur CLI dans le groupe suivi par le worker
+12. le timeout interne exact de codex ne laisse aucun descendant vivant
 
 Usage : uv run python tests/orphans_test.py
 """
@@ -252,6 +253,36 @@ def main() -> None:
     os.killpg(process.pid, signal.SIGTERM)
     process.wait(timeout=5)
     print("11. timeout --foreground : la CLI reste dans le groupe suivi ✓")
+
+    # 12. Le vrai adaptateur codex laisse GNU timeout atteindre sa borne.
+    # La CLI factice lance un enfant long : après le retour du bloc, le
+    # groupe doit être vide et la trace déjà désarmée.
+    fake = probe / "codex-factice"
+    fake.write_text(
+        "#!/bin/sh\n"
+        "ps -o pgid= -p $$ > \"$CODEX_FAKE_PGID\"\n"
+        "sleep 300 &\n"
+        "wait\n"
+    )
+    fake.chmod(0o755)
+    fake_pgid = probe / "codex-timeout.pgid"
+    adapter = root / "scripts" / "agent-codex.sh"
+    command = (
+        f'CODEX_BIN="{fake}" CODEX_FAKE_PGID="{fake_pgid}" '
+        f'CODEX_TIMEOUT_S=0.3 bash "{adapter}"'
+    )
+    result = blocks.act(context(workdir, command, attempt=6, timeout_s=10))
+    assert result["outcome"] == "crashed", result
+    assert result["exit_code"] == 4, result
+    assert fake_pgid.exists(), "la CLI codex factice n'a pas écrit son groupe"
+    pgid = int(fake_pgid.read_text().strip())
+    survivants = wait_dead(pgid)
+    if survivants:
+        for pid in survivants:
+            os.kill(pid, 9)
+        sys.exit(f"ÉCHEC : enfants après le timeout codex : {survivants}")
+    assert not trace_path.exists(), "le timeout codex laisse une trace désarmée"
+    print("12. timeout interne codex : aucun descendant ne survit ✓")
 
     shutil.rmtree(workdir, ignore_errors=True)
     print("\norphelins : OK — ni le bail ni la mort du worker ne laissent d'agent")
