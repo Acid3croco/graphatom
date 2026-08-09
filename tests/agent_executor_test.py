@@ -28,6 +28,13 @@ class FakeConn:
         return None
 
 
+class NoWriteConn:
+    """La publication fautive ne doit pas atteindre la base."""
+
+    def execute(self, sql, *args):
+        raise AssertionError("la publication a écrit avant de valider")
+
+
 def node(agent: dict, fanout: dict | None = None) -> dict:
     """Un nœud agent minimal pour la résolution et l'exécution."""
     config = {"agent": {"prompt": "Réponds à ce test", **agent}}
@@ -139,24 +146,43 @@ def adapters(tmp: Path) -> None:
     print("3. la commande CLI + modèle effectivement exécutée est journalisée ✓")
 
 
+def explicit_command(tmp: Path) -> None:
+    """4. Le vrai bloc exécute cmd, sans appeler l'adaptateur hérité."""
+    workspace = tmp / "explicite"
+    workspace.mkdir()
+    commande = "printf commande-explicite; " \
+               "printf '{\"outcome\":\"done\",\"summary\":\"shell\"}' > outcome.json"
+    spec = node({"cmd": commande, "timeout_s": 10, "silence_s": 10})
+    paquet = bundle({"cli": "codex", "model": "ne-doit-pas-tourner"}, spec)
+    run = {"id": 40, "node": "travail", "cycle": 1, "attempt": 1,
+           "candidate": None}
+    ctx = blocks.Context(FakeConn(), run, {"id": 40, "subject_id": 1}, spec, paquet)
+    ctx.workspace = workspace
+    ctx.worktree = tmp
+    result = blocks.act(ctx)
+    log = blocks.attempt_log(workspace, run).read_text()
+    assert result["outcome"] == "done", result
+    assert "commande-explicite" in log, log
+    assert "agent-codex" not in log and "ne-doit-pas-tourner" not in log, log
+    print("4. le bloc exécute cmd en priorité sur l'adaptateur structuré ✓")
+
+
 def validation() -> None:
-    """4, 5 et 7. cmd est légal; une CLI inconnue ou un secret ne l'est pas."""
+    """5 et 7. La publication refuse une CLI inconnue et les secrets."""
     graph.validate(bundle({"cli": "codex", "model": "gpt"},
                           node({"cmd": "printf explicite"})))
-    for mauvais in (
-        {"cli": "inconnue", "model": "x"},
-        {"cli": "codex", "model": "x", "api_key": "secret"},
-        {"cli": "codex", "model": "x", "token": "secret"},
+    for mauvais, attendu in (
+        ({"cli": "inconnue", "model": "x"}, "inconnue"),
+        ({"cli": "codex", "model": "x", "api_key": "secret"}, "api_key"),
+        ({"cli": "codex", "model": "x", "token": "secret"}, "token"),
     ):
         try:
-            graph.validate(bundle(mauvais))
+            graph.publish(NoWriteConn(), bundle(mauvais))
         except graph.GraphError as exc:
             texte = str(exc)
-            assert next(value for key, value in mauvais.items()
-                        if key not in {"cli", "model"} or key == "cli") in texte, texte
+            assert attendu in texte, texte
         else:
             raise AssertionError(f"configuration acceptée : {mauvais}")
-    print("4. une commande explicite reste valide et prioritaire ✓")
     print("5. une CLI inconnue est refusée et nommée ✓")
     print("7. les réglages structurés refusent toute clé sensible ou inconnue ✓")
 
@@ -181,6 +207,7 @@ def main() -> None:
     blocks.DATA_DIR = tmp / "data"
     os.environ.pop("GRAPHATOM_REPO_DIR", None)
     adapters(tmp)
+    explicit_command(tmp)
     validation()
     variantes()
     print("\nexécuteurs structurés : OK")

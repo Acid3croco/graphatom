@@ -13,7 +13,7 @@
 #
 # Deux portes, dans cet ordre :
 #
-#   1. le projet s'importe — les onze modules du paquet, depuis l'atelier
+#   1. le projet s'importe — tous les modules du paquet, depuis l'atelier
 #      du candidat ;
 #   2. les tests sans base concernés par son diff passent.
 #
@@ -55,7 +55,7 @@ MD=""            # portes.md, connu dès que le workspace l'est
 # `src/` tombe ici, avant même qu'un test soit choisi.
 MODULES="import graphatom.blocks, graphatom.channel, graphatom.cli, \
 graphatom.db, graphatom.github_sync, graphatom.graph, graphatom.heartbeat, \
-graphatom.kernel, graphatom.quota, graphatom.scheduler, graphatom.web, \
+graphatom.kernel, graphatom.quota, graphatom.scheduler, graphatom.executors, graphatom.web, \
 graphatom.worktree"
 
 # Ce qui rend la suite concernée : le diff du candidat touche du code, un
@@ -90,6 +90,7 @@ tests/postgres_recovery_test.py
 tests/links_test.py
 tests/live_test.py
 tests/failure_trace_test.py
+tests/agent_executor_test.py
 tests/codex_routing_test.py
 tests/orphans_test.py
 tests/timeout_marge_test.py
