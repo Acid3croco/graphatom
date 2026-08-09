@@ -39,7 +39,7 @@ import datetime as dt
 import psycopg
 
 from . import heartbeat, kernel
-from .blocks import BLOCKS, Context
+from .blocks import BLOCKS, Context, item_workspace
 from .graph import FANOUT_MAX_CANDIDATES, candidate_node, fanout_variants, load_bundle
 
 RECONNECT_MAX_S = 30.0  # plafond du backoff : une base absente n'est jamais abandonnée
@@ -75,7 +75,7 @@ def _worker_sha() -> str:
     """Rend le SHA chargé par ce processus, avant tout déploiement."""
     repo = Path(__file__).resolve().parents[2]
     result = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
         capture_output=True, text=True, check=False,
     )
     return result.stdout.strip() if result.returncode == 0 else "inconnu"
@@ -86,13 +86,98 @@ os.environ.setdefault("GRAPHATOM_WORKER_SHA", WORKER_SHA)
 os.environ.setdefault("GRAPHATOM_WORKER_STARTED_AT", WORKER_STARTED_AT.isoformat())
 
 
+def _activation_worker(conn: psycopg.Connection) -> int:
+    """Réconcilie la dernière demande durable d'activation du worker."""
+    repo = Path(os.environ.get("GRAPHATOM_REPO_DIR", Path(__file__).resolve().parents[2]))
+    checksum = subprocess.run(
+        ["cksum"], input=str(repo), capture_output=True, text=True, check=False,
+    )
+    if checksum.returncode:
+        return 0
+    lock = int(checksum.stdout.split()[0])
+    if not conn.execute(
+            "SELECT pg_try_advisory_lock(%s) AS pris", (lock,)).fetchone()["pris"]:
+        return 0
+    try:
+        request = conn.execute(
+            "SELECT id, item_id, result FROM node_run "
+            "WHERE node = 'deploy' AND status = 'applied' AND outcome = 'done' "
+            "AND result->>'deploy_sha' IS NOT NULL "
+            "ORDER BY finished_at DESC, id DESC LIMIT 1"
+        ).fetchone()
+        if request is None:
+            return 0
+        wanted = request["result"]["deploy_sha"]
+        checkout = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=False,
+        ).stdout.strip()
+        report = item_workspace(request["item_id"]) / "deploy.md"
+
+        if wanted == WORKER_SHA:
+            state = {"status": "active", "worker_sha": WORKER_SHA}
+            if request["result"].get("worker_activation") != state:
+                conn.execute(
+                    "UPDATE node_run SET result = jsonb_set(result, "
+                    "'{worker_activation}', %s::jsonb) WHERE id = %s",
+                    (psycopg.types.json.Jsonb(state), request["id"]),
+                )
+                with report.open("a") as out:
+                    out.write(f"worker actif sur le SHA voulu {wanted}\n")
+            return 0
+
+        state = {"status": "pending", "worker_sha": WORKER_SHA,
+                 "wanted_sha": wanted}
+        if checkout != wanted:
+            state["error"] = f"checkout {checkout or 'inconnu'} différent"
+            conn.execute(
+                "UPDATE node_run SET result = jsonb_set(result, "
+                "'{worker_activation}', %s::jsonb) WHERE id = %s",
+                (psycopg.types.json.Jsonb(state), request["id"]),
+            )
+            if request["result"].get("worker_activation") != state:
+                with report.open("a") as out:
+                    out.write(f"worker porte {WORKER_SHA} - voulu {wanted}\n")
+                    out.write(f"activation en attente - {state['error']}\n")
+            return 0
+
+        conn.execute(
+            "UPDATE node_run SET result = jsonb_set(result, "
+            "'{worker_activation}', %s::jsonb) WHERE id = %s",
+            (psycopg.types.json.Jsonb(state), request["id"]),
+        )
+        with report.open("a") as out:
+            out.write(f"worker porte {WORKER_SHA} - voulu {wanted}\n")
+            out.write("résultat appliqué - activation du worker demandée\n")
+        try:
+            restarted = subprocess.run(
+                [os.environ.get("GRAPHATOM_SYSTEMCTL", "systemctl"), "--user", "restart",
+                 "graphatom-worker.service"], check=False,
+            )
+        except OSError as exc:
+            restarted = subprocess.CompletedProcess([], 127)
+            state["error"] = str(exc)
+        if restarted.returncode:
+            state["status"] = "error"
+            state.setdefault("error", f"systemctl code {restarted.returncode}")
+            conn.execute(
+                "UPDATE node_run SET result = jsonb_set(result, "
+                "'{worker_activation}', %s::jsonb) WHERE id = %s",
+                (psycopg.types.json.Jsonb(state), request["id"]),
+            )
+            with report.open("a") as out:
+                out.write(f"activation du worker échouée - {state['error']}\n")
+        return 1
+    finally:
+        conn.execute("SELECT pg_advisory_unlock(%s)", (lock,))
+
+
 def tick(conn: psycopg.Connection) -> int:
     heartbeat.beat(conn, heartbeat.RAIL, WORKER_SHA, WORKER_STARTED_AT)
-    if _worker_sha() != WORKER_SHA:
-        subprocess.run(["systemctl", "restart", "graphatom-worker.service"],
-                       check=False)
-        return 1
-    did = kernel.reap(conn)
+    did = _activation_worker(conn)
+    if did:
+        return did
+    did += kernel.reap(conn)
     did += _settle_waits(conn)
     did += _dispatch(conn)
     return did
@@ -221,19 +306,7 @@ def _execute(run_id: int, item_id: int) -> None:
         status = kernel.apply(conn, run_id, result)
         if (status == "applied" and run["node"] == "deploy"
                 and result.get("outcome") == "done"):
-            wanted = _worker_sha()
-            with (ctx.workspace / "deploy.md").open("a") as report:
-                report.write(f"worker porte {WORKER_SHA} - voulu {wanted}\n")
-                if WORKER_SHA == wanted:
-                    report.write("worker déjà actif sur le SHA voulu - aucun redémarrage\n")
-                    return
-                report.write("résultat appliqué - activation du worker demandée\n")
-            restarted = subprocess.run(
-                ["systemctl", "restart", "graphatom-worker.service"], check=False)
-            if restarted.returncode:
-                with (ctx.workspace / "deploy.md").open("a") as report:
-                    report.write("activation du worker échouée - "
-                                 f"systemctl code {restarted.returncode}\n")
+            _activation_worker(conn)
 
 
 def en_vol(conn: psycopg.Connection) -> int:

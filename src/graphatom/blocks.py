@@ -871,6 +871,7 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
                         "GRAPHATOM_ITEM_ID": str(ctx.item["id"]),
                         "GRAPHATOM_RUN_ID": str(ctx.run["id"]),
                         "GRAPHATOM_LEASE_S": str(ctx.config.get("lease_s", 30)),
+                        "GRAPHATOM_HEARTBEAT_DSN": db.DSN,
                         # Copiée avant que la base jetable de l'item remplace
                         # GRAPHATOM_DSN : toutes les places vivent ici.
                         "GRAPHATOM_QUOTA_DSN": db.DSN}
