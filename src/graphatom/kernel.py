@@ -381,10 +381,18 @@ def apply_item(conn: psycopg.Connection, item_id: int, outcome: str, kind: str) 
         ).fetchone()
         if item["terminal_at"] is not None:
             return
+        revoked = conn.execute(
+            "UPDATE node_run SET status = 'superseded', finished_at = %s "
+            "WHERE item_id = %s AND status = 'running' RETURNING id",
+            (now(), item_id),
+        ).fetchall()
         bundle = load_bundle(conn, item["revision"])
         run = {"node": item["state"], "id": None, "attempt": 0}
         _route(conn, item, bundle, run, outcome, kind=kind)
-    worktree.discard(item_id)  # hors transaction : git ne tient pas les verrous
+    run_ids = [row["id"] for row in revoked]
+    for run_id in run_ids:
+        CLAIMED.discard(run_id)
+    _menage(item_id, run_ids, True)
 
 
 def _settle(conn, item, bundle, run, outcome: str, kind: str) -> tuple[list[int], bool]:

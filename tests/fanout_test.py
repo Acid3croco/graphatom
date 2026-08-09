@@ -363,6 +363,37 @@ def resultat_tardif(conn) -> None:
           f"état {encore['state']}, passage {encore['cycle']}) ✓")
 
 
+def transition_sans_run(conn) -> None:
+    """7 bis. Une échéance révoque toute la course avant de déplacer l'item."""
+    item_id = nouvel_item(conn, bundle_stub(3))
+    runs = reserve_tout(conn, item_id)
+    assert all(run["id"] in kernel.CLAIMED for run in runs)
+
+    kernel.apply_item(conn, item_id, "wall_deadline", kind="wall")
+    apres = etat(conn, item_id)
+    assert apres["state"] == "abandon" and apres["terminal_at"] is not None, apres
+    version = apres["version"]
+    events = len(evenements(conn, item_id))
+    classes = runs_de(conn, item_id)
+    assert all(run["status"] == "superseded" for run in classes), classes
+    assert all(run["finished_at"] is not None for run in classes), classes
+    assert not any(run["id"] in kernel.CLAIMED for run in runs)
+
+    for run in runs:
+        statut = kernel.apply(
+            conn, run["id"],
+            {"outcome": "ok", "usage": {"input_tokens": 1}},
+        )
+        assert statut == "superseded", statut
+    encore = etat(conn, item_id)
+    assert encore["version"] == version and encore["state"] == "abandon", encore
+    assert len(evenements(conn, item_id)) == events
+    assert all((run["result"] or {}).get("usage") == {"input_tokens": 1}
+               for run in runs_de(conn, item_id))
+    print(f"7 bis. item {item_id} : wall_deadline révoque {len(runs)} runs ; "
+          "leurs résultats tardifs sont classés sans nouveau routage ✓")
+
+
 def tous_en_echec(conn) -> None:
     """8. tous les candidats échouent : l'issue majoritaire est routée."""
     item_id = nouvel_item(conn, bundle_stub(3))
@@ -501,6 +532,7 @@ def main() -> None:
             sans_fanout(conn)
             course(conn, workdir)
             resultat_tardif(conn)
+            transition_sans_run(conn)
             tous_en_echec(conn)
             keep_n(conn)
     finally:
