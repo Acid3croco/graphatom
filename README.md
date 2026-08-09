@@ -1046,7 +1046,7 @@ seul mélange de fournisseurs est la course d'implémentation :
 | `test_backend`, `validate` | Codex `gpt-5.6-luna`, effort low | constat borné, preuves déjà nommées |
 | `test_frontend` | Codex `gpt-5.6-luna`, effort medium | le navigateur demande plus de lecture, pas un Sol |
 | `release` | `release.sh` d'abord ; Luna low seulement sur panne | le nominal ne consomme aucun tour de modèle |
-| `implement` | Luna medium, Sol high, DeepSeek V4 Flash gratuit | deux abonnements Codex et un fournisseur gratuit, trois stratégies |
+| `implement` | Sol high en mode seul ; Sol high + Luna medium sur le même diff minimal, puis DeepSeek V4 Flash libre en fan-out | Sol reste le chemin principal ; la course compare deux puissances sur la même stratégie et laisse le candidat gratuit choisir son approche |
 | `worktree`, `deploy`, `verify_deploy`, `cleanup`, `cleanup_unresolved`, `cleanup_split` | pas d'agent | du shell pur, qui écrit son `outcome.json` |
 
 **Les nœuds mécaniques n'ont pas d'agent.** `worktree`, `deploy` et

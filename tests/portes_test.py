@@ -21,8 +21,8 @@ portes et le retrait de l'issue — est le vrai.
 Scénario, sur la base et sur une copie jetable du dépôt :
 
   1. les trois variantes donnent trois prompts différents, chacun portant
-     sa stratégie ; aucun `{label}` ni `{strategy}` littéral ne survit au
-     rendu
+     son label et sa stratégie ; deux modèles peuvent partager la stratégie
+     minimale, mais aucun label voisin ni jeton littéral ne survit au rendu
   2. le candidat qui casse un module du paquet : la porte d'import lâche,
      son `outcome.json` disparaît, et son `node_run` porte `crashed` — pas
      l'issue de succès du nœud. Le candidat gratuit y passe comme les
@@ -208,7 +208,8 @@ def course(conn, workdir: Path, repo: Path) -> None:
     portes = {k: (workspace / f"c{k}" / "portes.md").read_text() for k in tous}
     finaux = runs_de(conn, item_id)
 
-    # 1. un prompt par candidat, une stratégie chacun, aucun jeton resté littéral
+    # 1. un prompt par candidat ; les deux Codex partagent volontairement la
+    # stratégie minimale, donc le label est l'identité qui doit rester unique
     assert len(set(prompts.values())) == len(tous), "deux candidats ont reçu le même prompt"
     for k, variante in enumerate(VARIANTES):
         assert variante["strategy"] in prompts[k], \
@@ -216,9 +217,9 @@ def course(conn, workdir: Path, repo: Path) -> None:
         assert variante["label"] in prompts[k], f"c{k} : son label manque à son prompt"
         for jeton in ("{label}", "{strategy}", "{subject_key}"):
             assert jeton not in prompts[k], f"c{k} : {jeton} est resté littéral"
-        for autre in tous:  # chacun porte la sienne, pas celle d'un voisin
-            assert autre == k or VARIANTES[autre]["strategy"] not in prompts[k], \
-                f"c{k} porte aussi la stratégie de c{autre}"
+        for autre in tous:
+            assert autre == k or VARIANTES[autre]["label"] not in prompts[k], \
+                f"c{k} porte aussi le label de c{autre}"
     print(f"1. {len(tous)} prompts distincts, chacun avec sa stratégie et son label, "
           f"aucun jeton littéral : {[v['label'] for v in VARIANTES]} ✓")
 

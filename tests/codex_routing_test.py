@@ -45,19 +45,24 @@ def declaration() -> None:
     assert "release-node.sh" in cmd("release"), cmd("release")
 
     variants = BUNDLE["nodes"]["implement"]["config"]["fanout"]["variants"]
-    assert [v["label"] for v in variants] == ["minimal", "test d'abord", "gratuit"]
+    assert [v["label"] for v in variants] == [
+        "minimal Sol", "minimal Luna", "gratuit libre"]
     assert len(variants) == 3
-    luna, sol, gratuit = [v["agent"]["cmd"] for v in variants]
-    assert "CODEX_MODEL=gpt-5.6-luna" in luna
-    assert "CODEX_REASONING_EFFORT=medium" in luna
+    sol, luna, gratuit = [v["agent"]["cmd"] for v in variants]
     assert "CODEX_MODEL=gpt-5.6-sol" in sol
     assert "CODEX_REASONING_EFFORT=high" in sol
+    assert "CODEX_MODEL=gpt-5.6-luna" in luna
+    assert "CODEX_REASONING_EFFORT=medium" in luna
+    assert variants[0]["strategy"] == variants[1]["strategy"]
     assert "agent-opencode.sh" in gratuit
     assert "opencode/deepseek-v4-flash-free" in gratuit
+    assert "voie libre" in variants[2]["strategy"]
     assert variants[2]["agent"]["silence_s"] == 300
+    porte("implement", "gpt-5.6-sol", "high")
     assert "claude " not in json.dumps(BUNDLE)
-    print("1. scope et judge Sol high ; course Luna medium + Sol high + "
-          "DeepSeek gratuit ; portes légères sur Luna ✓")
+    print("1. scope et judge Sol high ; implement seul sur Sol minimal ; "
+          "course Sol minimal + Luna minimal + DeepSeek libre ; "
+          "portes légères sur Luna ✓")
 
 
 def executable(path: Path, content: str) -> None:
