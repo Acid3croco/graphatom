@@ -51,7 +51,9 @@ os.environ.pop("GRAPHATOM_AGENT_DSN", None)
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFIL = ROOT / "examples" / "code-task.json"
-NUM = 4242  # le numéro d'issue du sujet, celui dont `worktree` tire sa branche
+# Un échec peut laisser son item actif dans la base de test. Un numéro neuf
+# rend le scénario rejouable sans effacer ce diagnostic ni toucher un voisin.
+NUM = int(time.time_ns() % 1_000_000_000)
 TIMEOUT_S = 180.0
 
 # Le chemin que l'item doit suivre, nœud par nœud. C'est la liste qu'on
@@ -68,6 +70,8 @@ ATTENDU = ["ingest", "worktree", "scope", "implement", "judge", "test_backend",
 CANDIDATS = len(graph.fanout_variants(
     json.loads(PROFIL.read_text())["nodes"]["implement"]))
 COUT_CANDIDAT = 0.50  # ce que la doublure `CANDIDAT` déclare dans son usage.json
+PASSATION = ("printf '%s\\n' '## Fait' 'Doublure exécutée.' '' '## Appris' "
+             "'Rien.' '' '## Pas fait' 'Rien.'")
 
 # Un candidat de `implement` : il commite pour de vrai dans son atelier, avec
 # un mot à lui, puis rend `done`. Autant de candidats que le profil en
@@ -79,6 +83,8 @@ K=$(basename "$(pwd)")
 printf 'le candidat %s a travaillé\\n' "$K" >> "$GRAPHATOM_WORKTREE/travail-$K.txt"
 git -C "$GRAPHATOM_WORKTREE" add -A
 git -C "$GRAPHATOM_WORKTREE" commit -qm "implémentation du candidat $K"
+printf '%s\\n' '## Fait' 'Implémentation committée.' '' '## Appris' 'Rien.' '' \\
+    '## Pas fait' 'Rien.' > passation-implement.md
 printf '{"input_tokens": 1000, "total_cost_usd": 0.50}' > usage.json
 printf '{"outcome": "done", "summary": "candidat %s"}' "$K" > outcome.json
 """
@@ -89,15 +95,18 @@ printf '{"outcome": "done", "summary": "candidat %s"}' "$K" > outcome.json
 JUGE = """
 printf 'Les deux finalistes tiennent les critères ; A le fait en moins de lignes.\\n' \\
     > verdict.md
+printf '%s\\n' '## Fait' 'Finalistes départagés.' '' '## Appris' 'A est plus court.' '' \\
+    '## Pas fait' 'Rien.' > passation-judge.md
 printf '{"input_tokens": 50000, "total_cost_usd": 4.00}' > usage.json
 printf '{"outcome": "chosen", "elu": "A", "summary": "le diff le plus court"}' \\
     > outcome.json
 """
 
 
-def stub(outcome: str) -> str:
-    """Un nœud qui rend son issue et rien d'autre — ni modèle, ni réseau."""
-    return (f"printf '{{\"outcome\": \"{outcome}\", "
+def stub(node: str, outcome: str) -> str:
+    """Un nœud qui rend sa passation et son issue — ni modèle, ni réseau."""
+    return (f"{PASSATION} > passation-{node}.md\n"
+            f"printf '{{\"outcome\": \"{outcome}\", "
             f"\"summary\": \"doublure de test\"}}' > outcome.json\n")
 
 
@@ -107,16 +116,16 @@ def stub(outcome: str) -> str:
 # `fanout` — reste d'origine. Le dépôt jetable ne contient que son fichier
 # socle : son cleanup doit donc être doublé comme les autres commandes.
 DOUBLURES = {
-    "scope": stub("ready"),
+    "scope": stub("scope", "ready"),
     "implement": CANDIDAT,
     "judge": JUGE,
-    "test_backend": stub("pass"),
-    "test_frontend": stub("pass"),
-    "validate": stub("pass"),
-    "release": stub("done"),
-    "deploy": stub("done"),
-    "verify_deploy": stub("pass"),
-    "cleanup": stub("done"),
+    "test_backend": stub("test_backend", "pass"),
+    "test_frontend": stub("test_frontend", "pass"),
+    "validate": stub("validate", "pass"),
+    "release": stub("release", "done"),
+    "deploy": stub("deploy", "done"),
+    "verify_deploy": stub("verify_deploy", "pass"),
+    "cleanup": stub("cleanup", "done"),
 }
 
 
@@ -245,7 +254,7 @@ def main() -> None:
                   f"passage {item['cycle']}, budget d'escalade intact "
                   f"({budget}) ✓")
 
-            verifier(conn, item_id)
+            verifier(conn, item_id, work)
     finally:
         if proc is not None:
             tuer(proc)
@@ -255,7 +264,7 @@ def main() -> None:
           "et l'item atteint close")
 
 
-def verifier(conn, item_id: int) -> None:
+def verifier(conn, item_id: int, work: Path) -> None:
     """Le chemin parcouru, les finalistes, et le prix du jugement à part."""
     chemin = [e["to_state"] for e in conn.execute(
         "SELECT to_state FROM event WHERE item_id = %s ORDER BY item_version",
@@ -266,7 +275,7 @@ def verifier(conn, item_id: int) -> None:
           f"{' → '.join(chemin)} ✓")
 
     runs = conn.execute(
-        "SELECT node, candidate, status, outcome FROM node_run "
+        "SELECT node, candidate, status, outcome, result FROM node_run "
         "WHERE item_id = %s ORDER BY id", (item_id,)).fetchall()
     candidats = [r for r in runs if r["node"] == "implement"]
     finalistes = [r for r in candidats if r["status"] == "applied"]
@@ -281,6 +290,19 @@ def verifier(conn, item_id: int) -> None:
     assert len(arbitre) == 1 and arbitre[0]["outcome"] == "chosen", arbitre
     print("   l'arbitre a couru une fois et a élu ✓")
 
+    workspace = work / "data" / f"item-{item_id}"
+    passations = [workspace / "passation-scope.md",
+                  workspace / "passation-judge.md",
+                  workspace / "passation-test_backend.md",
+                  workspace / "passation-validate.md"]
+    for path in passations:
+        texte = path.read_text()
+        assert all(section in texte for section in
+                   ("## Fait", "## Appris", "## Pas fait")), path
+    assert len(list(workspace.glob("c*/passation-implement.md"))) >= 2
+    print("   passations fraîches de scope, implement, judge, test_backend et "
+          "validate, toutes à trois sections ✓")
+
     # le prix du jugement, à part de celui de la génération : c'est ce que la
     # page de l'item montre, et c'est mesurable ici sur les mêmes lignes
     prix = {r["part"]: r["cout"] for r in conn.execute(
@@ -289,9 +311,18 @@ def verifier(conn, item_id: int) -> None:
         "WHERE item_id = %s AND node IN ('judge', 'implement') GROUP BY 1",
         (item_id,))}
     assert prix.get("jugement") == 4.0, prix
-    assert prix.get("candidats") == CANDIDATS * COUT_CANDIDAT, prix
+    factures = [r for r in candidats if ((r.get("result") or {}).get("usage") or {})
+                .get("total_cost_usd") is not None]
+    assert all(r["result"]["usage"]["total_cost_usd"] == COUT_CANDIDAT
+               for r in factures), factures
+    # `keep_n` révoque dès deux réussites. Un troisième candidat peut avoir
+    # rendu son usage juste avant la révocation, ou être coupé avant : le
+    # prix compte tous les usages rendus, et n'en invente aucun pour celui
+    # qui n'en a pas rendu.
+    assert prix.get("candidats") == len(factures) * COUT_CANDIDAT, (prix, factures)
     print(f"5. prix du jugement {prix['jugement']} $ face aux candidats "
-          f"{prix['candidats']} $ — deux parts, pas un total ✓")
+          f"{prix['candidats']} $ ({len(factures)}/{CANDIDATS} usages rendus) — "
+          "deux parts, pas un total ✓")
 
 
 if __name__ == "__main__":

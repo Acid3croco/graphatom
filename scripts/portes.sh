@@ -94,6 +94,7 @@ tests/agent_executor_test.py
 tests/graph_executor_migration_test.py
 tests/codex_routing_test.py
 tests/orphans_test.py
+tests/passation_test.py
 tests/starved_test.py
 tests/timeout_marge_test.py
 tests/timeout_test.py"

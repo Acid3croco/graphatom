@@ -91,38 +91,15 @@ case "$K" in
 esac
 git -C "$GRAPHATOM_WORKTREE" add -A
 git -C "$GRAPHATOM_WORKTREE" commit -qm "candidat $K"
+printf '%s\\n' '## Fait' 'Candidat committé.' '' '## Appris' 'Rien.' '' \\
+    '## Pas fait' 'Rien.' > passation-implement.md
 printf '{"outcome": "done", "summary": "candidat %s : je me déclare fini"}' "$K" \
 > outcome.json
 RC=0"""
 
-# La ligne d'appel du modèle, dans le `cmd` d'un candidat : codex pour deux
-# stratégies, opencode pour la variante gratuite. C'est elle, et elle seule,
-# que l'agent factice remplace.
-APPEL = re.compile(r"^(?:claude |OPENCODE_\w+=|CODEX_\w+=).*$", re.M)
-
-
-def cmd_teste(cmd: str) -> str:
-    """Un `cmd` réel d'`implement`, son seul appel de modèle remplacé.
-
-    Le remplacement passe par une fonction et non par une chaîne : une
-    chaîne de remplacement relit les échappements, et le shell en porte.
-    """
-    cmd, n = APPEL.subn(lambda _: FAUX_AGENT, cmd, count=1)
-    assert n == 1, f"ce `cmd` d'`implement` n'appelle plus de modèle : {cmd[:120]}"
-    assert "portes.sh" in cmd, "ce `cmd` d'`implement` ne lance plus ses portes"
-    return cmd
-
-
 def bundle_portes() -> dict:
     """Le graph de la course : le nœud `implement` réel, ses arêtes raccourcies."""
     node = json.loads(json.dumps(REEL))  # une copie : le nœud réel ne bouge pas
-    node["config"]["agent"]["cmd"] = cmd_teste(node["config"]["agent"]["cmd"])
-    for variante in node["config"]["fanout"]["variants"]:
-        # une variante qui joue sa propre commande — la gratuite — se fait
-        # remplacer la sienne : sans ça, elle appellerait un vrai modèle
-        propre = (variante.get("agent") or {}).get("cmd")
-        if propre is not None:
-            variante["agent"]["cmd"] = cmd_teste(propre)
     node["config"]["fanout"]["reduce"] = "first_pass"
     node["config"]["fanout"].pop("n", None)
     node["config"]["agent"]["timeout_s"] = 300  # l'agent est factice, les portes non
@@ -160,6 +137,9 @@ def depot(tmp: Path) -> Path:
     """
     repo = tmp / "repo"
     shutil.copytree(ROOT, repo, ignore=INUTILE, symlinks=True)
+    # L'unique couture remplaçable est l'adaptateur déclaré. Le `cmd` du
+    # graph reste inchangé et joue donc ses vraies portes après ce faux agent.
+    (repo / "scripts" / "agent-declared.sh").write_text(FAUX_AGENT)
     subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
     git(repo, "config", "user.email", "portes@test.invalid")
     git(repo, "config", "user.name", "portes")
@@ -216,8 +196,10 @@ def course(conn, workdir: Path, repo: Path) -> None:
         assert variante["label"] in prompts[k], f"c{k} : son label manque à son prompt"
         for jeton in ("{label}", "{strategy}", "{subject_key}"):
             assert jeton not in prompts[k], f"c{k} : {jeton} est resté littéral"
-        for autre in tous:  # chacun porte la sienne, pas celle d'un voisin
-            assert autre == k or VARIANTES[autre]["strategy"] not in prompts[k], \
+        for autre in tous:  # une stratégie partagée peut servir deux exécuteurs
+            strategie = VARIANTES[autre]["strategy"]
+            assert (autre == k or strategie == variante["strategy"]
+                    or strategie not in prompts[k]), \
                 f"c{k} porte aussi la stratégie de c{autre}"
     print(f"1. {len(tous)} prompts distincts, chacun avec sa stratégie et son label, "
           f"aucun jeton littéral : {[v['label'] for v in VARIANTES]} ✓")

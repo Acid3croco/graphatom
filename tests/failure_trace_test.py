@@ -136,6 +136,9 @@ def success_writes_nothing() -> None:
     assert not path.exists(), path
     cmd = "printf '{\"outcome\":\"done\",\"summary\":\"ok\"}' > outcome.json"
     ctx = context("release", 1, cmd, "done", item_id=item_id)
+    # Cette doublure représente la voie shell nominale de release, pas un
+    # modèle : le bundle réel la déclare de la même façon.
+    ctx.config["agent"]["passation"] = False
     result = blocks.act(ctx)
     assert result["outcome"] == "done", result
     route(ctx, result)

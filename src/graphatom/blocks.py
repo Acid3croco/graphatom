@@ -62,6 +62,13 @@ l'identique rebrûlerait le même budget pour retomber au même endroit. Un
 agent qui n'avait rien produit était pendu : `stalled`, une panne d'infra
 comme une autre, que le noyau relance sur place.
 
+Le savoir, lui, ne circule pas le long de la chaîne : chaque nœud démarre en
+contexte neuf. Chaque nœud agent laisse donc une passation — ce qu'il a fait,
+ce qu'il a appris, ce qu'il n'a pas fait —, et le prompt du suivant la porte
+avec l'issue et la queue du journal de son prédécesseur immédiat. Rien de plus
+loin, et tout borné : un agent noyé sous l'historique choisit mal. Voir
+`_demande_passation` et `_passation`.
+
 Et une relance est une reprise, jamais une répétition : le prompt de la
 tentative suivante porte l'état déjà là — le `git diff` du worktree et les
 fichiers du workspace. Repartir à l'aveugle, c'est payer le trajet deux fois.
@@ -114,6 +121,12 @@ POLL_S = 0.2  # granularité de l'attente du process : ce qui borne le budget to
 PRUNED_DIRS = {".git", "node_modules", ".next", "__pycache__", ".venv"}
 GIT_CHARS = 8000  # l'état du worktree cité dans le prompt d'une reprise
 GIT_TIMEOUT_S = 20
+# la passation du prédécesseur citée dans le prompt. Resserrée à la mesure :
+# les 809 prompts déjà rendus par le rail pèsent 2 750 caractères en médiane,
+# et trois sections courtes tiennent largement dans 2 500 — au-delà, ce n'est
+# plus une passation, c'est le journal que personne ne lit
+PASSATION_CHARS = 2500
+PASSATION_SECTIONS = ("## Fait", "## Appris", "## Pas fait")
 BASE_REF = "origin/main"  # la base des worktrees d'item : ce qui est commité s'y compare
 
 
@@ -154,6 +167,16 @@ def failure_path(item_id: int) -> Path:
 def is_failure_outcome(outcome: str) -> bool:
     """Une issue d'échec est une issue du noyau ou un nom négatif du domaine."""
     return outcome in KERNEL_OUTCOMES or outcome in DOMAIN_FAILURE_OUTCOMES
+
+
+def passation_path(item_id: int, run: dict) -> Path:
+    """La passation d'un run : un fichier par nœud, dans le workspace du run.
+
+    Le nom porte le nœud parce que les nœuds d'un item partagent un
+    workspace : un nom unique s'écraserait d'un nœud à l'autre. Un candidat
+    de fan-out écrit la sienne dans son `c<k>/`, comme tout son travail.
+    """
+    return run_workspace(item_id, run) / f"passation-{run['node']}.md"
 
 
 class Context:
@@ -257,7 +280,160 @@ def _prompt(ctx: Context, workspace: Path, subject: str) -> str:
         f"Avant de terminer, écris impérativement {outcome_path} : "
         f'{{"outcome": <une valeur parmi {outcomes}>, "summary": "<une phrase>"}}\n'
         "Sans ce fichier, ta tentative est classée crashed et sera retentée."
-    ) + _reprise(ctx, workspace)
+        + _demande_passation(ctx, workspace)
+    ) + _passation(ctx) + _reprise(ctx, workspace)
+
+
+def _demande_passation(ctx: Context, workspace: Path) -> str:
+    """Ce qu'un nœud laisse au suivant : trois sections, et rien de plus.
+
+    La forme est courte et fermée, sinon la passation devient un journal que
+    personne ne lit. La troisième section est la seule qui manquait vraiment :
+    un renoncement que personne ne nomme ne laisse aucune trace, et le nœud
+    d'après ne le rattrape pas. Un agent ne l'écrit que si on la lui demande
+    nommément — c'est pour ça qu'elle est demandée en toutes lettres, et
+    demandée même en cas de succès.
+    """
+    # Quelques nœuds sont des scripts déterministes rangés derrière la même
+    # interface `agent` : ils n'apprennent rien et leur prompt dit « pas
+    # d'agent ici ». Leur config l'annonce, au lieu de fabriquer une
+    # passation creuse qui prétendrait venir d'un modèle.
+    if ctx.config["agent"].get("passation") is False:
+        return ""
+    fichier = workspace / f"passation-{ctx.run['node']}.md"
+    return (
+        f"\nÉcris aussi {fichier} — la passation que le nœud suivant lira, et "
+        "sa seule fenêtre sur ce que tu as compris. Trois sections courtes, "
+        "rien de plus, et « rien » quand il n'y a rien à dire :\n\n"
+        "## Fait\n<ce que tu as fait, en une ou deux phrases>\n\n"
+        "## Appris\n<ce que tu as découvert et qui n'était pas dans l'énoncé : "
+        "une contrainte du dépôt, un piège, un chemin qui ne marche pas>\n\n"
+        "## Pas fait\n<ce que tu as laissé de côté, et pourquoi : le "
+        "renoncement, la question ouverte, le doute. Écris-la même quand tu "
+        "réussis — un renoncement tu, personne ne le rattrape.>"
+    )
+
+
+def _passation_invalide(path: Path) -> str | None:
+    """Dit pourquoi une passation ne tient pas le contrat, sinon rien.
+
+    Une issue de succès ne peut pas réutiliser le fichier de la tentative
+    précédente : `_attempt` le retire avant de lancer l'agent. Ce contrôle
+    porte donc sur un artefact neuf. Les trois titres sont uniques, dans
+    l'ordre, et chaque section dit au moins « rien ». La borne s'applique au
+    fichier rendu comme au texte transmis : un journal déguisé en passation
+    n'est pas une passation valide.
+    """
+    try:
+        texte = path.read_text(errors="replace").strip()
+    except OSError:
+        return f"passation absente : {path.name}"
+    if len(texte) > PASSATION_CHARS:
+        return (f"passation trop longue : {len(texte)} caractères, "
+                f"borne {PASSATION_CHARS}")
+
+    lignes = texte.splitlines()
+    titres = tuple(ligne.strip() for ligne in lignes
+                   if ligne.lstrip().startswith("## "))
+    if titres != PASSATION_SECTIONS:
+        return (f"trois sections exactes attendues : {PASSATION_SECTIONS}, "
+                f"vues {titres}")
+    positions = []
+    for section in PASSATION_SECTIONS:
+        trouvees = [i for i, ligne in enumerate(lignes) if ligne.strip() == section]
+        if len(trouvees) != 1:
+            return f"section {section!r} attendue une fois, vue {len(trouvees)}"
+        positions.append(trouvees[0])
+    if positions != sorted(positions) or positions[0] != 0:
+        return "sections de passation absentes, précédées de texte ou dans le désordre"
+
+    for i, section in enumerate(PASSATION_SECTIONS):
+        fin = positions[i + 1] if i + 1 < len(positions) else len(lignes)
+        if not "\n".join(lignes[positions[i] + 1:fin]).strip():
+            return f"section {section!r} vide"
+    return None
+
+
+def _predecessor(ctx: Context) -> dict | None:
+    """Le run qui a fait entrer l'item dans son état courant.
+
+    L'événement de routage le nomme déjà : `kernel._route` y écrit le run
+    décisif. Le dernier événement qui mène à ce nœud est donc le seul à lire,
+    et la requête ne remonte pas plus loin — c'est ce qui borne la
+    transmission au prédécesseur immédiat, sans historique accumulé.
+
+    Un événement sans run — l'admission d'un nœud d'entrée, une réponse
+    humaine, une échéance de WAIT — n'a pas de prédécesseur à donner : rien
+    n'est injecté, et aucun bloc creux n'est posé.
+
+    Une relance du même nœud ne fait pas exception : l'événement qui ramène à
+    ce nœud nomme sa tentative précédente, et c'est bien elle le prédécesseur.
+    """
+    event = ctx.conn.execute(
+        "SELECT run_id FROM event WHERE item_id = %s AND to_state = %s "
+        "ORDER BY item_version DESC LIMIT 1",
+        (ctx.item["id"], ctx.run["node"]),
+    ).fetchone()
+    run_id = event.get("run_id") if event else None
+    if run_id is None:
+        return None
+    return ctx.conn.execute(
+        "SELECT id, node, cycle, attempt, candidate, outcome FROM node_run "
+        "WHERE id = %s",
+        (run_id,),
+    ).fetchone()
+
+
+def _passation(ctx: Context) -> str:
+    """Ce que le prédécesseur immédiat a rendu, appris, et laissé tomber.
+
+    Trois choses, et rien d'autre : son issue, sa passation, la queue de son
+    journal. Le savoir ne circule pas tout seul le long de la chaîne — un nœud
+    qui a payé dix minutes pour comprendre une contrainte du dépôt l'emporte
+    avec lui, et le suivant la repaie. Ce bloc est le seul chemin.
+
+    Borné des deux côtés : en taille, et en profondeur — le prédécesseur
+    immédiat, jamais l'histoire de l'item. En fan-out, c'est le run que
+    l'événement porte, pas les finalistes : l'anonymat du dossier du juge
+    reste entier.
+
+    Ce n'est pas un prétexte à re-décider : l'issue du prédécesseur est déjà
+    routée, on la lit, on ne la rejuge pas.
+
+    Une exception, et une seule : le nœud arbitre. Lui ne continue pas le
+    travail de son prédécesseur, il le juge — et son prédécesseur est un
+    finaliste, dont la passation et la queue de journal nommeraient la CLI, le
+    modèle et la variante. C'est exactement ce que `_dossier` cache pour que
+    le juge juge le travail et non son auteur. Rien ne lui est donc posé.
+    """
+    if judge_source(ctx.node):
+        return ""
+    previous = _predecessor(ctx)
+    if previous is None:  # nœud d'entrée, ou entrée par un WAIT : rien à porter
+        return ""
+    texte = _borne(passation_path(ctx.item["id"], previous), PASSATION_CHARS)
+    log = attempt_log(run_workspace(ctx.item["id"], previous), previous)
+    return (
+        f"\n\n--- Passation de « {previous['node']} », le nœud d'avant ---\n"
+        f"Il a rendu l'issue « {previous['outcome']} ». Ce qu'il a compris "
+        "n'est nulle part ailleurs que ci-dessous : lis-le, reprends après "
+        "lui, et ne rejuge pas son issue.\n\n"
+        f"{texte or '(aucune passation rendue)'}\n\n"
+        f"Queue de son journal :\n\n```\n{_tail(log)}\n```"
+    )
+
+
+def _borne(path: Path, limite: int) -> str:
+    """Le contenu d'un fichier, borné en taille. Vide s'il n'y en a pas.
+
+    Un fichier absent, illisible ou vide ne fait tomber personne : il n'y
+    avait rien à transmettre, et c'est un cas normal.
+    """
+    try:
+        texte = path.read_text(errors="replace").strip()
+    except OSError:
+        return ""
+    return texte if len(texte) <= limite else texte[:limite] + "\n… (tronqué)"
 
 
 def _commun(ctx: Context) -> str:
@@ -551,11 +727,17 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
         "SELECT subject_key FROM subject WHERE id = %s", (ctx.item["subject_id"],)
     ).fetchone()["subject_key"]
 
+    # Le prompt se construit avant la purge : une relance du même nœud doit
+    # recevoir la passation de sa tentative précédente. Le process, lui,
+    # démarre après la purge et ne peut donc réussir avec ce vieux fichier.
+    prompt = _prompt(ctx, workspace, subject)
     outcome_path = workspace / OUTCOME_NAME
     starved_path = workspace / STARVED_NAME
-    for transient in (outcome_path, starved_path, workspace / USAGE_NAME):
+    handoff_path = workspace / f"passation-{ctx.run['node']}.md"
+    for transient in (outcome_path, starved_path, workspace / USAGE_NAME,
+                      handoff_path):
         transient.unlink(missing_ok=True)  # rien de la tentative précédente
-    (workspace / PROMPT_NAME).write_text(_prompt(ctx, workspace, subject))
+    (workspace / PROMPT_NAME).write_text(prompt)
 
     env = os.environ | {"GRAPHATOM_WORKSPACE": str(workspace),
                         "GRAPHATOM_SUBJECT_KEY": subject,
@@ -584,8 +766,6 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
     env.update(executors.environment(resolved))
     cmd = _fill(ctx, executors.command(resolved), subject)
     with log.open("w") as out:
-        out.write(f"$ {cmd}\n")
-        out.flush()
         # session dédiée : l'agent est chef de son groupe, ses descendants aussi
         proc = subprocess.Popen(
             cmd, shell=True, cwd=workspace, env=env, start_new_session=True,
@@ -621,6 +801,10 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
         outcome, summary = data["outcome"], data.get("summary", "")
     except (OSError, ValueError, KeyError, TypeError) as exc:  # pas d'issue valide
         return _starved(starved_path) or _autopsy(proc, log, exc, timeout=False)
+    if (ctx.config["agent"].get("passation") is not False
+            and not is_failure_outcome(outcome)):
+        if erreur := _passation_invalide(handoff_path):
+            return _autopsy(proc, log, ValueError(erreur), timeout=False)
     return {"outcome": outcome, "summary": summary}
 
 
@@ -1052,8 +1236,12 @@ def _promote(ctx: Context, candidate: int) -> tuple[str | None, str]:
             "rejoint la branche de l'item ; les ateliers des finalistes restent "
             "en place.\n")
     retirees = worktree.discard(ctx.item["id"])
-    return None, (f"Travail de l'élu promu sur la branche de l'item. Ateliers des "
-                  f"finalistes retirés : {', '.join(retirees) or 'aucun'}.\n")
+    # le workspace de l'élu est nommé ici, et seulement ici : le choix est
+    # fait, l'anonymat du dossier n'a plus rien à protéger. C'est là qu'est
+    # sa passation, que l'aval — `validate` — doit pouvoir aller lire.
+    return None, (f"Travail de l'élu promu sur la branche de l'item — son workspace : "
+                  f"c{candidate}. Ateliers des finalistes retirés : "
+                  f"{', '.join(retirees) or 'aucun'}.\n")
 
 
 def _promotion_ratee(empechement: str) -> dict:

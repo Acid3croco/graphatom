@@ -66,7 +66,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import db, kernel  # noqa: E402
+from graphatom import db, executors, graph, kernel  # noqa: E402
 from graphatom.blocks import AGENT_TIMEOUT_S  # noqa: E402
 
 from outils import git  # noqa: E402
@@ -365,6 +365,7 @@ def joue(node: str, repo: Path, workspace: Path, subject: str = SUJET,
                           "GRAPHATOM_WEB_URL": "http://127.0.0.1:9",
                           "GRAPHATOM_FRONT_URL": "http://127.0.0.1:9",
                           "GRAPHATOM_PORTES_DELAI_S": "4",
+                          "GRAPHATOM_QUOTA_DSN": VERROU_DSN,
                           "GRAPHATOM_VERROU_DSN": VERROU_DSN,
                           "GRAPHATOM_VERROU_DELAI_S": "10"} | (plus or {}),
     )
@@ -385,7 +386,8 @@ def release(repo: Path, workspace: Path, subject: str,
         [str(ROOT / "scripts" / "release.sh")], capture_output=True, text=True,
         env=os.environ | {"GRAPHATOM_REPO_DIR": str(repo),
                           "GRAPHATOM_WORKSPACE": str(workspace),
-                          "GRAPHATOM_SUBJECT_KEY": subject} | (plus or {}),
+                          "GRAPHATOM_SUBJECT_KEY": subject,
+                          "GRAPHATOM_QUOTA_DSN": VERROU_DSN} | (plus or {}),
     )
     return out.returncode
 
@@ -648,19 +650,28 @@ def main() -> None:
         cmd = BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
         assert "agent-codex.sh" not in cmd and "agent-opencode.sh" not in cmd, \
             f"{nom} lance encore un modèle"
-    model_nodes = ("scope", "implement", "test_backend", "test_frontend",
-                   "validate", "judge")
-    for nom in model_nodes:
-        cmd = BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
-        assert "agent-codex.sh" in cmd, f"{nom} n'est pas sur codex"
-        assert "CODEX_MODEL" in cmd and "CODEX_REASONING_EFFORT" in cmd, \
-            f"{nom} n'épingle pas modèle et effort"
+    attendus = {
+        "scope": ("gpt-5.6-sol", "high"),
+        "implement": ("gpt-5.6-sol", "high"),
+        "test_backend": ("gpt-5.6-luna", "low"),
+        "test_frontend": ("gpt-5.6-luna", "medium"),
+        "validate": ("gpt-5.6-luna", "low"),
+        "judge": ("gpt-5.6-sol", "high"),
+    }
+    for nom, attendu in attendus.items():
+        resolu = executors.resolve(BUNDLE, BUNDLE["nodes"][nom])
+        assert resolu.cli == "codex", f"{nom} n'est pas sur codex"
+        assert (resolu.model, resolu.effort) == attendu, \
+            f"{nom} : modèle ou effort inattendu {resolu}"
     assert "release-node.sh" in BUNDLE["nodes"]["release"]["config"]["agent"]["cmd"], \
         "release ne prend pas sa voie shell avant Luna"
     assert "claude " not in json.dumps(BUNDLE), "le bundle dépend encore de claude"
     variants = BUNDLE["nodes"]["implement"]["config"]["fanout"]["variants"]
-    opencode = [v for v in variants if "agent-opencode.sh" in v["agent"]["cmd"]]
-    codex = [v for v in variants if "agent-codex.sh" in v["agent"]["cmd"]]
+    resolus = [executors.resolve(
+        BUNDLE, graph.candidate_node(BUNDLE["nodes"]["implement"], rang))
+        for rang in range(len(variants))]
+    opencode = [r for r in resolus if r.cli == "opencode"]
+    codex = [r for r in resolus if r.cli == "codex"]
     assert len(opencode) == 1 and len(codex) == 2, \
         f"course inattendue : {len(opencode)} opencode, {len(codex)} codex"
     # les trois retraits sont le même shell : seul leur prompt les distingue,

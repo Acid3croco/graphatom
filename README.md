@@ -125,7 +125,8 @@ uv run python tests/cycle_test.py                    # le profil code-task de bo
                                                      # bout : keep_n, puis judge, puis
                                                      # close — le vrai ordonnanceur,
                                                      # des doublures pour les modèles
-uv run python tests/opencode_test.py                 # l'adaptateur opencode : un
+GRAPHATOM_LIVE_OPENCODE=1 uv run python tests/opencode_test.py
+                                                     # l'adaptateur opencode : un
                                                      # nœud réel tourne sous un
                                                      # modèle gratuit (demande
                                                      # `opencode` et le réseau)
@@ -139,6 +140,10 @@ uv run python tests/plafond_test.py                  # les deux plafonds du disp
                                                      # la charge est bornée, et ce
                                                      # que le plafond retient attend
                                                      # sans bail ni tentative
+uv run python tests/passation_test.py                # la passation : chaque nœud
+                                                     # écrit ce qu'il a appris ou
+                                                     # laissé tomber, le suivant la
+                                                     # lit, bornée, sans base
 uv run python tests/quota_test.py                    # le quota des opérations lourdes :
                                                      # N places globales, bail préservé,
                                                      # session morte et équité par item
@@ -614,7 +619,8 @@ l'item (`data/item-<N>/`), qui est aussi le répertoire courant du `cmd`.
 
 - `prompt.md`, écrit par le bloc dans le workspace avant chaque tentative :
   le `prompt` du nœud, puis le contrat rappelé en clair — le workspace, le
-  chemin d'`outcome.json`, les issues permises par les `edges` du nœud —,
+  chemin d'`outcome.json`, les issues permises par les `edges` du nœud, la
+  passation à laisser —, puis la passation du prédécesseur s'il y en a un,
   puis l'état laissé par la tentative précédente s'il y en a une.
 - son répertoire courant : le workspace, toujours. Un adaptateur n'a donc
   rien à résoudre pour trouver `prompt.md` ni où déposer sa sortie.
@@ -666,6 +672,65 @@ jq -e 'select(.usage|objects) | .usage + {total_cost_usd}' agent.json > usage.js
 rm -f agent.json
 exit $RC
 ```
+
+### La passation : ce qu'un nœud a appris, ou laissé tomber
+
+Un graph est une chaîne, mais le savoir n'y circulait pas : chaque nœud
+démarre en contexte neuf, et ce qu'il a compris en route mourait avec lui.
+Deux pertes, et la seconde est la plus chère — ce qui est redécouvert coûte
+des jetons, ce qui est **abandonné en silence** ne laisse aucune trace.
+
+Chaque nœud agent laisse donc une passation dans son workspace,
+`passation-<nœud>.md` (dans son `c<k>/` s'il est candidat d'un fan-out) :
+trois sections courtes, demandées en toutes lettres par le contrat — **Fait**,
+**Appris**, **Pas fait**. La troisième est celle qui manquait : un agent
+n'écrit son renoncement que si on la lui demande nommément.
+
+Le contrat est vérifié, pas seulement demandé. Avant chaque tentative, le
+rail retire la passation précédente du même nœud. Une issue de succès n'est
+acceptée que si la tentative a écrit un nouveau fichier, sous la borne de
+2 500 caractères, avec les trois sections uniques, dans l'ordre et non
+vides. « Rien » est une réponse valide ; une section absente ne l'est pas.
+Les commandes déterministes dont le prompt dit qu'elles ne sont pas des
+agents déclarent `agent.passation: false` : elles ne fabriquent pas une
+passation creuse et leur prompt n'en demande pas.
+
+Le prompt du nœud suivant porte cette passation, l'issue du prédécesseur et
+la queue de son journal. Le prédécesseur est le run que nomme l'événement
+d'entrée dans l'état courant — celui que `kernel._route()` y a écrit :
+
+- un événement sans run — l'admission d'un nœud d'entrée, une réponse
+  humaine, une échéance de WAIT — n'a pas de prédécesseur, et **rien n'est
+  posé** : pas de bloc creux ;
+- une relance du même nœud lit sa propre tentative précédente ;
+- en fan-out, seul le run que l'événement porte est lu, jamais ses voisins ;
+- et le nœud arbitre ne reçoit rien du tout. Lui ne continue pas le travail
+  de son prédécesseur, il le juge — et son prédécesseur est un finaliste,
+  dont la passation et le journal nommeraient la CLI, le modèle et la
+  variante. C'est exactement ce que le dossier anonyme cache. Il écrit la
+  sienne comme les autres, il n'en lit aucune.
+
+Borné des deux côtés, parce qu'un agent noyé sous l'historique choisit mal :
+en taille (`PASSATION_CHARS`, 2 500 caractères, et la queue du journal aux
+`TAIL_LINES` habituelles) et en profondeur — le prédécesseur immédiat, jamais
+l'histoire de l'item.
+
+Le prix est mesuré, pas estimé. Les 809 prompts déjà rendus par le rail
+pèsent 2 750 caractères en médiane (3 990 en moyenne). La demande de
+passation en ajoute 590, toujours ; le bloc reçu en ajoute environ 2 000 sur
+une passation de taille réaliste, et 4 750 au pire — les deux bornes pleines
+en même temps. Soit un prompt médian qui passe de 2 750 à ~5 300 caractères
+dans le pire cas, ~4 300 en pratique : de l'ordre de 650 jetons d'entrée de
+plus, et quelques centaines de jetons de sortie pour écrire la passation.
+C'est pour tenir ce chiffre que la borne a été resserrée de 4 000 à 2 500 :
+trois sections courtes n'ont pas besoin de plus.
+
+La passation n'est pas une conversation : c'est un artefact déposé, lu par le
+suivant, et jamais un échange — le périmètre négatif reste entier. Ce n'est
+pas non plus un prétexte à re-décider : un nœud lit ce que son prédécesseur a
+compris, il ne rejuge pas son issue. Le nœud `validate`, lui, s'en sert dans
+l'autre sens : un critère qu'une passation déclare non fait ou non vérifié
+n'est pas coché, même si tout a l'air en place.
 
 ### Un adaptateur pour un candidat gratuit : `scripts/agent-opencode.sh`
 
@@ -727,7 +792,8 @@ qui se tait est un adaptateur cassé. La borne du script est donc plus
 courte que le `timeout_s` du nœud : c'est l'adaptateur qui doit parler du
 modèle, pas le couperet.
 
-**La mesure, pas l'opinion.** `uv run python tests/opencode_test.py` fait
+**La mesure, pas l'opinion.**
+`GRAPHATOM_LIVE_OPENCODE=1 uv run python tests/opencode_test.py` fait
 tourner un nœud réel du graph sous `opencode/deepseek-v4-flash-free` et
 relit son issue en base : le modèle écrit son `outcome.json`, le noyau
 route, et l'`usage.json` de l'adaptateur rejoint le résultat du run. Le

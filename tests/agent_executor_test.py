@@ -82,18 +82,21 @@ FAKES = {
     "claude": """#!/usr/bin/env bash
 printf '%s\n' "$@" > "$CAPTURE"
 printf '%s\n' '{"result":"ok","usage":{"input_tokens":11,"output_tokens":5},"total_cost_usd":0.02}'
+printf '%s\n' '## Fait' 'Test.' '## Appris' 'Rien.' '## Pas fait' 'Rien.' > "$GRAPHATOM_WORKSPACE/passation-travail.md"
 printf '%s\n' '{"outcome":"done","summary":"claude"}' > "$GRAPHATOM_WORKSPACE/outcome.json"
 """,
     "codex": """#!/usr/bin/env bash
 printf '%s\n' "$@" > "$CAPTURE"
 printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":12,"output_tokens":6}}'
 printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}'
+printf '%s\n' '## Fait' 'Test.' '## Appris' 'Rien.' '## Pas fait' 'Rien.' > "$GRAPHATOM_WORKSPACE/passation-travail.md"
 printf '%s\n' '{"outcome":"done","summary":"codex"}' > "$GRAPHATOM_WORKSPACE/outcome.json"
 """,
     "opencode": """#!/usr/bin/env bash
 printf '%s\n' "$@" > "$CAPTURE"
 printf '%s\n' '{"type":"text","part":{"text":"ok"}}'
 printf '%s\n' '{"type":"step_finish","part":{"tokens":{"input":13,"output":7,"reasoning":2,"cache":{"read":1,"write":0},"total":23},"cost":0.03}}'
+printf '%s\n' '## Fait' 'Test.' '## Appris' 'Rien.' '## Pas fait' 'Rien.' > "$GRAPHATOM_WORKSPACE/passation-travail.md"
 printf '%s\n' '{"outcome":"done","summary":"opencode"}' > "$GRAPHATOM_WORKSPACE/outcome.json"
 """,
 }
@@ -152,7 +155,8 @@ def explicit_command(tmp: Path) -> None:
     workspace.mkdir()
     commande = "printf commande-explicite; " \
                "printf '{\"outcome\":\"done\",\"summary\":\"shell\"}' > outcome.json"
-    spec = node({"cmd": commande, "timeout_s": 10, "silence_s": 10})
+    spec = node({"cmd": commande, "timeout_s": 10, "silence_s": 10,
+                 "passation": False})
     paquet = bundle({"cli": "codex", "model": "ne-doit-pas-tourner"}, spec)
     run = {"id": 40, "node": "travail", "cycle": 1, "attempt": 1,
            "candidate": None}
