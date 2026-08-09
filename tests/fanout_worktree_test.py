@@ -317,7 +317,12 @@ def echeance(conn, workdir: Path, repo: Path) -> None:
 
     conn.execute("UPDATE work_item SET wall_deadline = now() - interval '1 hour' "
                  "WHERE id = %s", (item_id,))
-    scheduler._settle_waits(conn)
+    vrai_active_item = kernel.active_item
+    kernel.active_item = lambda _conn: {"id": item_id}
+    try:
+        assert scheduler._settle_waits(conn) == 1
+    finally:
+        kernel.active_item = vrai_active_item
     item = conn.execute("SELECT * FROM work_item WHERE id = %s", (item_id,)).fetchone()
     assert item["state"] == "abandon", item["state"]
     assert item["terminal_at"] is not None, "wall_deadline mène au terminal"
