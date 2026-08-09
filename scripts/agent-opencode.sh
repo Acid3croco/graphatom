@@ -139,7 +139,7 @@ recopie() {  # l'issue dictée dans le texte, quand le modèle a parlé au lieu 
 # la donner. Le prix est connu et assumé — l'agent tourne déjà dans le
 # worktree de son item et sur sa base jetable, jamais sur la production.
 echo "agent-opencode: modèle $MODELE — répertoire $DIR — base $OPENCODE_DB — borne ${BORNE} s"
-timeout -k 5 "$BORNE" \
+timeout --foreground -k 5 "$BORNE" \
     "$OC" run -m "$MODELE" --format json --auto --dir "$DIR" "$(cat prompt.md)" \
     > "$EVENTS" 2> "$ERRORS"
 RC=$?

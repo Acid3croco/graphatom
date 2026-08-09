@@ -23,7 +23,7 @@ if [ -n "$MODELE" ]; then PARAMETRES+=(--model "$MODELE"); fi
 PARAMETRES+=(-p "$(cat prompt.md)")
 
 echo "agent-claude: modèle ${MODELE:-défaut de la session} — répertoire $DIR — borne ${BORNE} s"
-(cd "$DIR" && timeout -k 5 "$BORNE" "$CL" "${PARAMETRES[@]}") > "$REPONSE"
+(cd "$DIR" && timeout --foreground -k 5 "$BORNE" "$CL" "${PARAMETRES[@]}") > "$REPONSE"
 RC=$?
 
 jq -r '.result // empty' "$REPONSE" 2>/dev/null
