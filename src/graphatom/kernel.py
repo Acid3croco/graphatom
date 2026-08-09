@@ -109,6 +109,9 @@ def agent_timeout_s(config: dict, default: float) -> float:
     (`lease_s`) moins `AGENT_LEASE_MARGIN_S` ; un nœud sans bail garde
     `default`, le 570 s historique quand rien n'est dit.
     """
+    execution = config.get("execution") or {}
+    if "timeout_s" in execution:
+        return float(execution["timeout_s"])
     agent = config.get("agent") or {}
     if "timeout_s" in agent:
         return float(agent["timeout_s"])

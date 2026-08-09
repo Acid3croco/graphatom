@@ -37,10 +37,30 @@ class NoWriteConn:
 
 def node(agent: dict, fanout: dict | None = None) -> dict:
     """Un nœud agent minimal pour la résolution et l'exécution."""
-    config = {"agent": {"prompt": "Réponds à ce test", **agent}}
+    local = {"prompt": "Réponds à ce test", **agent}
+    command = local.pop("cmd", None)
+    composed = local.pop("cmd_uses_executor", False)
+    local.pop("cmd_reason", None)
+    runtime = {key: local.pop(key) for key in ("timeout_s", "silence_s")
+               if key in local}
+    if command is not None and not composed:
+        execution = {"kind": "command", "cmd": command, **runtime}
+        config = {"execution": execution}
+    else:
+        execution = {"kind": "agent", **runtime}
+        if command is not None:
+            execution["cmd"] = command
+        config = {"agent": local, "execution": execution}
     if fanout is not None:
         config["fanout"] = fanout
     return {"block": "ACT", "config": config, "edges": {"done": "fin"}}
+
+
+def legacy_node(agent: dict) -> dict:
+    """Une ancienne révision, réservée aux preuves de compatibilité."""
+    return {"block": "ACT",
+            "config": {"agent": {"prompt": "ancien prompt", **agent}},
+            "edges": {"done": "fin"}}
 
 
 def bundle(agent: dict, spec: dict | None = None) -> dict:
@@ -56,20 +76,25 @@ def bundle(agent: dict, spec: dict | None = None) -> dict:
 
 
 def resolution() -> None:
-    """1. Le nœud hérite séparément de la CLI et du modèle du graph."""
+    """1. Le wagon agent hérite séparément de la CLI et du modèle."""
     base = bundle({"cli": "codex", "model": "gpt-default"})
-    assert executors.resolve(base, node({})) == executors.Executor(
-        cli="codex", model="gpt-default", cmd=None)
-    assert executors.resolve(base, node({"cli": "claude"})) == executors.Executor(
-        cli="claude", model="gpt-default", cmd=None)
-    assert executors.resolve(base, node({"model": "sonnet"})) == executors.Executor(
-        cli="codex", model="sonnet", cmd=None)
+    defaults = executors.resolve(base, node({}))
+    claude = executors.resolve(base, node({"cli": "claude"}))
+    sonnet = executors.resolve(base, node({"model": "sonnet"}))
+    assert (defaults.kind, defaults.cli, defaults.model) == (
+        "model", "codex", "gpt-default")
+    assert (claude.kind, claude.cli, claude.model) == (
+        "model", "claude", "gpt-default")
+    assert (sonnet.kind, sonnet.cli, sonnet.model) == (
+        "model", "codex", "sonnet")
 
     explicite = executors.resolve(base, node({"cli": "claude", "model": "opus",
-                                               "cmd": "printf commande-explicite"}))
+                                               "cmd": "printf commande-explicite",
+                                               "cmd_uses_executor": True}))
+    assert explicite.kind == "composed"
     assert explicite.cmd == "printf commande-explicite"
     assert executors.command(explicite) == "printf commande-explicite"
-    print("1. héritage complet, surcharges partielles et priorité de cmd ✓")
+    print("1. contrats model/composed, héritage et commande explicites ✓")
 
 
 def executable(path: Path, content: str) -> None:
@@ -173,8 +198,9 @@ def explicit_command(tmp: Path) -> None:
     result = blocks.act(ctx)
     trace = json.loads(blocks.attempt_command(workspace, run).read_text())
     assert result["outcome"] == "done", result
-    assert trace == {"kind": "shell", "executor": None,
+    assert trace == {"kind": "command", "executor": None,
                      "command": commande}, trace
+    assert not workspace.joinpath("prompt.md").exists()
     assert "agent-codex" not in trace["command"]
     assert "ne-doit-pas-tourner" not in trace["command"]
     print("4. le bloc exécute cmd en priorité sur l'adaptateur structuré ✓")
@@ -236,19 +262,63 @@ def validation() -> None:
         ({"cmd_uses_executor": True}, "sans cmd"),
     ):
         try:
-            graph.validate(bundle({"cli": "codex", "model": "gpt"}, node(mauvais)))
+            graph.validate(bundle({"cli": "codex", "model": "gpt"},
+                                  legacy_node(mauvais)))
         except graph.GraphError as exc:
             assert attendu in str(exc), str(exc)
         else:
             raise AssertionError(f"configuration composée acceptée : {mauvais}")
     try:
-        graph.validate(bundle({}, node({"cmd": "true", "cmd_uses_executor": True})))
+        graph.validate(bundle({}, legacy_node(
+            {"cmd": "true", "cmd_uses_executor": True})))
     except graph.GraphError as exc:
         assert "sans CLI" in str(exc), str(exc)
     else:
         raise AssertionError("commande composée sans CLI acceptée")
+    command = node({"cmd": "true"})
+    command["config"]["agent"] = {"prompt": "parasite"}
+    try:
+        graph.validate(bundle({"cli": "codex"}, command))
+    except graph.GraphError as exc:
+        assert "command" in str(exc) and "agent" in str(exc), str(exc)
+    else:
+        raise AssertionError("execution command avec agent acceptée")
+    for execution, attendu in (
+        ({}, "kind"),
+        ({"kind": "autre"}, "kind"),
+        ({"kind": "command"}, "sans cmd"),
+        ({"kind": "command", "cmd": ""}, "sans cmd"),
+        ({"kind": "command", "cmd": "true", "silence_s": 0}, "silence_s"),
+        ({"kind": "agent", "inconnu": True}, "inconnu"),
+    ):
+        spec = node({})
+        spec["config"]["execution"] = execution
+        if execution.get("kind") == "command":
+            spec["config"].pop("agent", None)
+        try:
+            graph.validate(bundle({"cli": "codex"}, spec))
+        except graph.GraphError as exc:
+            assert attendu in str(exc), (execution, exc)
+        else:
+            raise AssertionError(f"execution fautive acceptée : {execution}")
+    duplicate = node({"timeout_s": 10})
+    duplicate["config"]["agent"]["timeout_s"] = 20
+    try:
+        graph.validate(bundle({"cli": "codex"}, duplicate))
+    except graph.GraphError as exc:
+        assert "historiques" in str(exc) and "timeout_s" in str(exc), str(exc)
+    else:
+        raise AssertionError("deux timeout_s concurrents acceptés")
+    variant = node({}, {"variants": [{"agent": {"cmd": "true"}}],
+                        "reduce": "first_pass"})
+    try:
+        graph.validate(bundle({"cli": "codex"}, variant))
+    except graph.GraphError as exc:
+        assert "variants[0]" in str(exc) and "cmd" in str(exc), str(exc)
+    else:
+        raise AssertionError("commande historique cachée dans une variante")
     print("5. une CLI inconnue est refusée et nommée ✓")
-    print("7. les réglages structurés refusent toute clé sensible ou inconnue ✓")
+    print("7. execution ferme la forme et refuse les réglages ambigus ✓")
 
 
 def variantes() -> None:

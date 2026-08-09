@@ -3,7 +3,6 @@
 Usage : uv run python tests/seed_test.py
 """
 
-import json
 from contextlib import contextmanager
 
 import seed
@@ -61,9 +60,10 @@ def main() -> None:
     seed.main()
 
     assert calls == ["admit-nominal", "scheduler", "admit-question"], calls
-    bundle = json.loads((seed.ROOT / "examples" / "code-task.json").read_text())
-    prompt = bundle["nodes"]["test_frontend"]["config"]["agent"]["prompt"]
-    assert prompt.index("drop-agent-db") < prompt.index("tests/seed.py"), prompt
+    harness = (seed.ROOT / "scripts" / "test_harness.py").read_text()
+    assert harness.index('"graphatom", "init-db", "--drop"') < harness.index(
+        '"tests/seed.py"'
+    ), harness
     print("seed : base préparée, nominal terminé, puis question admise ✓")
 
 

@@ -17,6 +17,12 @@ export type AgentExecution = {
   cmd_uses_executor?: boolean;
 };
 
+/** Le choix fermé du wagon, avant résolution des valeurs de l'agent. */
+export type DeclaredExecution = {
+  kind: "agent" | "command";
+  cmd?: string;
+};
+
 /** Ce qu'un nœud lance : une CLI et son modèle, du shell, ou rien. */
 export type Execution =
   | {
@@ -38,8 +44,16 @@ export function execution(
   graph: AgentExecution | null | undefined,
   node?: AgentExecution | null,
   variant?: AgentExecution | null,
+  declared?: DeclaredExecution | null,
 ): Execution {
+  if (declared?.kind === "command") {
+    return { kind: "shell" };
+  }
   const effective = { ...(graph ?? {}), ...(node ?? {}), ...(variant ?? {}) };
+  if (declared?.kind === "agent" && declared.cmd !== undefined) {
+    effective.cmd = declared.cmd;
+    effective.cmd_uses_executor = true;
+  }
   if (effective.cmd !== undefined && effective.cmd_uses_executor !== true) {
     return { kind: "shell" };
   }

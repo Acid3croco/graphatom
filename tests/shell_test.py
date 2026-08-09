@@ -387,7 +387,7 @@ def joue(node: str, repo: Path, workspace: Path, subject: str = SUJET,
         capture_output=True, text=True,
     ).stdout.strip()
     subprocess.run(
-        BUNDLE["nodes"][node]["config"]["agent"]["cmd"],
+        executors.command(executors.resolve(BUNDLE, BUNDLE["nodes"][node])),
         shell=True, cwd=workspace, check=False, capture_output=True,
         env=os.environ | {"GRAPHATOM_REPO_DIR": str(repo),
                           "GRAPHATOM_WORKSPACE": str(workspace),
@@ -679,7 +679,7 @@ def main() -> None:
     #    d'implémentation tient en trois runs
     for nom in ("worktree", "deploy", "verify_deploy",
                 "cleanup", "cleanup_unresolved", "cleanup_split"):
-        cmd = BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
+        cmd = BUNDLE["nodes"][nom]["config"]["execution"]["cmd"]
         assert "agent-codex.sh" not in cmd and "agent-opencode.sh" not in cmd, \
             f"{nom} lance encore un modèle"
     attendus = {
@@ -697,7 +697,7 @@ def main() -> None:
         resolu = executors.resolve(BUNDLE, BUNDLE["nodes"][nom])
         assert (resolu.cli, resolu.model, resolu.effort) == (None, None, None)
         assert resolu.cmd is not None and "test_harness.py" in resolu.cmd
-    assert "release-node.sh" in BUNDLE["nodes"]["release"]["config"]["agent"]["cmd"], \
+    assert "release-node.sh" in BUNDLE["nodes"]["release"]["config"]["execution"]["cmd"], \
         "release ne prend pas sa voie shell avant Luna"
     assert "claude " not in json.dumps(BUNDLE), "le bundle dépend encore de claude"
     variants = BUNDLE["nodes"]["implement"]["config"]["fanout"]["variants"]
@@ -710,12 +710,12 @@ def main() -> None:
         f"course inattendue : {len(opencode)} opencode, {len(codex)} codex"
     # les trois retraits sont le même shell : seul leur prompt les distingue,
     # et une correction sur l'un doit se voir sur les trois
-    retraits = {BUNDLE["nodes"][nom]["config"]["agent"]["cmd"]
+    retraits = {BUNDLE["nodes"][nom]["config"]["execution"]["cmd"]
                 for nom in ("cleanup", "cleanup_unresolved", "cleanup_split")}
     assert len(retraits) == 1, "les nœuds de retrait ont divergé"
     # `.git` n'est un répertoire que dans un clone ordinaire : aucun shell du
     # rail ne doit s'en servir pour reconnaître un dépôt
-    shells = {nom: node.get("config", {}).get("agent", {}).get("cmd", "")
+    shells = {nom: node.get("config", {}).get("execution", {}).get("cmd", "")
               for nom, node in BUNDLE["nodes"].items()}
     shells["scripts/release.sh"] = (ROOT / "scripts" / "release.sh").read_text()
     for nom, shell in shells.items():
@@ -822,7 +822,7 @@ def main() -> None:
     # 14. le budget d'attente tient dans le couperet du nœud, donc dans son
     #    bail — et le README dit pourquoi cette valeur-là
     config = BUNDLE["nodes"]["verify_deploy"]["config"]
-    cmd = config["agent"]["cmd"]
+    cmd = config["execution"]["cmd"]
     budget = int(re.search(r"GRAPHATOM_PORTES_DELAI_S:-(\d+)", cmd).group(1))
     couperet = kernel.agent_timeout_s(config, AGENT_TIMEOUT_S)
     assert budget < couperet < config["lease_s"], config
@@ -895,7 +895,7 @@ def main() -> None:
                                                      "GRAPHATOM_VERROU_DELAI_S": "20"})
     assert outcome["outcome"] == "done", outcome
     assert len(montees(mort / "bin")) == 1, montees(mort / "bin")
-    deploiement = BUNDLE["nodes"]["deploy"]["config"]["agent"]["cmd"]
+    deploiement = BUNDLE["nodes"]["deploy"]["config"]["execution"]["cmd"]
     for interdit in ("flock", ".lock", "mkdir"):
         assert interdit not in deploiement, f"le verrou passe par {interdit}"
     print("17. le verrou d'une session tuée est rendu par postgres, "
@@ -946,17 +946,17 @@ def main() -> None:
     #    seul se sérialise, son attente tient dans le couperet du nœud, et
     #    l'arbitrage entre exclusion mutuelle et attente bornée est écrit
     for nom, node in BUNDLE["nodes"].items():
-        shell = node.get("config", {}).get("agent", {}).get("cmd", "")
+        shell = node.get("config", {}).get("execution", {}).get("cmd", "")
         if nom != "deploy":
             assert "advisory_lock" not in shell, f"{nom} se sérialise lui aussi"
     config = BUNDLE["nodes"]["deploy"]["config"]
     verrou = int(re.search(r"GRAPHATOM_VERROU_DELAI_S:-(\d+)", deploiement).group(1))
     couperet = kernel.agent_timeout_s(config, AGENT_TIMEOUT_S)
     assert verrou < couperet < config["lease_s"], config
-    prompt = config["agent"]["prompt"]
-    for marque in ("exclusion mutuelle", "attente bornée", "pg_advisory_lock"):
-        assert marque in prompt, f"le prompt de deploy ne dit pas « {marque} »"
+    assert "agent" not in config, "deploy prétend encore être un agent"
     readme = (ROOT / "README.md").read_text()
+    for marque in ("exclusion mutuelle", "attente bornée", "pg_advisory_lock"):
+        assert marque in readme.lower(), f"le README ne dit pas « {marque} »"
     assert "GRAPHATOM_VERROU_DELAI_S" in readme, "le README ne justifie pas l'attente"
     assert f"{verrou} s d'attente" in readme, "le README ne dit pas le budget retenu"
     print(f"20. seul deploy prend le verrou, attente {verrou} s < couperet "
@@ -1227,7 +1227,7 @@ def main() -> None:
                 pass
             else:
                 raise AssertionError("un deploy_sha tronqué a été accepté")
-        assert "systemctl" not in BUNDLE["nodes"]["deploy"]["config"]["agent"]["cmd"]
+        assert "systemctl" not in BUNDLE["nodes"]["deploy"]["config"]["execution"]["cmd"]
         print("22. résultat durable puis activation --user, erreur rejouée, "
               "acquittement idempotent par le worker neuf ✓")
     finally:

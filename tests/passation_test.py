@@ -156,93 +156,31 @@ def passation_obligatoire(workdir: Path) -> None:
 
 
 def portes_de_pertinence(workdir: Path) -> None:
-    """1 ter. Les portes shell rendent le contrat complet sans modèle."""
-    repo = workdir / "repo"
-    atelier = repo / ".worktrees" / f"rail-item-{ITEM}"
-    scripts = atelier / "scripts"
-    scripts.mkdir(parents=True)
-    shutil.copy2(ROOT / "scripts" / "agent-declared.sh",
-                 scripts / "agent-declared.sh")
-    (scripts / "agent-codex.sh").write_text(
-        "printf appelé > \"$GRAPHATOM_WORKSPACE/agent-called\"\n"
-        "printf '%s\\n' '{\"outcome\":\"pass\",\"summary\":\"agent appelé\"}' "
-        "> outcome.json\n"
-    )
-    outils = workdir / "bin"
-    outils.mkdir()
-    faux_git = outils / "git"
-    faux_git.write_text("#!/bin/sh\nprintf '%s\\n' \"${FAKE_DIFF:-}\"\n")
-    faux_git.chmod(0o755)
+    """1 ter. Une commande produit une preuve, jamais une fausse passation."""
+    for index, node in enumerate(("test_backend", "test_frontend"), start=70):
+        spec = json.loads(json.dumps(BUNDLE["nodes"][node]))
+        spec["config"]["execution"]["cmd"] = (
+            "printf '%s' '{\"outcome\":\"pass\",\"summary\":\"porte\"}' "
+            "> outcome.json"
+        )
+        run = {"id": index, "node": node, "cycle": 1, "attempt": 1,
+               "candidate": None}
+        ctx = blocks.Context(FauxConn([], {}), run,
+                             {"id": ITEM, "subject_id": 1}, spec, BUNDLE)
+        passation = ctx.workspace / f"passation-{node}.md"
+        prompt_path = ctx.workspace / blocks.PROMPT_NAME
+        passation.write_text("ancienne fausse passation\n")
+        prompt_path.write_text("ancien faux prompt\n")
 
-    ancien_repo = os.environ.get("GRAPHATOM_REPO_DIR")
-    ancien_path = os.environ["PATH"]
-    os.environ["GRAPHATOM_REPO_DIR"] = str(repo)
-    os.environ["PATH"] = f"{outils}:{ancien_path}"
-    try:
-        for node in ("test_backend", "test_frontend"):
-            # Le harnais fermé a sa propre régression. Ici, on garde la
-            # commande historique comme fixture pour le contrat de passation.
-            spec = json.loads(json.dumps(BUNDLE["nodes"][node]))
-            spec["config"].pop("harness_cmd", None)
-            run = {"id": 70, "node": node, "cycle": 1, "attempt": 1,
-                   "candidate": None}
-            ctx = blocks.Context(FauxConn([], {}), run,
-                                 {"id": ITEM, "subject_id": 1}, spec, BUNDLE)
-            ctx.worktree = atelier
-            rapport = ctx.workspace / f"{node}.md"
-            passation = ctx.workspace / f"passation-{node}.md"
-            appel = ctx.workspace / "agent-called"
+        resultat = blocks._attempt(ctx, ctx.workspace.resolve())
+        trace = json.loads(blocks.attempt_command(ctx.workspace, run).read_text())
+        assert resultat == {"outcome": "pass", "summary": "porte"}, resultat
+        assert not passation.exists(), node
+        assert not prompt_path.exists(), node
+        assert trace["kind"] == "command" and trace["executor"] is None, trace
 
-            rapport.write_text("ancien rapport\n")
-            appel.unlink(missing_ok=True)
-            os.environ["FAKE_DIFF"] = "README.md"
-            resultat = blocks._attempt(ctx, ctx.workspace.resolve())
-            assert resultat["outcome"] == "pass", (node, resultat)
-            assert not appel.exists(), node
-            assert blocks._passation_invalide(passation) is None, node
-            assert "modèle n'a pas été appelé" in passation.read_text(), node
-            assert "README.md" in passation.read_text(), node
-            assert "non concerné" in rapport.read_text(), node
-            assert "ancien rapport" not in rapport.read_text(), node
-
-            for diff in (
-                "## Fait",
-                "\n".join(f"docs/chemin-{index:03d}-{'x' * 120}.md"
-                          for index in range(220)),
-            ):
-                os.environ["FAKE_DIFF"] = diff
-                resultat = blocks._attempt(ctx, ctx.workspace.resolve())
-                assert resultat["outcome"] == "pass", (node, resultat)
-                assert blocks._passation_invalide(passation) is None, node
-                assert len(passation.read_text()) <= blocks.PASSATION_CHARS, node
-                assert "- ## Fait" in passation.read_text() or "- docs/" in passation.read_text(), node
-
-            os.environ["FAKE_DIFF"] = ""
-            resultat = blocks._attempt(ctx, ctx.workspace.resolve())
-            assert resultat["outcome"] == "fail", (node, resultat)
-            assert "diff vide" in resultat["summary"], (node, resultat)
-            assert "diff vide" in rapport.read_text(), node
-            assert blocks._passation_invalide(passation) is None, node
-
-            os.environ["FAKE_DIFF"] = (
-                "src/graphatom/web.py" if node == "test_frontend"
-                else "src/graphatom/kernel.py"
-            )
-            appel.unlink(missing_ok=True)
-            resultat = blocks._attempt(ctx, ctx.workspace.resolve())
-            assert appel.read_text() == "appelé", node
-            assert resultat["outcome"] == "crashed", (node, resultat)
-            assert "passation absente" in resultat["error"], (node, resultat)
-    finally:
-        os.environ.pop("FAKE_DIFF", None)
-        os.environ["PATH"] = ancien_path
-        if ancien_repo is None:
-            os.environ.pop("GRAPHATOM_REPO_DIR", None)
-        else:
-            os.environ["GRAPHATOM_REPO_DIR"] = ancien_repo
-
-    print("1 ter. backend et frontend : court-circuit complet sans modèle, "
-          "diff vide lisible et chemin pertinent soumis à la passation ✓")
+    print("1 ter. backend et frontend : commandes sans modèle, prompt ni "
+          "fausse passation ✓")
 
 
 def transmission(workdir: Path) -> None:

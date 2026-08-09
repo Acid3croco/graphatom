@@ -29,8 +29,8 @@ RELEASE_NODE = ROOT / "scripts" / "release-node.sh"
 
 
 def cmd(node: str) -> str:
-    """La commande d'agent d'un nœud réel."""
-    return BUNDLE["nodes"][node]["config"]["agent"]["cmd"]
+    """La commande effective d'un wagon réel."""
+    return executors.command(executors.resolve(BUNDLE, BUNDLE["nodes"][node]))
 
 
 def porte(node: str, model: str, effort: str) -> None:
@@ -78,21 +78,25 @@ def declaration() -> None:
     implement = executors.resolve(BUNDLE, BUNDLE["nodes"]["implement"])
     assert (implement.cli, implement.model, implement.effort) == (
         "codex", "gpt-5.6-sol", "high")
-    assert variants[2]["agent"]["silence_s"] == 300
+    assert variants[2]["execution"]["silence_s"] == 300
     assert "claude " not in json.dumps(BUNDLE)
     print("1. scope, judge et implement seul Sol high ; course minimale "
           "Luna medium + Sol high + DeepSeek gratuit libre ; tests sans modèle ✓")
 
 
 def prompts_synchrones() -> None:
-    """2. Les règles d'exécution sont cinq vrais paragraphes, pas du JSON cité."""
-    nodes = ("scope", "implement", "test_backend", "test_frontend", "judge")
+    """2. Seuls les wagons agent portent un prompt de modèle."""
+    nodes = ("scope", "implement", "validate", "release", "judge")
     for node in nodes:
         prompt = BUNDLE["nodes"][node]["config"]["agent"]["prompt"]
-        assert "Tout se fait en synchrone" in prompt, node
-        assert "outcome.json" in prompt, node
+        assert prompt.strip(), node
         assert "\\n" not in prompt, (node, prompt[:200])
-    print("2. cinq prompts synchrones rendus avec de vrais retours de ligne ✓")
+        assert BUNDLE["nodes"][node]["config"]["execution"]["kind"] == "agent"
+    for node in ("test_backend", "test_frontend"):
+        config = BUNDLE["nodes"][node]["config"]
+        assert config["execution"]["kind"] == "command", node
+        assert "agent" not in config, node
+    print("2. cinq agents avec prompt ; deux portes command sans faux modèle ✓")
 
 
 def executable(path: Path, content: str) -> None:

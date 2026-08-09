@@ -19,7 +19,13 @@
 import type { ReactNode } from "react";
 import { X } from "lucide-react";
 
-import type { BundleAgent, BundleFanout, BundleNode, Variant } from "@/lib/api";
+import type {
+  BundleAgent,
+  BundleExecution,
+  BundleFanout,
+  BundleNode,
+  Variant,
+} from "@/lib/api";
 import { execution, executionLabel } from "@/lib/agent-model";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,6 +35,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 const KNOWN = new Set([
   "lease_s",
   "agent",
+  "execution",
   "question",
   "options",
   "owner",
@@ -77,11 +84,12 @@ function execField(
   graph: BundleAgent | undefined,
   node?: BundleAgent,
   variant?: BundleAgent,
+  declared?: BundleExecution,
 ) {
   return (
     <Field
       name="exécution"
-      value={executionLabel(execution(graph, node, variant))}
+      value={executionLabel(execution(graph, node, variant, declared))}
     />
   );
 }
@@ -111,13 +119,19 @@ function VariantConfig({
   index,
   graphAgent,
   nodeAgent,
+  declaredExecution,
 }: {
   variant: Variant;
   index: number;
   graphAgent: BundleAgent | undefined;
   nodeAgent: BundleAgent | undefined;
+  declaredExecution: BundleExecution | undefined;
 }) {
   const variantAgent = variant.agent as BundleAgent | undefined;
+  const variantExecution = variant.execution as Partial<BundleExecution> | undefined;
+  const effectiveExecution = variantExecution === undefined
+    ? declaredExecution
+    : { ...declaredExecution, ...variantExecution } as BundleExecution;
   const inherited =
     nodeAgent === undefined && variantAgent === undefined ? undefined : graphAgent;
   const rest = Object.entries(variant).filter(([key]) => !VARIANT_KNOWN.has(key));
@@ -134,7 +148,7 @@ function VariantConfig({
           name="étiquette"
           value={variant.label === undefined ? `c${index}` : String(variant.label)}
         />
-        {execField(inherited, nodeAgent, variantAgent)}
+        {execField(inherited, nodeAgent, variantAgent, effectiveExecution)}
         {flat.map(([key, value]) => (
           <Field key={key} name={key} value={String(value)} />
         ))}
@@ -164,9 +178,11 @@ export function NodeConfig({
 }) {
   const config = node.config ?? {};
   const agent = config.agent;
-  const effectiveAgent = typeof config.harness_cmd === "string"
+  const effectiveAgent = config.execution === undefined && typeof config.harness_cmd === "string"
     ? { cmd: config.harness_cmd }
     : agent;
+  const declaredExecution = config.execution;
+  const command = declaredExecution?.cmd ?? effectiveAgent?.cmd;
   const fanout = config.fanout;
   const repeat = fanout?.repeat ?? 1;
   const edges = Object.entries(node.edges ?? {});
@@ -209,13 +225,18 @@ export function NodeConfig({
             execField(
               effectiveAgent === undefined ? undefined : graphAgent,
               effectiveAgent,
+              undefined,
+              declaredExecution,
             )
           )}
           {config.lease_s !== undefined && (
             <Field name="lease_s" value={`${config.lease_s} s`} />
           )}
-          {agent?.timeout_s !== undefined && (
-            <Field name="timeout_s" value={`${agent.timeout_s} s`} />
+          {(declaredExecution?.timeout_s ?? agent?.timeout_s) !== undefined && (
+            <Field
+              name="timeout_s"
+              value={`${declaredExecution?.timeout_s ?? agent?.timeout_s} s`}
+            />
           )}
           <Field name="escalade" value={node.escalade ? "oui" : "non"} />
           <Field name="terminal" value={node.terminal ? "oui" : "non"} />
@@ -243,6 +264,7 @@ export function NodeConfig({
                     index={index}
                     graphAgent={graphAgent}
                     nodeAgent={agent}
+                    declaredExecution={declaredExecution}
                   />
                 </li>
               ))}
@@ -271,12 +293,12 @@ export function NodeConfig({
           </Block>
         )}
 
-        {agent?.cmd && (
+        {command && (
           <Block title="cmd">
             {/* la commande garde sa mise en forme : elle défile plutôt que
                 de se replier, un script replié ne se lit plus */}
             <pre className="max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre">
-              {agent.cmd}
+              {command}
             </pre>
           </Block>
         )}

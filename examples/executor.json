@@ -19,6 +19,9 @@
       "config": {
         "agent": {
           "prompt": "Exécute le travail demandé et rends outcome.json."
+        },
+        "execution": {
+          "kind": "agent"
         }
       },
       "edges": {

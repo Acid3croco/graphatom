@@ -58,7 +58,8 @@ from graphatom import blocks, db, graph, kernel, scheduler  # noqa: E402
 from outils import git  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-REEL = json.loads((ROOT / "examples" / "code-task.json").read_text())["nodes"]["implement"]
+PAQUET = json.loads((ROOT / "examples" / "code-task.json").read_text())
+REEL = PAQUET["nodes"]["implement"]
 VARIANTES = REEL["config"]["fanout"]["variants"]
 
 # hermétisme : les agents d'ici sont des scripts shell, ils n'ont pas de base
@@ -102,12 +103,13 @@ def bundle_portes() -> dict:
     node = json.loads(json.dumps(REEL))  # une copie : le nœud réel ne bouge pas
     node["config"]["fanout"]["reduce"] = "first_pass"
     node["config"]["fanout"].pop("n", None)
-    node["config"]["agent"]["timeout_s"] = 300  # l'agent est factice, les portes non
+    node["config"]["execution"]["timeout_s"] = 300  # l'agent est factice
     node["config"]["lease_s"] = 600
     node["edges"] = {"done": "fini"}
     return {
         "name": "portes-test",
         "entry": "implement",
+        "agent": json.loads(json.dumps(PAQUET["agent"])),
         "budgets": {"escalations": 2, "wall_deadline_hours": 1},
         "on_kernel": {"escalate_to": "escalate", "exhausted_to": "abandon"},
         "nodes": {
