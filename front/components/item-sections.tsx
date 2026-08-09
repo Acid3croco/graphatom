@@ -56,7 +56,7 @@ import { TraceViewer } from "@/components/run-trace";
 
 // jsonb ne garde pas l'ordre des clés : le post-mortem d'abord, la trace après
 const RESULT_ORDER = ["outcome", "exit_code", "timeout", "error"];
-const RESULT_APART = new Set(["log_tail", "usage"]);
+const RESULT_APART = new Set(["_retry_signature", "log_tail", "usage"]);
 
 /** Les quatre parts du prix et le relevé qui les a fixées. */
 function estimateTitle(run: Run): string | undefined {

@@ -79,6 +79,7 @@ laissé, et son prompt le porte comme n'importe quelle relance. Le motif est
 nommé : un budget dépassé et une pendaison ne laissent pas la même chose.
 """
 
+import hashlib
 import json
 import os
 import signal
@@ -109,6 +110,8 @@ FAILURE_NAME = "failure.json"  # emplacement stable du dernier échec de l'item
 TAIL_LINES = 20  # queue du log rendue dans l'autopsie d'une tentative crashée
 TAIL_CHARS = 2000
 REPORT_CHARS = 4000  # queue du compte rendu citée dans la trace d'échec
+SIGNATURE_FILES = 100  # au-delà, conserver la relance plutôt que mal comparer
+SIGNATURE_BYTES = 64 * 1024  # borne par commande ou fichier durable
 # Le noyau a ses propres issues d'échec. Le domaine garde les noms négatifs
 # employés par les graphes. Une issue n'est un échec que si elle est dans l'un
 # de ces deux ensembles : une réussite, même non terminale, ne laisse donc pas
@@ -182,6 +185,84 @@ def failure_path(item_id: int) -> Path:
 def is_failure_outcome(outcome: str) -> bool:
     """Une issue d'échec est une issue du noyau ou un nom négatif du domaine."""
     return outcome in KERNEL_OUTCOMES or outcome in DOMAIN_FAILURE_OUTCOMES
+
+
+def _file_digest(path: Path) -> str | None:
+    """Empreinte bornée d'un fichier durable, ou None s'il est trop grand."""
+    try:
+        if (path.is_symlink() or not path.is_file()
+                or path.stat().st_size > SIGNATURE_BYTES):
+            return None
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _files_digest(root: Path, names: list[str]) -> str | None:
+    """Empreinte stable d'une petite liste de fichiers sous une seule racine."""
+    if len(names) > SIGNATURE_FILES:
+        return None
+    state = []
+    for name in sorted(names):
+        path = root / name
+        if not path.exists():
+            state.append((name, None))
+            continue
+        digest = _file_digest(path)
+        if digest is None:
+            return None
+        state.append((name, digest))
+    return hashlib.sha256(json.dumps(state, ensure_ascii=False).encode()).hexdigest()
+
+
+def retry_signature(item_id: int, run: dict, outcome: str) -> str | None:
+    """Signature bornée d'un échec, limitée à son item, cycle et candidat.
+
+    Les textes humains complets ne participent pas : ni résumé, ni journal,
+    ni rapport. Une commande, un champ d'erreur ou un fichier trop grand rend
+    la tentative non comparable ; le noyau garde alors sa relance locale.
+    """
+    workspace = run_workspace(item_id, run)
+    command = _file_digest(attempt_command(workspace, run))
+    result = run.get("result") or {}
+    structured = {name: result[name] for name in (
+        "outcome", "error", "timeout", "exit_code", "provider", "reason"
+    ) if name in result}
+    encoded = json.dumps(structured, sort_keys=True, ensure_ascii=False).encode()
+    if command is None or len(encoded) > SIGNATURE_BYTES:
+        return None
+
+    ignored = {PGID_FILE, OUTCOME_NAME, STARVED_NAME, PROMPT_NAME, USAGE_NAME,
+               FAILURE_NAME}
+    try:
+        names = [path.name for path in workspace.iterdir()
+                 if path.is_file() and path.name not in ignored
+                 and not path.name.startswith(
+                     ("agent-", "command-", "prompt-", "usage-"))]
+    except OSError:
+        return None
+    workspace_state = _files_digest(workspace, names)
+
+    tree = run_worktree(item_id, run)
+    if tree is None:
+        worktree_state = "none"
+    else:
+        head_code, head = _git(tree, "rev-parse", "HEAD")
+        diff_code, changed = _git(tree, "diff", "--name-only", "HEAD")
+        new_code, untracked = _git(tree, "ls-files", "-o", "--exclude-standard")
+        if head_code or diff_code or new_code:
+            return None
+        worktree_files = sorted(set(changed.splitlines() + untracked.splitlines()))
+        content = _files_digest(tree, worktree_files)
+        worktree_state = None if content is None else [head, content]
+
+    if workspace_state is None or worktree_state is None:
+        return None
+    signature = [run["node"], outcome, command, structured,
+                 workspace_state, worktree_state]
+    return hashlib.sha256(json.dumps(
+        signature, sort_keys=True, ensure_ascii=False
+    ).encode()).hexdigest()
 
 
 def passation_path(item_id: int, run: dict) -> Path:
@@ -982,6 +1063,8 @@ def write_failure_trace(item_id: int, run: dict, outcome: str) -> Path | None:
         "report": _attempt_report(workspace, run),
     }
     result = run.get("result") or {}
+    if isinstance(result.get("retry"), str):
+        trace["retry"] = result["retry"]
     if outcome == "starved":
         for name in ("provider", "reason"):
             value = result.get(name)
