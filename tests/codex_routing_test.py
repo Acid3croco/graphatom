@@ -60,6 +60,17 @@ def declaration() -> None:
           "DeepSeek gratuit ; portes légères sur Luna ✓")
 
 
+def prompts_synchrones() -> None:
+    """2. Les règles d'exécution sont cinq vrais paragraphes, pas du JSON cité."""
+    nodes = ("scope", "implement", "test_backend", "test_frontend", "judge")
+    for node in nodes:
+        prompt = BUNDLE["nodes"][node]["config"]["agent"]["prompt"]
+        assert "Tout se fait en synchrone" in prompt, node
+        assert "outcome.json" in prompt, node
+        assert "\\n" not in prompt, (node, prompt[:200])
+    print("2. cinq prompts synchrones rendus avec de vrais retours de ligne ✓")
+
+
 def executable(path: Path, content: str) -> None:
     """Écrit un petit exécutable jetable."""
     path.write_text(content)
@@ -86,7 +97,7 @@ def execute(script: Path, cwd: Path, env: dict[str, str]) -> subprocess.Complete
 
 
 def arguments_codex(tmp: Path) -> None:
-    """2. L'adaptateur passe le modèle et l'effort à la CLI."""
+    """3. L'adaptateur passe le modèle et l'effort à la CLI."""
     workspace = tmp / "adapter"
     workspace.mkdir()
     (workspace / "prompt.md").write_text("test")
@@ -105,11 +116,11 @@ def arguments_codex(tmp: Path) -> None:
     args = capture.read_text().splitlines()
     assert args[args.index("-m") + 1] == "gpt-5.6-luna", args
     assert args[args.index("-c") + 1] == 'model_reasoning_effort="medium"', args
-    print("2. agent-codex transmet gpt-5.6-luna et effort medium à la CLI ✓")
+    print("3. agent-codex transmet gpt-5.6-luna et effort medium à la CLI ✓")
 
 
 def release_rapide(tmp: Path) -> None:
-    """3. Le nominal reste shell ; seule la panne appelle Luna low."""
+    """4. Le nominal reste shell ; seule la panne appelle Luna low."""
     worktree = tmp / "worktree"
     scripts = worktree / "scripts"
     scripts.mkdir(parents=True)
@@ -145,11 +156,12 @@ def release_rapide(tmp: Path) -> None:
     args = capture.read_text().splitlines()
     assert args[args.index("-m") + 1] == "gpt-5.6-luna", args
     assert args[args.index("-c") + 1] == 'model_reasoning_effort="low"', args
-    print("3. release nominale sans modèle ; panne confiée à Luna low ✓")
+    print("4. release nominale sans modèle ; panne confiée à Luna low ✓")
 
 
 def main() -> None:
     declaration()
+    prompts_synchrones()
     tmp = Path(tempfile.mkdtemp(prefix="graphatom-codex-routing-"))
     try:
         arguments_codex(tmp)
