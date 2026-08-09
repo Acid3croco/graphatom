@@ -71,7 +71,7 @@ class GraphError(Exception):
 
 GRAPH_AGENT_KEYS = {"cli", "model", "effort", "timeout_s"}
 NODE_AGENT_KEYS = {"cli", "model", "effort", "cmd", "cmd_reason", "prompt",
-                   "timeout_s", "silence_s"}
+                   "timeout_s", "silence_s", "passation"}
 
 
 def _validate_agent_values(place: str, agent: dict, allowed: set[str]) -> None:
@@ -98,6 +98,10 @@ def _validate_agent_values(place: str, agent: dict, allowed: set[str]) -> None:
         raise GraphError(f"{place} : timeout d'agent invalide {agent['timeout_s']!r}")
     if "cmd_reason" in agent and "cmd" not in agent:
         raise GraphError(f"{place} : cmd_reason sans cmd")
+    if "passation" in agent and not isinstance(agent["passation"], bool):
+        raise GraphError(
+            f"{place} : passation doit être un booléen, vu {agent['passation']!r}"
+        )
 
 
 def _validate_agents(bundle: dict) -> None:

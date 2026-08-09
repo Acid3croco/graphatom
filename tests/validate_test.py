@@ -9,6 +9,9 @@ Scénario, sans base ni ordonnanceur — la validation est pure :
   4. la file : l'arête réflexive d'un nœud `file` est la seule boucle
      tolérée hors escalade — le drapeau sans arête est refusé, la boucle
      longue qui passe par la file aussi
+  5. `solo` reste un booléen interdit sur les nœuds d'attente
+  6. `agent.passation` accepte seulement un booléen : les scripts
+     déterministes peuvent refuser une passation creuse sans ouvrir le schéma
 
 Usage : uv run python tests/validate_test.py
 """
@@ -100,6 +103,20 @@ def main() -> None:
         print(f"5. solo accepté sur deploy et refusé sur WAIT : {e} ✓")
     else:
         sys.exit("ÉCHEC : un nœud WAIT solo a passé la validation")
+
+    # 6. les agents de modèle écrivent une passation par défaut. Un script
+    #    déterministe peut la désactiver explicitement, avec un booléen.
+    bundle = json.loads(json.dumps(bundles["code-task.json"]))
+    assert bundle["nodes"]["worktree"]["config"]["agent"]["passation"] is False
+    graph.validate(bundle)
+    bundle["nodes"]["worktree"]["config"]["agent"]["passation"] = "non"
+    try:
+        graph.validate(bundle)
+    except graph.GraphError as e:
+        assert "passation" in str(e) and "booléen" in str(e), str(e)
+        print(f"6. passation false acceptée, valeur non booléenne refusée : {e} ✓")
+    else:
+        sys.exit("ÉCHEC : agent.passation non booléen a passé la validation")
 
     print("\nvalidation : OK — une cible on_kernel fantôme ne se publie plus")
 

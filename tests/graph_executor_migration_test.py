@@ -41,7 +41,7 @@ PROMPTS = {
     ("code-task", "implement"): "1fdfc7929b26",
     ("code-task", "test_backend"): "9a3125818e52",
     ("code-task", "test_frontend"): "8029121aab4a",
-    ("code-task", "validate"): "bc622f34ac7b",
+    ("code-task", "validate"): "5160b5153d94",
     ("code-task", "release"): "dda519e4cff3",
     ("code-task", "judge"): "56f3b53169d6",
     ("gauntlet", "plan"): "2f0011a894f4",
