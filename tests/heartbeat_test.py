@@ -52,7 +52,8 @@ class FakeConn:
         self.sql.append((sql, params))
         if "FROM heartbeat" in sql:
             at = self.beats.get(params[0])
-            return FakeCursor([{"at": at}] if at else [])
+            return FakeCursor([{"at": at, "worker_sha": None,
+                                "worker_started_at": None}] if at else [])
         if "FROM work_item w" in sql:
             return FakeCursor(self.items)
         return FakeCursor([])
@@ -93,15 +94,16 @@ class RecordingGitHub(gs.GitHub):
 def main() -> None:
     # 1. tamponner : une ligne par batteur, un UPSERT sur son identité
     conn = FakeConn()
-    heartbeat.beat(conn, heartbeat.RAIL)
+    started = now()
+    heartbeat.beat(conn, heartbeat.RAIL, "abc1234", started)
     stamp, who = conn.sql[0]
-    assert "INSERT INTO heartbeat (who, at) VALUES (%s, now())" in stamp, stamp
+    assert "INSERT INTO heartbeat (who, at, worker_sha, worker_started_at)" in stamp, stamp
     assert "ON CONFLICT (who) DO UPDATE" in stamp, stamp
-    assert who == (heartbeat.RAIL,), who
-    heartbeat.beat(conn, heartbeat.RAIL)  # deuxième worker, même ligne
-    assert conn.sql[1] == (stamp, (heartbeat.RAIL,)), conn.sql
+    assert who == (heartbeat.RAIL, "abc1234", started), who
+    heartbeat.beat(conn, heartbeat.RAIL, "abc1234", started)  # même worker
+    assert conn.sql[1] == (stamp, (heartbeat.RAIL, "abc1234", started)), conn.sql
     heartbeat.beat(conn, heartbeat.GITHUB_SYNC)  # le canal : sa ligne à lui
-    assert conn.sql[2] == (stamp, (heartbeat.GITHUB_SYNC,)), conn.sql
+    assert conn.sql[2] == (stamp, (heartbeat.GITHUB_SYNC, None, None)), conn.sql
     assert heartbeat.last(conn, heartbeat.RAIL) is None, "base sans battement"
     assert "WHERE who = %s" in conn.sql[-1][0], conn.sql[-1]
     beaten = now()

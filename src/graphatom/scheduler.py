@@ -30,8 +30,11 @@ sous son propre worker : voir `run_forever`.
 """
 
 import os
+from pathlib import Path
+import subprocess
 import threading
 import time
+import datetime as dt
 
 import psycopg
 
@@ -65,10 +68,30 @@ MAX_RUNS_PER_ITEM = int(os.environ.get("GRAPHATOM_MAX_RUNS_PER_ITEM")
 # la production ne doit pas rouvrir le flot par une variable oubliée. Les
 # bancs d'essai des plafonds peuvent modifier la constante dans leur process.
 MAX_ACTIVE_ITEMS = 1
+WORKER_STARTED_AT = dt.datetime.now(dt.timezone.utc)
+
+
+def _worker_sha() -> str:
+    """Rend le SHA chargé par ce processus, avant tout déploiement."""
+    repo = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
+        capture_output=True, text=True, check=False,
+    )
+    return result.stdout.strip() if result.returncode == 0 else "inconnu"
+
+
+WORKER_SHA = _worker_sha()
+os.environ.setdefault("GRAPHATOM_WORKER_SHA", WORKER_SHA)
+os.environ.setdefault("GRAPHATOM_WORKER_STARTED_AT", WORKER_STARTED_AT.isoformat())
 
 
 def tick(conn: psycopg.Connection) -> int:
-    heartbeat.beat(conn, heartbeat.RAIL)
+    heartbeat.beat(conn, heartbeat.RAIL, WORKER_SHA, WORKER_STARTED_AT)
+    if _worker_sha() != WORKER_SHA:
+        subprocess.run(["systemctl", "restart", "graphatom-worker.service"],
+                       check=False)
+        return 1
     did = kernel.reap(conn)
     did += _settle_waits(conn)
     did += _dispatch(conn)
@@ -190,11 +213,27 @@ def _execute(run_id: int, item_id: int) -> None:
         node = bundle["nodes"][run["node"]]
         if run["candidate"] is not None:  # un candidat joue sa variante du nœud
             node = candidate_node(node, run["candidate"])
+        ctx = Context(conn, run, item, node, bundle)
         try:
-            result = BLOCKS[node["block"]](Context(conn, run, item, node, bundle))
+            result = BLOCKS[node["block"]](ctx)
         except Exception as exc:  # le bloc a le droit d'échouer, pas de router
             result = {"outcome": "crashed", "error": str(exc)}
-        kernel.apply(conn, run_id, result)
+        status = kernel.apply(conn, run_id, result)
+        if (status == "applied" and run["node"] == "deploy"
+                and result.get("outcome") == "done"):
+            wanted = _worker_sha()
+            with (ctx.workspace / "deploy.md").open("a") as report:
+                report.write(f"worker porte {WORKER_SHA} - voulu {wanted}\n")
+                if WORKER_SHA == wanted:
+                    report.write("worker déjà actif sur le SHA voulu - aucun redémarrage\n")
+                    return
+                report.write("résultat appliqué - activation du worker demandée\n")
+            restarted = subprocess.run(
+                ["systemctl", "restart", "graphatom-worker.service"], check=False)
+            if restarted.returncode:
+                with (ctx.workspace / "deploy.md").open("a") as report:
+                    report.write("activation du worker échouée - "
+                                 f"systemctl code {restarted.returncode}\n")
 
 
 def en_vol(conn: psycopg.Connection) -> int:

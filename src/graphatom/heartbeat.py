@@ -35,12 +35,15 @@ RAIL = "rail"                  # le worker : son tick tamponne
 GITHUB_SYNC = "github-sync"    # le canal : son tour de boucle tamponne
 
 
-def beat(conn: psycopg.Connection, who: str) -> None:
+def beat(conn: psycopg.Connection, who: str, worker_sha: str | None = None,
+         worker_started_at: dt.datetime | None = None) -> None:
     """Tamponne le battement de `who` — dans la boucle, sans thread à part."""
     conn.execute(
-        "INSERT INTO heartbeat (who, at) VALUES (%s, now()) "
-        "ON CONFLICT (who) DO UPDATE SET at = now()",
-        (who,),
+        "INSERT INTO heartbeat (who, at, worker_sha, worker_started_at) "
+        "VALUES (%s, now(), %s, %s) ON CONFLICT (who) DO UPDATE SET "
+        "at = now(), worker_sha = EXCLUDED.worker_sha, "
+        "worker_started_at = EXCLUDED.worker_started_at",
+        (who, worker_sha, worker_started_at),
     )
 
 
@@ -48,6 +51,15 @@ def last(conn: psycopg.Connection, who: str) -> dt.datetime | None:
     """Le dernier battement de `who`. None : il n'a jamais tamponné ici."""
     row = conn.execute("SELECT at FROM heartbeat WHERE who = %s", (who,)).fetchone()
     return row["at"] if row else None
+
+
+def worker(conn: psycopg.Connection) -> dict:
+    """Rend l'identité du worker hôte portée par son dernier battement."""
+    row = conn.execute(
+        "SELECT at, worker_sha, worker_started_at FROM heartbeat WHERE who = %s",
+        (RAIL,),
+    ).fetchone()
+    return row or {"at": None, "worker_sha": None, "worker_started_at": None}
 
 
 def age_s(at: dt.datetime | None) -> float | None:

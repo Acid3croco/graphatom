@@ -93,7 +93,9 @@ CREATE TABLE IF NOT EXISTS question (
 -- qu'on mesure, pas qui est vivant.
 CREATE TABLE IF NOT EXISTS heartbeat (
     who TEXT       NOT NULL,                  -- rail | github-sync : le batteur
-    at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    worker_sha TEXT,
+    worker_started_at TIMESTAMPTZ
     -- unicité d'un batteur : voir l'index du passage, tout en bas
 );
 
@@ -155,6 +157,8 @@ ALTER TABLE node_run  DROP CONSTRAINT IF EXISTS node_run_item_id_node_attempt_ke
 -- perte, elle garde son horodatage. `id` part avec sa clé primaire ; l'unicité
 -- passe sur `who`, et c'est elle que l'UPSERT du tampon vise.
 ALTER TABLE heartbeat ADD COLUMN IF NOT EXISTS who TEXT;
+ALTER TABLE heartbeat ADD COLUMN IF NOT EXISTS worker_sha TEXT;
+ALTER TABLE heartbeat ADD COLUMN IF NOT EXISTS worker_started_at TIMESTAMPTZ;
 UPDATE      heartbeat SET who = 'rail' WHERE who IS NULL;
 ALTER TABLE heartbeat DROP COLUMN IF EXISTS id;
 ALTER TABLE heartbeat ALTER COLUMN who SET NOT NULL;

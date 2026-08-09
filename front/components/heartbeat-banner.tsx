@@ -42,7 +42,10 @@ function text(beat: Heartbeat | null): string {
   if (!beat) {
     return "rail injoignable — l'API ne répond pas, les états affichés sont figés.";
   }
-  const both = `${one("rail", beat.rail)} · ${one("canal GitHub", beat["github-sync"])}`;
+  const worker = beat.rail.sha
+    ? ` · worker ${beat.rail.sha}${beat.rail.started_at ? ` redémarré ${moment(beat.rail.started_at)}` : ""}`
+    : "";
+  const both = `${one("rail", beat.rail)}${worker} · ${one("canal GitHub", beat["github-sync"])}`;
   return alarm(beat) ? `${both} — les états affichés sont figés.` : both;
 }
 
