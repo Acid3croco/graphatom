@@ -1,17 +1,17 @@
-"""Le crash-test du milestone 1 : tuer l'ordonnanceur est un cas nominal.
+"""Le crash-test : tuer l'ordonnanceur est un cas nominal.
 
-Scénario : publier le graph d'exemple, admettre un item, lancer
-l'ordonnanceur, le tuer en SIGKILL en plein milieu d'un ACT, le relancer —
-et vérifier que l'item termine correctement :
+Scénario : lancer trois agents avec un bail long, tuer l'ordonnanceur et
+leurs groupes, puis relancer le worker sans attendre le bail :
 
-  1. l'item atteint un état terminal
-  2. le journal est une chaîne contiguë v1..vN, sans trou ni doublon
-  3. l'effet a été exécuté exactement une fois (clé logique unique dans l'outbox)
-  4. la tentative fauchée est classée, pas perdue
+  1. les trois runs orphelins sont classés en quelques ticks
+  2. l'item atteint un état terminal
+  3. le journal est une chaîne contiguë v1..vN, sans trou ni doublon
+  4. l'effet est exécuté exactement une fois
 
 Usage : uv run python tests/crash_test.py
 """
 
+import json
 import os
 import shutil
 import signal
@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import db  # noqa: E402
+from graphatom import blocks, db, kernel  # noqa: E402
 
 from outils import kill_group, sh  # noqa: E402
 
@@ -36,8 +36,47 @@ WORK = Path(tempfile.mkdtemp(prefix="graphatom-crash-test-"))
 # un ordonnanceur lancé d'ici n'en voit ni l'un ni l'autre.
 os.environ["GRAPHATOM_REPO_DIR"] = str(ROOT)
 os.environ.pop("GRAPHATOM_AGENT_DSN", None)
-KILL_AFTER_S = 2.0  # l'ACT dure 4 s et démarre vite : on tue en plein vol, garanti
+blocks.DATA_DIR = WORK / "data"
+LEASE_S = 600
+REAP_S = 5.0
 TIMEOUT_S = 90
+
+AGENT = """
+if [ ! -f ../repris ]; then sleep 300; fi
+printf '%s\n' '## Fait' 'Reprise terminée.' '' '## Appris' 'Rien.' '' \
+    '## Pas fait' 'Rien.' > passation-produce.md
+printf '{"outcome":"ok","summary":"repris"}' > outcome.json
+"""
+
+
+def bundle() -> dict:
+    """Trois agents, puis un effet unique : la plus petite preuve du contrat."""
+    return {
+        "name": "crash-test",
+        "entry": "produce",
+        "budgets": {"escalations": 2, "wall_deadline_hours": 1},
+        "on_kernel": {"escalate_to": "abandon", "exhausted_to": "abandon"},
+        "nodes": {
+            "produce": {
+                "block": "ACT",
+                "config": {
+                    "lease_s": LEASE_S,
+                    "agent": {"cmd": AGENT, "prompt": "Travaille.",
+                              "silence_s": LEASE_S},
+                    "fanout": {"variants": [{"label": f"c{i}"} for i in range(3)],
+                               "reduce": "first_pass"},
+                },
+                "edges": {"ok": "commit"},
+            },
+            "commit": {
+                "block": "EFFECT",
+                "config": {"intent": "open_change", "target": "stub://outbox"},
+                "edges": {"applied": "close", "uncertain": "abandon"},
+            },
+            "close": {"terminal": True},
+            "abandon": {"terminal": True},
+        },
+    }
 
 
 def scheduler() -> subprocess.Popen:
@@ -51,26 +90,69 @@ def scheduler() -> subprocess.Popen:
 
 def main() -> None:
     sh("init-db", "--drop")
-    rev = sh("publish", "examples/supervision.json")
+    spec = WORK / "crash-test.json"
+    spec.write_text(json.dumps(bundle()))
+    rev = sh("publish", str(spec))
     item_id = int(sh("admit", rev, "pipeline-x:oom"))
     print(f"révision {rev[:12]}…, item {item_id}")
 
-    # phase 1 : tourner, puis SIGKILL en plein ACT
+    # phase 1 : les trois agents volent sous un bail long
     proc = scheduler()
-    time.sleep(KILL_AFTER_S)
+    workspace = WORK / "data" / f"item-{item_id}"
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        traces = sorted(workspace.glob("c*/agent.pgid"))
+        if len(traces) == 3:
+            break
+        time.sleep(0.1)
+    else:
+        sys.exit("ÉCHEC : les trois agents n'ont pas démarré")
+
+    with db.connect() as conn:
+        anciens = conn.execute(
+            "SELECT id, lease_expires_at, "
+            "EXTRACT(epoch FROM lease_expires_at - now()) AS reste FROM node_run "
+            "WHERE item_id = %s "
+            "AND status = 'running' ORDER BY id", (item_id,),
+        ).fetchall()
+    assert len(anciens) == 3, anciens
+    assert min(float(run["reste"]) for run in anciens) > LEASE_S - 20, anciens
+
     kill_group(proc, signal.SIGKILL)
-    print(f"ordonnanceur tué (SIGKILL) après {KILL_AFTER_S}s", flush=True)
+    with db.connect() as conn:
+        assert kernel.reap(conn) == 0, "un groupe vivant a été pris pour un orphelin"
+        encore = conn.execute(
+            "SELECT count(*) AS n FROM node_run WHERE id = ANY(%s) "
+            "AND status = 'running'", ([run["id"] for run in anciens],),
+        ).fetchone()["n"]
+        assert encore == 3, encore
+    print("trois identités vivantes conservées avant le bail ✓")
 
-    # le bail du run orphelin doit expirer avant que le faucheur le classe
-    from graphatom.kernel import LEASE_SECONDS
-    print(f"attente d'expiration du bail ({LEASE_SECONDS}s)…")
-    time.sleep(LEASE_SECONDS + 1)
+    for path in traces:
+        os.killpg(json.loads(path.read_text())["pgid"], signal.SIGKILL)
+    (workspace / "repris").touch()
+    print("ordonnanceur et trois groupes tués sous un bail de 600 s", flush=True)
 
-    # phase 2 : relancer, attendre le terminal
+    # phase 2 : relancer tout de suite, sans attendre le bail
+    reprise = time.monotonic()
     proc = scheduler()
     deadline = time.time() + TIMEOUT_S
     try:
         with db.connect() as conn:
+            ids = [run["id"] for run in anciens]
+            while time.monotonic() - reprise < REAP_S:
+                classes = conn.execute(
+                    "SELECT count(*) AS n FROM node_run WHERE id = ANY(%s) "
+                    "AND status = 'faulted'", (ids,),
+                ).fetchone()["n"]
+                if classes == 3:
+                    break
+                time.sleep(0.1)
+            else:
+                sys.exit("ÉCHEC : les trois orphelins attendent encore leur bail")
+            print(f"1. trois runs classés en {time.monotonic() - reprise:.1f}s, "
+                  f"bail restant supérieur à {LEASE_S - 20}s ✓")
+
             while time.time() < deadline:
                 item = conn.execute(
                     "SELECT * FROM work_item WHERE id = %s", (item_id,)
@@ -82,8 +164,8 @@ def main() -> None:
                 sys.exit("ÉCHEC : l'item n'a pas terminé dans les temps")
 
             # 1. terminal
-            assert item["state"] in ("close", "close_unresolved"), item["state"]
-            print(f"1. terminal : {item['state']} ✓")
+            assert item["state"] == "close", item["state"]
+            print(f"2. terminal : {item['state']} ✓")
 
             # 2. journal contigu v1..vN
             versions = [r["item_version"] for r in conn.execute(
@@ -92,21 +174,19 @@ def main() -> None:
             )]
             assert versions == list(range(1, len(versions) + 1)), versions
             assert versions[-1] == item["version"]
-            print(f"2. journal contigu v1..v{versions[-1]} ✓")
+            print(f"3. journal contigu v1..v{versions[-1]} ✓")
 
             # 3. effet exactement une fois
             outbox = (WORK / "data" / "effects_outbox.log").read_text()
-            key = "supervision:pipeline-x:oom:commit"
+            key = "crash-test:pipeline-x:oom:commit"
             assert outbox.count(key) == 1, f"{outbox.count(key)} exécutions"
-            print("3. effet exécuté exactement une fois ✓")
+            print("4. effet exécuté exactement une fois ✓")
 
-            # 4. la tentative fauchée est classée
+            # les trois runs de la première tentative sont tous classés
             statuses = [r["status"] for r in conn.execute(
-                "SELECT status FROM node_run WHERE item_id = %s", (item_id,)
+                "SELECT status FROM node_run WHERE id = ANY(%s)", (ids,)
             )]
-            assert "faulted" in statuses, statuses
-            assert "running" not in statuses, statuses
-            print(f"4. tentative fauchée classée ({statuses}) ✓")
+            assert statuses == ["faulted"] * 3, statuses
     finally:
         kill_group(proc, signal.SIGTERM)
         shutil.rmtree(WORK, ignore_errors=True)

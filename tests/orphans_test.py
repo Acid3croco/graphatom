@@ -213,6 +213,7 @@ def main() -> None:
     vivant = {"run": RUN_ID + 1, "pgid": innocent.pid, "cmd": "sleep 300",
               "identity": identite}
     trace_path.write_text(json.dumps(vivant))
+    assert blocks.agent_state(ITEM_ID, RUN_ID) == blocks.AGENT_UNKNOWN
     assert blocks.revoke_orphan(ITEM_ID, RUN_ID) is None
     assert innocent.poll() is None, "l'agent d'une autre tentative doit vivre"
     assert trace_path.exists(), "sa trace doit rester armée pour son propre run"
@@ -221,16 +222,21 @@ def main() -> None:
     # 9. garde-fou : une identité qui ne colle plus ne tue personne
     for faux in (identite | {"starttime": -1}, identite | {"boot": "un-autre-boot"}):
         trace_path.write_text(json.dumps(vivant | {"run": RUN_ID, "identity": faux}))
+        assert blocks.agent_state(ITEM_ID, RUN_ID) == blocks.AGENT_DEAD
         assert blocks.revoke_orphan(ITEM_ID, RUN_ID) is None
         assert innocent.poll() is None, "un pid recyclé ne doit jamais être tué"
         assert not trace_path.exists(), "la trace périmée, elle, doit disparaître"
     innocent.kill()
     innocent.wait()
+    trace_path.write_text(json.dumps(vivant | {"run": RUN_ID}))
+    assert blocks.agent_state(ITEM_ID, RUN_ID) == blocks.AGENT_DEAD
+    trace_path.unlink()
     print("9. identité périmée (naissance, boot) : le faucheur ne tue personne ✓")
 
     # 10. une trace abîmée ne fait pas tomber le tick du faucheur
     for abime in ("{ceci n'est pas du json", json.dumps({"run": RUN_ID})):
         trace_path.write_text(abime)
+        assert blocks.agent_state(ITEM_ID, RUN_ID) == blocks.AGENT_UNKNOWN
         assert blocks.revoke_orphan(ITEM_ID, RUN_ID) is None
     print("10. trace illisible ou amputée : le faucheur passe son chemin ✓")
 
