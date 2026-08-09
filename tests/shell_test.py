@@ -48,6 +48,8 @@ le test prend celle que `GRAPHATOM_DSN` désigne, sans y écrire une ligne.
      dans le couperet du nœud, et le README comme le prompt le justifient
  21. le `python3` du PATH n'a pas psycopg — celui du clone de référence
      l'a, et c'est lui qui prend le verrou
+ 22. l'activation vient du résultat appliqué et survit au redémarrage
+ 23. l'import du scheduler reste valide quand l'image n'a pas Git
 
 Usage : uv run python tests/shell_test.py
 """
@@ -1243,6 +1245,21 @@ def main() -> None:
                 os.environ.pop(nom, None)
             else:
                 os.environ[nom] = ancienne
+
+    # 23. Les images Python de production ne contiennent pas Git. Le SHA du
+    # worker est une information de diagnostic : son absence ne doit jamais
+    # empêcher la migration, le web ou le canal GitHub de démarrer.
+    vraie_execution = scheduler.subprocess.run
+
+    def sans_git(*_args, **_kwargs):
+        raise FileNotFoundError("git")
+
+    scheduler.subprocess.run = sans_git
+    try:
+        assert scheduler._worker_sha() == "inconnu"
+    finally:
+        scheduler.subprocess.run = vraie_execution
+    print("23. scheduler importable sans Git dans l'image de production ✓")
 
     shutil.rmtree(tmp, ignore_errors=True)
     print("\nnœuds shell : OK — déterministes, et jamais sans outcome")
