@@ -78,6 +78,8 @@ LENT = PREAMBULE + "sleep 120\n"
 # le rapide attend le signal du test, puis gagne
 RAPIDE = PREAMBULE + """
 while [ ! -f ../go ]; do sleep 0.1; done
+printf '%s\\n' '## Fait' 'Travail committé.' '' '## Appris' 'Rien.' '' \\
+    '## Pas fait' 'Rien.' > passation-travail.md
 printf '{"outcome": "ok", "summary": "candidat %s"}' "$k" > outcome.json
 """
 

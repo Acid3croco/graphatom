@@ -60,7 +60,11 @@ git -C "$WT" commit -qm "un candidat a travaillé"
 git -C "$WT" rev-parse HEAD > commit.txt
 printf '{"input_tokens": 10, "total_cost_usd": 0.10}' > usage.json
 """
-REUSSIT = """printf '{"outcome": "ok", "summary": "candidat %s"}' "$k" > outcome.json\n"""
+REUSSIT = """
+printf '%s\\n' '## Fait' 'Travail committé.' '' '## Appris' 'Rien.' '' \\
+    '## Pas fait' 'Rien.' > passation-travail.md
+printf '{"outcome": "ok", "summary": "candidat %s"}' "$k" > outcome.json
+"""
 RATE = "exit 3\n"  # pas d'outcome.json : la tentative est classée `crashed`
 
 # Ce que chaque candidat laisse dans son diff : un mot à lui, qui ne dit ni son
@@ -75,6 +79,8 @@ MARQUEURS = ["alizé", "brise", "cyclone"]
 JUGE = """
 cp prompt.md prompt-vu.md
 printf 'Comparaison des finalistes, faite par un faux modèle.\\n' > verdict.md
+printf '%s\\n' '## Fait' 'Finalistes départagés.' '' '## Appris' 'Rien.' '' \\
+    '## Pas fait' 'Rien.' > passation-juge.md
 printf '{"input_tokens": 700, "total_cost_usd": 2.50}' > usage.json
 while [ ! -f go ]; do sleep 0.05; done
 printf '{"outcome": "chosen", "elu": "{elu}", "summary": "{raison}"}' > outcome.json

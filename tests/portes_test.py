@@ -91,6 +91,8 @@ case "$K" in
 esac
 git -C "$GRAPHATOM_WORKTREE" add -A
 git -C "$GRAPHATOM_WORKTREE" commit -qm "candidat $K"
+printf '%s\\n' '## Fait' 'Candidat committé.' '' '## Appris' 'Rien.' '' \\
+    '## Pas fait' 'Rien.' > passation-implement.md
 printf '{"outcome": "done", "summary": "candidat %s : je me déclare fini"}' "$K" \
 > outcome.json
 RC=0"""

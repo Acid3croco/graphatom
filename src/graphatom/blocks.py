@@ -124,6 +124,7 @@ GIT_TIMEOUT_S = 20
 # et trois sections courtes tiennent largement dans 2 500 — au-delà, ce n'est
 # plus une passation, c'est le journal que personne ne lit
 PASSATION_CHARS = 2500
+PASSATION_SECTIONS = ("## Fait", "## Appris", "## Pas fait")
 BASE_REF = "origin/main"  # la base des worktrees d'item : ce qui est commité s'y compare
 
 
@@ -291,6 +292,12 @@ def _demande_passation(ctx: Context, workspace: Path) -> str:
     nommément — c'est pour ça qu'elle est demandée en toutes lettres, et
     demandée même en cas de succès.
     """
+    # Quelques nœuds sont des scripts déterministes rangés derrière la même
+    # interface `agent` : ils n'apprennent rien et leur prompt dit « pas
+    # d'agent ici ». Leur config l'annonce, au lieu de fabriquer une
+    # passation creuse qui prétendrait venir d'un modèle.
+    if ctx.config["agent"].get("passation") is False:
+        return ""
     fichier = workspace / f"passation-{ctx.run['node']}.md"
     return (
         f"\nÉcris aussi {fichier} — la passation que le nœud suivant lira, et "
@@ -303,6 +310,46 @@ def _demande_passation(ctx: Context, workspace: Path) -> str:
         "renoncement, la question ouverte, le doute. Écris-la même quand tu "
         "réussis — un renoncement tu, personne ne le rattrape.>"
     )
+
+
+def _passation_invalide(path: Path) -> str | None:
+    """Dit pourquoi une passation ne tient pas le contrat, sinon rien.
+
+    Une issue de succès ne peut pas réutiliser le fichier de la tentative
+    précédente : `_attempt` le retire avant de lancer l'agent. Ce contrôle
+    porte donc sur un artefact neuf. Les trois titres sont uniques, dans
+    l'ordre, et chaque section dit au moins « rien ». La borne s'applique au
+    fichier rendu comme au texte transmis : un journal déguisé en passation
+    n'est pas une passation valide.
+    """
+    try:
+        texte = path.read_text(errors="replace").strip()
+    except OSError:
+        return f"passation absente : {path.name}"
+    if len(texte) > PASSATION_CHARS:
+        return (f"passation trop longue : {len(texte)} caractères, "
+                f"borne {PASSATION_CHARS}")
+
+    lignes = texte.splitlines()
+    titres = tuple(ligne.strip() for ligne in lignes
+                   if ligne.lstrip().startswith("## "))
+    if titres != PASSATION_SECTIONS:
+        return (f"trois sections exactes attendues : {PASSATION_SECTIONS}, "
+                f"vues {titres}")
+    positions = []
+    for section in PASSATION_SECTIONS:
+        trouvees = [i for i, ligne in enumerate(lignes) if ligne.strip() == section]
+        if len(trouvees) != 1:
+            return f"section {section!r} attendue une fois, vue {len(trouvees)}"
+        positions.append(trouvees[0])
+    if positions != sorted(positions) or positions[0] != 0:
+        return "sections de passation absentes, précédées de texte ou dans le désordre"
+
+    for i, section in enumerate(PASSATION_SECTIONS):
+        fin = positions[i + 1] if i + 1 < len(positions) else len(lignes)
+        if not "\n".join(lignes[positions[i] + 1:fin]).strip():
+            return f"section {section!r} vide"
+    return None
 
 
 def _predecessor(ctx: Context) -> dict | None:
@@ -656,10 +703,15 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
         "SELECT subject_key FROM subject WHERE id = %s", (ctx.item["subject_id"],)
     ).fetchone()["subject_key"]
 
+    # Le prompt se construit avant la purge : une relance du même nœud doit
+    # recevoir la passation de sa tentative précédente. Le process, lui,
+    # démarre après la purge et ne peut donc réussir avec ce vieux fichier.
+    prompt = _prompt(ctx, workspace, subject)
     outcome_path = workspace / OUTCOME_NAME
-    for transient in (outcome_path, workspace / USAGE_NAME):
+    handoff_path = passation_path(ctx.item["id"], ctx.run)
+    for transient in (outcome_path, workspace / USAGE_NAME, handoff_path):
         transient.unlink(missing_ok=True)  # rien de la tentative précédente
-    (workspace / PROMPT_NAME).write_text(_prompt(ctx, workspace, subject))
+    (workspace / PROMPT_NAME).write_text(prompt)
 
     env = os.environ | {"GRAPHATOM_WORKSPACE": str(workspace),
                         "GRAPHATOM_SUBJECT_KEY": subject}
@@ -706,6 +758,10 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
         outcome, summary = data["outcome"], data.get("summary", "")
     except (OSError, ValueError, KeyError, TypeError) as exc:  # pas d'issue valide
         return _autopsy(proc, log, exc, timeout=False)
+    if (ctx.config["agent"].get("passation") is not False
+            and not is_failure_outcome(outcome)):
+        if erreur := _passation_invalide(handoff_path):
+            return _autopsy(proc, log, ValueError(erreur), timeout=False)
     return {"outcome": outcome, "summary": summary}
 
 

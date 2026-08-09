@@ -37,7 +37,11 @@ from graphatom import blocks  # noqa: E402
 
 # le shell note le pgid de son groupe, puis laisse un sous-processus derrière lui
 FACTICE = "ps -o pgid= -p $$ > pgid.txt; sleep 300 & sleep 300"
-SANS_USAGE = """printf '{"outcome": "ok", "summary": "fait"}' > outcome.json"""
+SANS_USAGE = """
+printf '%s\n' '## Fait' 'Travail terminé.' '' '## Appris' 'Rien.' '' \
+    '## Pas fait' 'Rien.' > passation-travail.md
+printf '{"outcome": "ok", "summary": "fait"}' > outcome.json
+"""
 USAGE = {"input_tokens": 12, "output_tokens": 3456}  # ce que l'agent veut bien dire
 REPOND = f"{SANS_USAGE}\nprintf '{json.dumps(USAGE)}' > usage.json"
 ECHOUE = "echo 'Execution error' >&2; exit 42"  # sort mal, sans outcome.json

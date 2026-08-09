@@ -8,6 +8,8 @@ lit — sans base ni ordonnanceur : seul le prompt du bloc agent est en jeu.
 
   1. le contrat de tout nœud agent demande sa passation, en trois sections
      nommées, dans son propre workspace
+  1 bis. une réussite sans nouvelle passation valide est refusée : le vieux
+     fichier est purgé, les trois sections sont obligatoires et non vides
   2. le prompt porte la passation de son prédécesseur, son issue et la queue
      de son journal
   3. un nœud d'entrée ne reçoit rien : ni bloc, ni mention creuse — pas plus
@@ -118,6 +120,36 @@ def demande(workdir: Path) -> None:
     assert "même quand tu réussis" in texte, texte
     print("1. le contrat demande passation-scope.md et ses trois sections "
           f"{list(SECTIONS)} ✓")
+
+
+def passation_obligatoire(workdir: Path) -> None:
+    """1 bis. une réussite porte une passation neuve, complète et bornée."""
+    ctx = contexte(workdir, "scope", [], {})
+    fichier = blocks.passation_path(ITEM, ctx.run)
+    fichier.write_text("ancienne passation sans sections")
+    ctx.config["agent"]["cmd"] = (
+        "printf '%s' '{\"outcome\":\"done\",\"summary\":\"trop tôt\"}' "
+        "> outcome.json"
+    )
+    resultat = blocks._attempt(ctx, ctx.workspace.resolve())
+    assert resultat["outcome"] == "crashed", resultat
+    assert "passation absente" in resultat["error"], resultat
+    assert not fichier.exists(), "la passation de la tentative précédente a survécu"
+
+    ctx.config["agent"]["cmd"] = (
+        "printf '%s\\n' '## Fait' 'travail fait' '' '## Appris' 'rien' '' "
+        "'## Pas fait' 'rien' > passation-scope.md; "
+        "printf '%s' '{\"outcome\":\"done\",\"summary\":\"complet\"}' "
+        "> outcome.json"
+    )
+    resultat = blocks._attempt(ctx, ctx.workspace.resolve())
+    assert resultat == {"outcome": "done", "summary": "complet"}, resultat
+    assert blocks._passation_invalide(fichier) is None
+
+    fichier.write_text("## Fait\noui\n\n## Appris\n\n## Pas fait\nrien\n")
+    assert "section '## Appris' vide" == blocks._passation_invalide(fichier)
+    print("1 bis. vieille passation purgée ; succès refusé sans trois sections "
+          "neuves, ordonnées, remplies et bornées ✓")
 
 
 def transmission(workdir: Path) -> None:
@@ -249,6 +281,7 @@ def main() -> None:
     workdir = Path(tempfile.mkdtemp(prefix="graphatom-passation-"))
     try:
         demande(workdir)
+        passation_obligatoire(workdir)
         transmission(workdir)
         noeud_d_entree(workdir)
         bornes(workdir)

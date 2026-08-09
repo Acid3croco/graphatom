@@ -67,6 +67,8 @@ LENT = PREAMBULE + "sleep 60\n" + """printf '{"outcome": "ok"}' > outcome.json""
 # le rapide joue sa propre commande — celle que sa variante surcharge
 RAPIDE = PREAMBULE + """
 printf '%s' 'commande surchargée' > surcharge.txt
+printf '%s\\n' '## Fait' 'Course terminée.' '' '## Appris' 'Rien.' '' \\
+    '## Pas fait' 'Rien.' > passation-travail.md
 printf '{"outcome": "ok", "summary": "%s"}' '{label}' > outcome.json
 """
 

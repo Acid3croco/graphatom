@@ -634,6 +634,15 @@ trois sections courtes, demandées en toutes lettres par le contrat — **Fait**
 **Appris**, **Pas fait**. La troisième est celle qui manquait : un agent
 n'écrit son renoncement que si on la lui demande nommément.
 
+Le contrat est vérifié, pas seulement demandé. Avant chaque tentative, le
+rail retire la passation précédente du même nœud. Une issue de succès n'est
+acceptée que si la tentative a écrit un nouveau fichier, sous la borne de
+2 500 caractères, avec les trois sections uniques, dans l'ordre et non
+vides. « Rien » est une réponse valide ; une section absente ne l'est pas.
+Les commandes déterministes dont le prompt dit qu'elles ne sont pas des
+agents déclarent `agent.passation: false` : elles ne fabriquent pas une
+passation creuse et leur prompt n'en demande pas.
+
 Le prompt du nœud suivant porte cette passation, l'issue du prédécesseur et
 la queue de son journal. Le prédécesseur est le run que nomme l'événement
 d'entrée dans l'état courant — celui que `kernel._route()` y a écrit :
