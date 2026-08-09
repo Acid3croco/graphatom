@@ -85,6 +85,7 @@ tests/criteria_test.py
 tests/depends_test.py
 tests/split_deps_test.py
 tests/heartbeat_test.py
+tests/postgres_recovery_test.py
 tests/links_test.py
 tests/live_test.py
 tests/failure_trace_test.py
