@@ -101,9 +101,11 @@ def stub(outcome: str) -> str:
             f"\"summary\": \"doublure de test\"}}' > outcome.json\n")
 
 
-# Les nœuds dont la `cmd` appelle un modèle ou sort sur le réseau, et l'issue
-# qu'on leur fait rendre. Tout le reste du bundle — `ingest`, `worktree`,
-# `cleanup`, `review`, et surtout les arêtes et le `fanout` — reste d'origine.
+# Les nœuds dont la `cmd` appelle un modèle, sort sur le réseau ou dépend des
+# scripts du dépôt traité, et l'issue qu'on leur fait rendre. Tout le reste du
+# bundle — `ingest`, `worktree`, `review`, et surtout les arêtes et le
+# `fanout` — reste d'origine. Le dépôt jetable ne contient que son fichier
+# socle : son cleanup doit donc être doublé comme les autres commandes.
 DOUBLURES = {
     "scope": stub("ready"),
     "implement": CANDIDAT,
@@ -114,6 +116,7 @@ DOUBLURES = {
     "release": stub("done"),
     "deploy": stub("done"),
     "verify_deploy": stub("pass"),
+    "cleanup": stub("done"),
 }
 
 

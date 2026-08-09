@@ -2,6 +2,8 @@
 
 import os
 import time
+import uuid
+from datetime import datetime
 from pathlib import Path
 
 import psycopg
@@ -38,6 +40,26 @@ def connect() -> psycopg.Connection:
     # autocommit : chaque conn.transaction() est une vraie transaction,
     # commitée à la sortie du bloc — jamais de travail durable en suspens
     return psycopg.connect(DSN, row_factory=dict_row, autocommit=True)
+
+
+def incarnation(conn: psycopg.Connection) -> tuple[str, datetime]:
+    """Identifie l'instance Postgres entre deux connexions du worker.
+
+    Postgres vide une table UNLOGGED après une récupération sur crash. Le
+    premier client recrée alors son jeton. L'heure de démarrage du postmaster
+    complète ce signal pour un arrêt propre, qui conserve la table.
+    """
+    candidate = uuid.uuid4().hex
+    conn.execute(
+        "INSERT INTO database_incarnation (singleton, token) VALUES (TRUE, %s) "
+        "ON CONFLICT (singleton) DO NOTHING",
+        (candidate,),
+    )
+    row = conn.execute(
+        "SELECT token, pg_postmaster_start_time() AS started_at "
+        "FROM database_incarnation WHERE singleton = TRUE"
+    ).fetchone()
+    return row["token"], row["started_at"]
 
 
 def agent_dsn(item_id: int) -> str | None:
@@ -118,7 +140,8 @@ def init_db(drop: bool = False) -> list[str]:
         if drop:
             conn.execute(
                 "DROP TABLE IF EXISTS question, effect, event, node_run, "
-                "work_item, subject, graph_revision, heartbeat CASCADE"
+                "work_item, subject, graph_revision, heartbeat, "
+                "database_incarnation CASCADE"
             )
         for essai in range(1, DDL_ESSAIS + 1):
             try:

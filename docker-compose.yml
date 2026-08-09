@@ -15,6 +15,9 @@
 services:
   db:
     image: postgres:17
+    # Les requêtes parallèles Postgres allouent leur mémoire partagée
+    # dynamique dans /dev/shm.
+    shm_size: 1gb
     environment:
       POSTGRES_USER: graphatom
       POSTGRES_PASSWORD: graphatom
