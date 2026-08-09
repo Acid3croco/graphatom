@@ -20,7 +20,7 @@
  * C'est la page la plus large du front, et elle doit tenir dans 360 px :
  * le graph et les tables glissent chacun dans leur bloc, jamais la page.
  */
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 
 import { useItem, itemFeed } from "@/lib/live";
 import type {
@@ -30,6 +30,7 @@ import type {
   JournalEntry,
   Question,
   Run,
+  RunTrace,
   Usage,
   UsageSplit,
   Variant,
@@ -51,6 +52,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+
+const TRACE_POLL_MS = 2000;
 
 // jsonb ne garde pas l'ordre des clés : le post-mortem d'abord, la trace après
 const RESULT_ORDER = ["outcome", "exit_code", "timeout", "error"];
@@ -101,6 +104,118 @@ function Result({ run }: { run: Run }) {
           {tail}
         </pre>
       )}
+    </div>
+  );
+}
+
+/** La trace d'un run, complétée par tranches tant que le run est actif. */
+function TraceViewer({ item, run }: { item: number; run: Run }) {
+  const [trace, setTrace] = useState<RunTrace | null>(null);
+  const [content, setContent] = useState({ events: "", log: "", command: "" });
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cursor: RunTrace["cursor"] | undefined;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    async function load() {
+      const search = cursor
+        ? `?cursor=${encodeURIComponent(JSON.stringify(cursor))}`
+        : "";
+      try {
+        const response = await fetch(
+          `/api/item/${item}/run/${run.id}/trace${search}`,
+          { cache: "no-store" },
+        );
+        if (!response.ok) {
+          throw new Error(`l'API a répondu ${response.status}`);
+        }
+        const next = (await response.json()) as RunTrace;
+        if (stopped) {
+          return;
+        }
+        setTrace(next);
+        setContent((was) => ({
+          events: was.events + next.events.content,
+          log: was.log + next.log.content,
+          command: was.command + next.command.content,
+        }));
+        setError(null);
+        cursor = next.cursor;
+        if (next.status === "running") {
+          timer = setTimeout(load, TRACE_POLL_MS);
+        }
+      } catch (err) {
+        if (!stopped) {
+          setError(String(err));
+        }
+      }
+    }
+
+    load();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [item, run.id]);
+
+  if (error) {
+    return <p role="alert">erreur de lecture : {error}</p>;
+  }
+  if (!trace) {
+    return <p className="text-muted-foreground">chargement de la trace…</p>;
+  }
+
+  const events = content.events
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => {
+      try {
+        return JSON.stringify(JSON.parse(line), null, 2);
+      } catch {
+        return line;
+      }
+    });
+  const state = (value: "missing" | "empty" | "available") =>
+    value === "missing" ? "source absente" : "source vide";
+
+  return (
+    <div className="grid gap-4 text-xs md:grid-cols-3">
+      <section>
+        <h3 className="mb-1 font-semibold">
+          événements JSONL structurés{trace.events.type ? ` · ${trace.events.type}` : ""}
+        </h3>
+        {trace.events.state === "available" ? (
+          events.map((event, index) => (
+            <pre key={index} className="mb-2 overflow-auto rounded-md bg-muted p-2">
+              {event}
+            </pre>
+          ))
+        ) : (
+          <p className="text-muted-foreground">{state(trace.events.state)}</p>
+        )}
+      </section>
+      <section>
+        <h3 className="mb-1 font-semibold">journal texte du wrapper</h3>
+        {trace.log.state === "available" ? (
+          <pre className="max-h-96 overflow-auto rounded-md bg-muted p-2 whitespace-pre-wrap">
+            {content.log}
+          </pre>
+        ) : (
+          <p className="text-muted-foreground">{state(trace.log.state)}</p>
+        )}
+      </section>
+      <section>
+        <h3 className="mb-1 font-semibold">commande effective</h3>
+        {trace.command.state === "available" ? (
+          <pre className="max-h-96 overflow-auto rounded-md bg-muted p-2 whitespace-pre-wrap">
+            {content.command}
+          </pre>
+        ) : (
+          <p className="text-muted-foreground">{state(trace.command.state)}</p>
+        )}
+      </section>
     </div>
   );
 }
@@ -504,6 +619,7 @@ export function ItemJournal({
 /** Les runs : leur statut, leur durée, leurs tokens, leur résultat. */
 export function ItemRuns({ id, initial }: { id: number; initial: Run[] }) {
   const runs = useItem(id, (view) => view.runs, initial);
+  const [open, setOpen] = useState<number[]>([]);
   if (!runs.length) {
     return null;
   }
@@ -527,8 +643,26 @@ export function ItemRuns({ id, initial }: { id: number; initial: Run[] }) {
         </TableHeader>
         <TableBody>
           {runs.map((run) => (
-            <TableRow key={run.id}>
-              <TableCell>{run.id}</TableCell>
+            <Fragment key={run.id}>
+            <TableRow>
+              <TableCell className="whitespace-nowrap">
+                {run.id}{" "}
+                <button
+                  type="button"
+                  className="cursor-pointer underline"
+                  aria-expanded={open.includes(run.id)}
+                  aria-label={`ouvrir la trace du run ${run.id}`}
+                  onClick={() =>
+                    setOpen((was) =>
+                      was.includes(run.id)
+                        ? was.filter((id) => id !== run.id)
+                        : [...was, run.id],
+                    )
+                  }
+                >
+                  trace
+                </button>
+              </TableCell>
               <TableCell>{run.node}</TableCell>
               <TableCell>{run.cycle}</TableCell>
               {/* K candidats partagent une tentative : sans leur numéro, la
@@ -557,6 +691,14 @@ export function ItemRuns({ id, initial }: { id: number; initial: Run[] }) {
                 <Result run={run} />
               </TableCell>
             </TableRow>
+            {open.includes(run.id) && (
+              <TableRow>
+                <TableCell colSpan={9} className="bg-muted/40">
+                  <TraceViewer item={id} run={run} />
+                </TableCell>
+              </TableRow>
+            )}
+            </Fragment>
           ))}
         </TableBody>
       </Table>
