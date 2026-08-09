@@ -597,6 +597,13 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
             _wait(proc, watched, mark,
                   _agent_timeout_s(ctx.config),
                   float(cfg.get("silence_s", AGENT_SILENCE_S)))
+            # L'adaptateur peut avoir fini alors qu'un de ses descendants
+            # travaille encore. C'est notamment le cas de GNU timeout en
+            # mode --foreground : il borne la commande, mais pas les enfants
+            # que celle-ci a lancés. Le pgid connu reste valide tant qu'un
+            # membre du groupe existe ; révoque ces membres avant d'effacer
+            # la seule trace qui permet de les retrouver.
+            _revoke_residual_group(proc.pid)
         except subprocess.TimeoutExpired as exc:
             # le relevé se prend avant la révocation : ce que le SIGTERM
             # arrache à l'agent n'est pas du travail qu'il a fait
@@ -792,6 +799,23 @@ def _kill_group(proc: subprocess.Popen) -> None:
         pass
     _signal_group(pgid, signal.SIGKILL)
     proc.wait()  # récolte le chef de groupe, pas de zombie
+
+
+def _revoke_residual_group(pgid: int) -> None:
+    """Révoque les descendants restés après la sortie normale du chef.
+
+    ``Popen.wait`` a déjà récolté le chef. Il ne reste donc pas de handle à
+    attendre, mais le groupe garde son pgid tant qu'un descendant vit.
+    """
+    _signal_group(pgid, signal.SIGTERM)
+    deadline = time.monotonic() + GRACE_S
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.1)
+    _signal_group(pgid, signal.SIGKILL)
 
 
 def _signal_group(pgid: int, sig: int) -> None:

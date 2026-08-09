@@ -7,9 +7,11 @@ tout le reste :
   1. admission  — une issue ouverte portant le label `graphatom` devient
                   un sujet (une seule admission automatique par issue) ;
                   une ligne `Depends-on: #N` dans le corps diffère
-                  l'admission tant que l'issue visée est ouverte ; le titre
-                  de l'issue est posé sur le sujet au passage — le canal l'a
-                  sous la main, le frontend le lira en base et jamais ici
+                  l'admission tant que l'issue visée est ouverte ; une ligne
+                  `Retry-of: #N` copie les pièces du dernier item terminal ;
+                  le titre de l'issue est posé sur le sujet au passage — le
+                  canal l'a sous la main, le frontend le lira en base et
+                  jamais ici
   2. accusé     — l'occurrence ouverte reçoit son commentaire de prise en
                   charge : item, graph, lien trajectoire — une seule fois ;
                   ce commentaire est ensuite réécrit à chaque transition
@@ -56,6 +58,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import shutil
 import time
 import urllib.error
 import urllib.parse
@@ -74,6 +77,8 @@ BLOCKED = f"{RAIL}blocked"  # pas un état d'item : une admission différée se 
 STALLED = f"{RAIL}stalled"  # pas un état d'item non plus : le worker ne bat plus
 STALLED_COLOR = "d73a4a"    # le rouge de l'alarme, seule exception à la couleur unie
 DEPENDS = "Depends-on:"     # la grammaire fermée des dépendances, dans le corps
+RETRY = "Retry-of:"          # une reprise explicite, lue une fois à l'admission
+RETRY_FILES = ("echec.md", "criteria.md", "validate.md")
 ADMITTED = "-admitted"      # la fin de la clé de l'accusé : la marque, sur l'issue,
                             # qu'un item existe déjà pour elle — la découpe s'y fie
                             # pour ne pas réécrire une issue déjà partie
@@ -251,6 +256,18 @@ def _depends_on(body: str) -> list[str]:
             if line.strip().startswith(DEPENDS)]
 
 
+def _retry_of(body: str) -> list[str]:
+    """Le membre de droite de chaque ligne `Retry-of: …` du corps.
+
+    La lecture est volontairement la même que pour `Depends-on:` : une
+    ligne au mot, sensible à la casse, sans interpréter la prose autour.
+    La validation exige ensuite une seule ligne et un seul numéro.
+    """
+    return [line.strip()[len(RETRY):].strip()
+            for line in (body or "").splitlines()
+            if line.strip().startswith(RETRY)]
+
+
 def _issue_state(gh: GitHub, number: int, states: dict[int, str | None]) -> str | None:
     """`open`, `closed`, ou None si l'issue n'existe pas — un cache par tick.
 
@@ -291,6 +308,66 @@ def _pending_deps(gh: GitHub, issue: dict, name: str, states: dict[int, str | No
                   f"`{DEPENDS} #<numéro>`, vers une autre issue existante :\n\n"
                   + "\n".join(f"- {line}" for line in invalid), said)
     return waiting
+
+
+def _retry_source(conn: Connection, gh: GitHub, issue: dict, name: str,
+                  states: dict[int, str | None],
+                  said: set[tuple[int, str]]) -> tuple[int, int] | None:
+    """La cible et son dernier item terminal, ou None si la ligne est absente/invalide.
+
+    Une reprise invalide ne bloque jamais l'admission. Elle est toutefois
+    dite par le même mécanisme à clé logique que les dépendances invalides.
+    """
+    number = issue["number"]
+    declarations = _retry_of(issue["body"])
+    if not declarations:
+        return None
+
+    invalid = None
+    if len(declarations) != 1:
+        invalid = f"`{RETRY}` doit apparaître sur une seule ligne du corps"
+    else:
+        raw = declarations[0]
+        if not (raw.startswith("#") and raw[1:].isdigit()):
+            invalid = f"`{RETRY} {raw}` — attendu `{RETRY} #<numéro>`"
+        else:
+            target = int(raw[1:])
+            if target == number:
+                invalid = f"`{RETRY} #{target}` — une issue ne reprend pas elle-même"
+            elif _issue_state(gh, target, states) is None:
+                invalid = f"`{RETRY} #{target}` — cette issue n'existe pas"
+            else:
+                subject_key = f"gh:{gh.repo}#{target}"
+                previous = conn.execute(
+                    "SELECT w.id FROM work_item w "
+                    "JOIN subject s ON s.id = w.subject_id "
+                    "WHERE s.graph = %s AND s.subject_key = %s "
+                    "AND w.terminal_at IS NOT NULL "
+                    "ORDER BY w.generation DESC, w.id DESC LIMIT 1",
+                    (name, subject_key),
+                ).fetchone()
+                if previous:
+                    return target, previous["id"]
+                invalid = (f"`{RETRY} #{target}` — cette issue n'a aucun "
+                           "item terminal")
+
+    _say_once(gh, number, f"{name}-retry-invalid",
+              "**Reprise ignorée** — le rail ne lit qu'une ligne "
+              f"`{RETRY} #<numéro>`, vers une autre issue qui porte un "
+              f"item terminal :\n\n- {invalid}", said)
+    return None
+
+
+def _copy_retry_files(previous_item: int, item_id: int) -> None:
+    """Copie les seules pièces de reprise qui existent vers le nouvel item."""
+    source = item_workspace(previous_item)
+    target = item_workspace(item_id)
+    files = [name for name in RETRY_FILES if (source / name).is_file()]
+    if not files:
+        return
+    target.mkdir(parents=True, exist_ok=True)
+    for name in files:
+        shutil.copy2(source / name, target / name)
 
 
 def _reparent(body: str, mother: int, child: int) -> str:
@@ -390,7 +467,8 @@ def _remember_title(conn: Connection, name: str, subject_key: str,
 
 
 def _admit_labeled(conn: Connection, gh: GitHub, revision: str,
-                   said: set[tuple[int, str]]) -> set[int]:
+                   said: set[tuple[int, str]],
+                   retries: dict[int, tuple[int, int]] | None = None) -> set[int]:
     """L'admission automatique, et son seul frein : les dépendances déclarées.
 
     Renvoie les numéros d'issues dont l'admission est différée — le repeint
@@ -420,8 +498,17 @@ def _admit_labeled(conn: Connection, gh: GitHub, revision: str,
                       "cette issue au tick qui suit la fermeture de la dernière "
                       "dépendance.", said)
             continue
+        retry = _retry_source(conn, gh, issue, name, states, said)
         try:
-            item_id = kernel.admit(conn, revision, subject_key, issue["title"])
+            if retry:
+                item_id = kernel.admit(
+                    conn, revision, subject_key, issue["title"],
+                    prepare=lambda new_id: _copy_retry_files(retry[1], new_id),
+                )
+                if retries is not None:
+                    retries[item_id] = retry
+            else:
+                item_id = kernel.admit(conn, revision, subject_key, issue["title"])
             print(f"#{issue['number']} admis → item {item_id}", flush=True)
         except RuntimeError as exc:
             print(f"#{issue['number']} refusé : {exc}", flush=True)
@@ -443,24 +530,46 @@ def _ack_key(item: dict) -> str:
     return f"{item['graph']}-g{item['generation']}{ADMITTED}"
 
 
-def _ack_body(item: dict) -> str:
+def _ack_body(item: dict, retry: tuple[int, int] | None = None) -> str:
+    lineage = f", reprise de #{retry[0]} (item {retry[1]})" if retry else ""
     return (f"**Prise en charge par le rail** — item {item['id']}, "
-            f"graph `{item['graph']}` (génération {item['generation']}).\n\n"
+            f"graph `{item['graph']}` (génération {item['generation']})"
+            f"{lineage}.\n\n"
             f"Le label `{RAIL}<état>` suit la trajectoire ; les questions "
             f"arrivent ici en commentaire.\n"
             f"Trajectoire et artefacts : {_web()}/item/{item['id']}")
 
 
-def _acknowledge(conn: Connection, gh: GitHub) -> None:
+def _ack_retry(item: dict, body: str) -> tuple[int, int] | None:
+    """Relit la filiation dans l'accusé que le rail va mettre à jour.
+
+    Le corps de l'issue n'est jamais relu. La filiation reste dans sa seule
+    projection durable, le commentaire d'accusé, avec une forme fermée qui
+    empêche de prendre une prose humaine pour un état du rail.
+    """
+    header = _ack_body(item).splitlines()[0]
+    prefix = f"{header.removesuffix('.')}, reprise de #"
+    for line in body.splitlines():
+        if not (line.startswith(prefix) and line.endswith(").")):
+            continue
+        source, separator, previous = line[len(prefix):-2].partition(" (item ")
+        if separator and source.isdigit() and previous.isdigit():
+            return int(source), int(previous)
+    return None
+
+
+def _acknowledge(conn: Connection, gh: GitHub,
+                 retries: dict[int, tuple[int, int]] | None = None) -> None:
     """Accusé de prise en charge : entre l'admission et la première question,
     l'issue dit déjà qu'on travaille dessus.
 
     Un acte de parole comme les autres — une fois l'effet appliqué, le geste
     ne coûte plus qu'une lecture en base : jamais deux accusés par occurrence.
     """
+    retries = retries or {}
     for item in _gh_items(conn, gh):
         _speak(conn, gh, _issue_number(item["subject_key"]), item["id"],
-               _ack_key(item), _ack_body(item))
+               _ack_key(item), _ack_body(item, retries.get(item["id"])))
 
 
 def _gh_questions(conn: Connection, gh: GitHub) -> list[dict]:
@@ -771,14 +880,15 @@ def _paint_trajectories(conn: Connection, gh: GitHub, drawn: dict[int, int]) -> 
             "SELECT * FROM event WHERE item_id = %s ORDER BY item_version",
             (item["id"],),
         ).fetchall()
-        body = (f"{marker}\n{_ack_body(item)}\n\n"
-                f"**Trajectoire** (v{item['version']}, {len(events)} transitions)\n\n"
-                f"```\n{_journal(events)}\n```")
         try:
             comment = next(
                 (c for c in gh.comments(number) if marker in c["body"]), None)
             if comment is None:
                 continue  # l'accusé n'est pas encore posté — au prochain tick
+            retry = _ack_retry(item, comment["body"])
+            body = (f"{marker}\n{_ack_body(item, retry)}\n\n"
+                    f"**Trajectoire** (v{item['version']}, {len(events)} transitions)\n\n"
+                    f"```\n{_journal(events)}\n```")
             if comment["body"] != body:
                 gh.edit_comment(comment["id"], body)
                 print(f"#{number} ✎ trajectoire v{item['version']}", flush=True)
@@ -821,8 +931,9 @@ def tick(conn: Connection, gh: GitHub, revision: str, allowed: set[str],
         # le battement du worker ne sert qu'à cette projection : le sync ne
         # décide d'aucun état avec — la base reste l'autorité
         stalled = heartbeat.stalled(heartbeat.last(conn, heartbeat.RAIL))
-        blocked = _admit_labeled(conn, gh, revision, said)
-        _acknowledge(conn, gh)
+        retries: dict[int, tuple[int, int]] = {}
+        blocked = _admit_labeled(conn, gh, revision, said, retries)
+        _acknowledge(conn, gh, retries)
         _publish_criteria(conn, gh)
         _publish_questions(conn, gh)
         _collect_answers(conn, gh, allowed)

@@ -301,6 +301,26 @@ vérité du rail reste la ligne `Depends-on:`. Deux issues ouvertes qui
 dépendent l'une de l'autre se bloquent pour toujours — c'est visible (deux
 `rail:blocked`), et c'est à l'humain de casser le cycle en éditant un corps.
 
+### Reprendre un sujet : `Retry-of: #N`
+
+Une issue qui reprend un travail terminé peut le déclarer par une unique
+ligne dans son corps :
+
+```
+Retry-of: #172
+```
+
+À l'admission, le canal retrouve le dernier item terminal de cette issue et
+copie dans le workspace neuf ses `echec.md`, `criteria.md` et `validate.md`,
+pour les seuls fichiers qui existent. L'accusé nomme la source, par exemple
+`reprise de #172 (item 96)`. Le corps n'est plus relu après l'admission et
+aucune relation de reprise n'est stockée en base.
+
+Une cible inexistante, sans item terminal, ou l'issue elle-même ne bloque
+pas l'admission. Le canal ignore la ligne et poste une fois un commentaire
+à clé logique qui donne la cause. Plusieurs lignes `Retry-of:` sont aussi
+invalides : une reprise a une seule source directe.
+
 ### Le battement du worker : `rail:stalled`
 
 Un worker mort ne dit rien, et c'est le problème : les items gardent leurs

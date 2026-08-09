@@ -125,7 +125,7 @@ if [ -n "$EFFORT" ]; then
     PARAMETRES+=(-c "model_reasoning_effort=\"$EFFORT\"")
 fi
 PARAMETRES+=(-C "$DIR" "$(cat prompt.md)")
-timeout -k 5 "$BORNE" "$CX" "${PARAMETRES[@]}" < /dev/null \
+timeout --foreground -k 5 "$BORNE" "$CX" "${PARAMETRES[@]}" < /dev/null \
     > "$LOG" 2> "$ERRORS"
 RC=$?
 
