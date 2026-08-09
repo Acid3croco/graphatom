@@ -75,10 +75,13 @@ WORKER_STARTED_AT = dt.datetime.now(dt.timezone.utc)
 def _worker_sha() -> str:
     """Rend le SHA chargé par ce processus, avant tout déploiement."""
     repo = Path(__file__).resolve().parents[2]
-    result = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "HEAD"],
-        capture_output=True, text=True, check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return "inconnu"
     return result.stdout.strip() if result.returncode == 0 else "inconnu"
 
 
