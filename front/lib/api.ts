@@ -200,6 +200,16 @@ export type Question = {
 
 export type WorkspaceFile = { name: string; size: number; href: string };
 
+export type JudgeDecision = {
+  type: "chosen" | "sole" | "none";
+  source: string;
+  finalists: { letter: string; candidate: number }[];
+  selected: { letter: string; candidate: number } | null;
+  summary: string | null;
+  verdict: string | null;
+  judge: { cli: string | null; model: string | null; effort: string | null } | null;
+};
+
 export type ItemDetail = {
   item: ItemHead;
   graph: Graph;
@@ -209,6 +219,7 @@ export type ItemDetail = {
   questions: Question[];
   criteria: string | null;
   files: WorkspaceFile[];
+  decision: JudgeDecision | null;
 };
 
 /** Le détail d'un item tel que les pages le lisent, `validate.md` compris. */

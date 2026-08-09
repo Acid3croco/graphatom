@@ -320,6 +320,61 @@ def main() -> None:
         assert payload["criteria"].startswith("1. ça marche"), payload["criteria"]
         print("5. files : nom + href, et criteria.md servi tel quel ✓")
 
+        # La décision historique donne la correspondance explicite, dans le
+        # même ordre que le dossier anonyme du juge : fin, puis id.
+        decision_bundle = {
+            "agent": {"cli": "codex", "model": "luna", "effort": "low"},
+            "nodes": {
+                "implement": FANOUT_NODE,
+                "judge": {"block": "JUDGE", "config": {
+                    "finalists_from": "implement",
+                    "agent": {"model": "sol", "effort": "high"},
+                }},
+            },
+        }
+        chosen_runs = [
+            {"id": 18, "node": "implement", "cycle": 1, "attempt": 1,
+             "candidate": 2, "status": "applied", "outcome": "timed_out",
+             "finished_at": T0},
+            {"id": 20, "node": "implement", "cycle": 1, "attempt": 1,
+             "candidate": 1, "status": "applied", "outcome": "done",
+             "finished_at": T0 + dt.timedelta(seconds=2)},
+            {"id": 19, "node": "implement", "cycle": 1, "attempt": 1,
+             "candidate": 0, "status": "applied", "outcome": "done",
+             "finished_at": T0 + dt.timedelta(seconds=1)},
+            {"id": 21, "node": "judge", "cycle": 1, "attempt": 1,
+             "candidate": None, "status": "applied", "outcome": "chosen",
+             "finished_at": T0 + dt.timedelta(seconds=3),
+             "result": {"elu": "B", "summary": "B couvre les preuves"}},
+        ]
+        item115 = blocks.item_workspace(115)
+        item115.mkdir()
+        (item115 / "verdict.md").write_text("comparaison complète\n")
+        decision = web._decision(115, decision_bundle, chosen_runs)
+        assert decision["finalists"] == [
+            {"letter": "A", "candidate": 0},
+            {"letter": "B", "candidate": 1},
+        ], decision
+        assert decision["selected"] == {"letter": "B", "candidate": 1}, decision
+        assert decision["summary"] == "B couvre les preuves", decision
+        assert decision["verdict"] == "comparaison complète\n", decision
+        assert decision["judge"] == {
+            "cli": "codex", "model": "sol", "effort": "high",
+        }, decision
+
+        sole = web._decision(116, decision_bundle, [chosen_runs[2],
+            chosen_runs[3] | {"outcome": "sole", "result": {
+                "summary": "finaliste unique — traversé sans appel de modèle"}}])
+        assert sole["selected"] == {"letter": "A", "candidate": 0}, sole
+        assert sole["judge"] is None, sole
+        none = web._decision(117, decision_bundle, [
+            chosen_runs[2] | {"status": "superseded"},
+            chosen_runs[3] | {"outcome": "none", "result": {
+                "summary": "aucun finaliste — retour en amont sans jugement"}},
+        ])
+        assert none["finalists"] == [] and none["selected"] is None, none
+        print("   décision : B → c1, finaliste unique et aucun finaliste ✓")
+
         # 4. les questions ouvertes, avec le jeton de POST /answer
         answers = web._api_questions(open_conn(14), token="jeton-secret")
         assert answers["token"] == "jeton-secret", answers

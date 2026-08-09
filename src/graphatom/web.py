@@ -68,7 +68,8 @@ from urllib.parse import parse_qs, quote, unquote
 from . import channel, db, executors, heartbeat, scheduler
 from .blocks import (attempt_command, attempt_log, attempt_name, item_workspace,
                      run_workspace)
-from .graph import candidate_node, fanout_variants, judge_source, load_bundle
+from .graph import (KERNEL_OUTCOMES, candidate_node, fanout_variants,
+                    judge_source, load_bundle)
 
 STYLE = """
 body { font-family: system-ui, sans-serif; max-width: 58rem; margin: 2rem auto;
@@ -679,6 +680,50 @@ def _criteria(item_id: int) -> str | None:
     return path.read_text() if path.is_file() else None
 
 
+def _decision(item_id: int, bundle: dict, runs: list[dict]) -> dict | None:
+    """La dernière décision d'arbitrage, avec ses lettres explicites.
+
+    La projection historique reprend exactement l'ordre du juge : finalistes
+    ``applied`` de la dernière tentative, triés par date de fin puis par id.
+    Elle ne devient visible qu'après la décision, donc l'entrée du juge reste
+    anonyme.
+    """
+    judges = {name: spec for name, spec in bundle["nodes"].items()
+              if judge_source(spec)}
+    decided = [r for r in runs if r["node"] in judges and r["status"] == "applied"
+               and r["outcome"] in ("chosen", "sole", "none")]
+    if not decided:
+        return None
+    run = max(decided, key=lambda r: r["id"])
+    spec = judges[run["node"]]
+    source = judge_source(spec)
+    source_runs = [r for r in runs if r["node"] == source]
+    batch = max(((r["cycle"], r["attempt"]) for r in source_runs), default=None)
+    finalists = sorted(
+        (r for r in source_runs
+         if (r["cycle"], r["attempt"]) == batch
+         and r["candidate"] is not None and r["status"] == "applied"
+         and r["outcome"] and r["outcome"] not in KERNEL_OUTCOMES),
+        key=lambda r: (r["finished_at"], r["id"]),
+    )
+    mapping = [{"letter": letter, "candidate": r["candidate"]}
+               for letter, r in zip("ABCDEFGH", finalists)]
+    result = run.get("result") or {}
+    letter = result.get("elu") if run["outcome"] == "chosen" else (
+        "A" if run["outcome"] == "sole" and mapping else None)
+    selected = next((entry for entry in mapping if entry["letter"] == letter), None)
+    executor = executors.resolve(bundle, spec)
+    verdict = item_workspace(item_id) / "verdict.md"
+    return {
+        "type": run["outcome"], "source": source, "finalists": mapping,
+        "selected": selected, "summary": result.get("summary"),
+        "verdict": verdict.read_text() if verdict.is_file() else None,
+        "judge": ({"cli": executor.cli, "model": executor.model,
+                   "effort": executor.effort}
+                  if run["outcome"] == "chosen" else None),
+    }
+
+
 def _split_line(bundle: dict, runs: list[dict]) -> str:
     """La ligne qui met le prix du jugement en face de celui de la génération.
 
@@ -745,6 +790,7 @@ def _item_data(conn, item_id: int) -> dict | None:
         "usage_split": _cost_split(bundle, runs),
         "criteria": _criteria(item_id),
         "files": _files(item_id),
+        "decision": _decision(item_id, bundle, runs),
     }
 
 
@@ -1069,6 +1115,7 @@ def _api_item(conn, item_id: int) -> dict | None:
         "questions": [_api_question(q) for q in data["questions"]],
         "criteria": data["criteria"],
         "files": data["files"],
+        "decision": data["decision"],
     }
 
 

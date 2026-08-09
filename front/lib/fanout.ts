@@ -24,7 +24,7 @@
  * Un item sans aucun candidat ne rencontre rien de tout ceci : chaque
  * étape garde son run unique et son usage, exactement comme avant.
  */
-import type { Graph, JournalEntry, Run, Usage, Variant } from "@/lib/api";
+import type { Graph, JudgeDecision, JournalEntry, Run, Usage, Variant } from "@/lib/api";
 import { execution } from "@/lib/agent-model";
 
 // les issues que le noyau nomme lui-même : un run qui en rend une a raté.
@@ -122,6 +122,7 @@ export function steps(
   journal: JournalEntry[],
   runs: Run[],
   graph: Graph,
+  decision?: JudgeDecision | null,
 ): Step[] {
   const byRun = new Map(runs.map((run) => [run.id, run]));
   const batches = new Map<string, Run[]>();
@@ -142,8 +143,9 @@ export function steps(
     // le gagnant est le run qui a routé l'étape, et seulement s'il l'a
     // routée sur une arête du nœud : une étape que tous ont ratée n'a pas
     // de gagnant, et il ne faut pas en peindre un
-    const won =
-      entry.outcome !== null && !KERNEL_OUTCOMES.has(entry.outcome)
+    const won = decision?.source === run.node
+      ? batch.find((candidate) => candidate.candidate === decision.selected?.candidate)?.id
+      : entry.outcome !== null && !KERNEL_OUTCOMES.has(entry.outcome)
         ? entry.run_id
         : null;
     // l'étape a commencé quand l'item est entré dans le nœud : la durée que
