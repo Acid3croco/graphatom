@@ -7,9 +7,11 @@ tout le reste :
   1. admission  — une issue ouverte portant le label `graphatom` devient
                   un sujet (une seule admission automatique par issue) ;
                   une ligne `Depends-on: #N` dans le corps diffère
-                  l'admission tant que l'issue visée est ouverte ; le titre
-                  de l'issue est posé sur le sujet au passage — le canal l'a
-                  sous la main, le frontend le lira en base et jamais ici
+                  l'admission tant que l'issue visée est ouverte ; une ligne
+                  `Retry-of: #N` copie les pièces du dernier item terminal ;
+                  le titre de l'issue est posé sur le sujet au passage — le
+                  canal l'a sous la main, le frontend le lira en base et
+                  jamais ici
   2. accusé     — l'occurrence ouverte reçoit son commentaire de prise en
                   charge : item, graph, lien trajectoire — une seule fois ;
                   ce commentaire est ensuite réécrit à chaque transition

@@ -189,12 +189,14 @@ def main() -> None:
     print("4. dépendance fermée : admission au tick suivant, label retiré ✓")
 
     # 5. reprise valide : dernier item terminal, trois noms fermés, accusé lisible
-    workspace = Path(tempfile.mkdtemp(prefix="graphatom-retry-"))
+    temporary = tempfile.TemporaryDirectory(prefix="graphatom-retry-")
+    workspace = Path(temporary.name)
     blocks.DATA_DIR = workspace
     old = blocks.item_workspace(7)
     old.mkdir(parents=True)
     (old / "echec.md").write_text("trace de #40\n")
     (old / "criteria.md").write_text("critères de #40\n")
+    (old / "validate.md").write_text("validation de #40\n")
     (old / "hors-scope.md").write_text("ne doit pas suivre\n")
     gs.kernel = FakeKernel()
     kernel = gs.kernel
@@ -211,7 +213,7 @@ def main() -> None:
     new = blocks.item_workspace(1)
     assert (new / "echec.md").read_text() == "trace de #40\n"
     assert (new / "criteria.md").read_text() == "critères de #40\n"
-    assert not (new / "validate.md").exists()
+    assert (new / "validate.md").read_text() == "validation de #40\n"
     assert not (new / "hors-scope.md").exists()
     ack = gs._ack_body(
         {"id": 1, "graph": "code-task", "generation": 1}, retries[1])
@@ -238,6 +240,7 @@ def main() -> None:
         assert word in gh.posted[0][1], (body, gh.posted)
         assert "graphatom:code-task-retry-invalid" in gh.posted[0][1]
     print("6. reprise invalide : commentaire à clé logique, admission normale ✓")
+    temporary.cleanup()
 
     print("\ndépendances : OK — l'admission attend, puis part toute seule")
 
