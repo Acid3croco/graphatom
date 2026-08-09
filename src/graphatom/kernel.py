@@ -77,7 +77,7 @@ import psycopg
 
 from . import worktree
 from .blocks import (AGENT_ALIVE, AGENT_DEAD, agent_state, lease_autopsy,
-                     revoke_orphan, write_failure_trace)
+                     retry_signature, revoke_orphan, write_failure_trace)
 from .graph import KERNEL_OUTCOMES, GraphError, fanout_variants, load_bundle
 
 LEASE_SECONDS = 30
@@ -334,6 +334,12 @@ def apply(conn: psycopg.Connection, run_id: int, submitted: dict) -> str:
         if outcome not in (node.get("edges") or {}) and outcome not in KERNEL_OUTCOMES:
             outcome = "invalid_result"
 
+        run = {**run, "outcome": outcome, "result": submitted}
+        if outcome in ("crashed", "invalid_result"):
+            signature = retry_signature(item["id"], run, outcome)
+            if signature is not None:
+                submitted = {**submitted, "_retry_signature": signature}
+                run["result"] = submitted
         conn.execute(
             "UPDATE node_run SET status = 'applied', outcome = %s, result = %s, "
             "finished_at = %s WHERE id = %s",
@@ -342,7 +348,6 @@ def apply(conn: psycopg.Connection, run_id: int, submitted: dict) -> str:
         # Le routage écrit la trace d'échec dans cette même transaction. Le
         # run relu avant la mise à jour ne porte pas encore son résultat : on
         # lui donne donc le rendu exact que la base vient d'enregistrer.
-        run = {**run, "outcome": outcome, "result": submitted}
         revoques, ranger = _settle(conn, item, bundle, run, outcome, kind="result")
         # `keep_n` recale les réussites au-delà de la n-ième, et une promotion
         # impossible faute le gagnant : ce run-ci peut être l'un des deux, et
@@ -639,6 +644,64 @@ def _boucle(conn, item, nodes: dict, target: str, cycle: int) -> bool:
     ).fetchone() is not None
 
 
+def _retry_batch(conn, item: dict, run: dict, attempt: int) -> dict | None:
+    """Rend candidat → (run, signature) pour un lot entièrement comparable."""
+    rows = conn.execute(
+        "SELECT id, candidate, result FROM node_run WHERE item_id = %s "
+        "AND node = %s AND cycle = %s AND attempt = %s ORDER BY candidate",
+        (item["id"], run["node"], run["cycle"], attempt),
+    ).fetchall()
+    batch = {}
+    for row in rows:
+        signature = (row.get("result") or {}).get("_retry_signature")
+        if row.get("candidate") is None or not signature:
+            return None
+        batch[row["candidate"]] = (row["id"], signature)
+    return batch or None
+
+
+def _repeated_failure(conn, item: dict, run: dict, outcome: str) -> int | None:
+    """Rend le run antérieur si toute la tentative répète le même échec.
+
+    Un nœud simple compare son run précédent. Un fan-out compare les lots
+    complets, candidat par candidat : le progrès d'un seul candidat suffit à
+    conserver la relance du lot entier.
+    """
+    result = run.get("result") or {}
+    signature = result.get("_retry_signature")
+    if outcome not in ("crashed", "invalid_result") or not signature:
+        return None
+    if run.get("candidate") is None:
+        previous = conn.execute(
+            "SELECT id, result FROM node_run WHERE item_id = %s AND node = %s "
+            "AND cycle = %s AND candidate IS NULL AND attempt < %s "
+            "ORDER BY attempt DESC LIMIT 1",
+            (item["id"], run["node"], run["cycle"], run["attempt"]),
+        ).fetchone()
+        if (previous and (previous.get("result") or {}).get("_retry_signature")
+                == signature):
+            return previous["id"]
+        return None
+
+    previous = conn.execute(
+        "SELECT max(attempt) AS attempt FROM node_run WHERE item_id = %s "
+        "AND node = %s AND cycle = %s AND attempt < %s",
+        (item["id"], run["node"], run["cycle"], run["attempt"]),
+    ).fetchone()
+    previous_attempt = previous["attempt"] if previous else None
+    if previous_attempt is None:
+        return None
+    current_batch = _retry_batch(conn, item, run, run["attempt"])
+    previous_batch = _retry_batch(conn, item, run, previous_attempt)
+    if (current_batch is None or previous_batch is None
+            or set(current_batch) != set(previous_batch)):
+        return None
+    if any(current_batch[candidate][1] != previous_batch[candidate][1]
+           for candidate in current_batch):
+        return None
+    return previous_batch[run["candidate"]][0]
+
+
 def _route(conn, item, bundle, run, outcome: str, kind: str) -> None:
     """Résout l'arête, débite l'escalade, ouvre le passage, bouge l'item.
 
@@ -652,6 +715,17 @@ def _route(conn, item, bundle, run, outcome: str, kind: str) -> None:
     # échéances passent aussi ici, mais n'inventent pas une tentative. La
     # trace se prend avant une éventuelle conversion en `budget_exhausted` :
     # elle dit l'issue que le nœud a réellement rendue.
+    result = run.get("result") or {}
+    repeated = (_repeated_failure(conn, item, run, outcome)
+                if run.get("id") is not None else None)
+    if repeated is not None:
+        message = (f"relance identique supprimée — runs {repeated} "
+                   f"et {run['id']}")
+        result = {**result, "retry": message}
+        run = {**run, "result": result}
+        conn.execute("UPDATE node_run SET result = %s WHERE id = %s",
+                     (json.dumps(result), run["id"]))
+
     if run.get("id") is not None:
         write_failure_trace(item["id"], run, outcome)
 
@@ -667,7 +741,7 @@ def _route(conn, item, bundle, run, outcome: str, kind: str) -> None:
         # défaut central : réessayer sur place, puis escalader. `stalled` est
         # de cette famille — un agent pendu n'a rien produit, donc rien
         # brûlé : la relance est la seule chose qui l'ait jamais sauvé.
-        if run.get("attempt", 0) < MAX_ATTEMPTS:
+        if repeated is None and run.get("attempt", 0) < MAX_ATTEMPTS:
             target = run["node"]
         else:
             target = on_kernel["escalate_to"]
@@ -784,6 +858,12 @@ def reap(conn: psycopg.Connection) -> int:
             CLAIMED.discard(run["id"])
             post = lease_autopsy(item["id"], run,
                                  state == AGENT_ALIVE, orphaned)
+            run = {**run, "outcome": post["outcome"], "result": post}
+            if post["outcome"] == "crashed":
+                signature = retry_signature(item["id"], run, post["outcome"])
+                if signature is not None:
+                    post = {**post, "_retry_signature": signature}
+                    run["result"] = post
             conn.execute(
                 "UPDATE node_run SET status = 'faulted', outcome = %s, result = %s, "
                 "finished_at = %s WHERE id = %s",

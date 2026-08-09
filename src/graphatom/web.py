@@ -639,7 +639,7 @@ def _table(headers: list[str], rows: list[str]) -> str:
 
 # jsonb ne garde pas l'ordre des clés : le post-mortem d'abord, la trace après
 RESULT_ORDER = ["outcome", "exit_code", "timeout", "error"]
-RESULT_APART = {"log_tail", "usage"}  # l'un en bloc dessous, l'autre en colonne
+RESULT_APART = {"_retry_signature", "log_tail", "usage"}
 
 
 def _result(result: dict | None) -> str:
