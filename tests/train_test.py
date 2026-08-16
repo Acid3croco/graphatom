@@ -504,6 +504,10 @@ def main() -> None:
     debut = time.monotonic()
     db.init_db()
     with db.connect() as conn:
+        # une base réutilisée peut garder un item d'un run précédent : la
+        # voie unique doit être libre avant la première admission
+        conn.execute("UPDATE work_item SET terminal_at = now() "
+                     "WHERE terminal_at IS NULL")
         print("— partie 1 : les transitions —")
         part1_nominal(conn)
         part1_issue_inconnue(conn)
