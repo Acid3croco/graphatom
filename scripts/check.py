@@ -126,8 +126,9 @@ def main() -> None:
             _python(TRAIN_PY)
         elif tier == "core":
             _run(["uv", "run", "python", "-c",
-                  "import graphatom.blocks, graphatom.graph, graphatom.kernel, "
-                  "graphatom.scheduler, graphatom.web"])
+                  "import graphatom.activation, graphatom.blocks, graphatom.gates, "
+                  "graphatom.graph, graphatom.kernel, graphatom.scheduler, "
+                  "graphatom.web"])
             _python(CORE_PY)
         elif tier == "ui":
             _run(["npm", "ci", "--prefer-offline"], ROOT / "front")

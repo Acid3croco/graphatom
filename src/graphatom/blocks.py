@@ -1228,19 +1228,6 @@ def _trace(item_id: int, run_id: int) -> tuple[Path, dict] | None:
     return None
 
 
-def agent_alive(item_id: int, run_id: int) -> bool:
-    """L'agent de ce run travaille-t-il encore ? La lecture de `revoke_orphan`,
-    sans rien tuer.
-
-    C'est ce que le faucheur interroge pour trancher entre un dépassement de
-    budget et une panne. Les mêmes garde-fous, donc : la trace doit être
-    celle du run — une tentative suivante l'écrase — et le chef du groupe
-    toujours celui qu'on a lancé, un pid se recycle mais pas son identité.
-    Pas de trace, trace d'un autre run, identité périmée : plus personne au
-    travail.
-    """
-    return agent_state(item_id, run_id) == AGENT_ALIVE
-
 
 def agent_state(item_id: int, run_id: int) -> str:
     """État certain de l'agent : vivant, mort, ou identité indécidable.

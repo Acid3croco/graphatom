@@ -53,11 +53,10 @@ MD=""            # portes.md, connu dès que le workspace l'est
 
 # Les douze modules du paquet : une erreur de syntaxe n'importe où dans
 # `src/` tombe ici, avant même qu'un test soit choisi.
-MODULES="import graphatom.blocks, graphatom.channel, graphatom.cli, \
-graphatom.db, graphatom.github_sync, graphatom.graph, graphatom.heartbeat, \
-graphatom.kernel, graphatom.quota, graphatom.scheduler, \
-graphatom.executors, graphatom.web, \
-graphatom.worktree"
+MODULES="import graphatom.activation, graphatom.blocks, graphatom.channel, \
+graphatom.cli, graphatom.db, graphatom.gates, graphatom.github_sync, \
+graphatom.graph, graphatom.heartbeat, graphatom.kernel, graphatom.quota, \
+graphatom.scheduler, graphatom.executors, graphatom.web, graphatom.worktree"
 
 # Ce qui rend la suite concernée : le diff du candidat touche du code, un
 # bundle, le schéma ou la déclaration du projet. Un diff qui n'a que de la
