@@ -50,7 +50,7 @@ def _request(conn: psycopg.Connection) -> dict | None:
     appliqué dont le résultat porte un ``deploy_sha`` est une demande.
     """
     return conn.execute(
-        "SELECT id, item_id, result FROM node_run "
+        "SELECT id, item_id, node, result FROM node_run "
         "WHERE status = 'applied' AND outcome = 'done' "
         "AND result->>'deploy_sha' IS NOT NULL "
         "ORDER BY finished_at DESC, id DESC LIMIT 1"
@@ -65,9 +65,9 @@ def _state(conn: psycopg.Connection, request: dict, state: dict) -> None:
     )
 
 
-def _report(item_id: int, *lines: str) -> None:
+def _report(item_id: int, node: str, *lines: str) -> None:
     """Ajoute un état au rapport encore présent, sans casser le worker nettoyé."""
-    report = item_workspace(item_id) / "deploy.md"
+    report = item_workspace(item_id) / f"{node}.md"
     try:
         with report.open("a") as out:
             for line in lines:
@@ -88,7 +88,7 @@ def reconcile(conn: psycopg.Connection) -> bool:
         state = {"status": "active", "worker_sha": WORKER_SHA}
         if previous != state:
             _state(conn, request, state)
-            _report(request["item_id"],
+            _report(request["item_id"], request["node"],
                     f"worker actif sur le SHA voulu {wanted}")
         return False
 
@@ -103,7 +103,7 @@ def reconcile(conn: psycopg.Connection) -> bool:
                  "error": f"checkout {checkout or 'inconnu'} différent"}
         if previous != state:
             _state(conn, request, state)
-            _report(request["item_id"],
+            _report(request["item_id"], request["node"],
                     f"worker porte {WORKER_SHA} - voulu {wanted}",
                     f"activation en attente - {state['error']}")
         return False  # verify_deploy doit router cette discordance
@@ -120,7 +120,7 @@ def reconcile(conn: psycopg.Connection) -> bool:
                  "wanted_sha": wanted, "error": "cksum indisponible"}
         if previous != state:
             _state(conn, request, state)
-            _report(request["item_id"],
+            _report(request["item_id"], request["node"],
                     "activation du worker échouée - cksum indisponible")
         print("activation du worker échouée - cksum indisponible", flush=True)
         return True
@@ -157,13 +157,13 @@ def reconcile(conn: psycopg.Connection) -> bool:
                      "error": "services discordants : " + ", ".join(wrong)}
             if previous != state:
                 _state(conn, request, state)
-                _report(request["item_id"], *(
+                _report(request["item_id"], request["node"], *(
                     f"{name} porte finalement {services[name] or 'aucun SHA'} - voulu {wanted}"
                     for name in DEPLOYED_SERVICES
                 ), f"activation en attente - {state['error']}")
             return False
 
-        _report(request["item_id"], *(
+        _report(request["item_id"], request["node"], *(
             f"{name} porte finalement {services[name]} - voulu {wanted}"
             for name in DEPLOYED_SERVICES
         ))
@@ -171,7 +171,7 @@ def reconcile(conn: psycopg.Connection) -> bool:
         state = {"status": "pending", "worker_sha": WORKER_SHA,
                  "wanted_sha": wanted, "attempted_at": kernel.now().isoformat()}
         _state(conn, request, state)
-        _report(request["item_id"],
+        _report(request["item_id"], request["node"],
                 f"worker porte {WORKER_SHA} - voulu {wanted}",
                 "résultat appliqué - activation du worker demandée")
         try:
@@ -186,7 +186,7 @@ def reconcile(conn: psycopg.Connection) -> bool:
             state["status"] = "error"
             state.setdefault("error", f"systemctl code {restarted.returncode}")
             _state(conn, request, state)
-            _report(request["item_id"],
+            _report(request["item_id"], request["node"],
                     f"activation du worker échouée - {state['error']}")
         return True
     finally:

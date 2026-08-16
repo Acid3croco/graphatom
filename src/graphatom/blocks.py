@@ -947,6 +947,12 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
         outcome = result["outcome"]
     except (OSError, ValueError, KeyError, TypeError) as exc:  # pas d'issue valide
         return _starved(starved_path) or _autopsy(proc, log, exc, timeout=False)
+    # un deploy_sha est une capacité, pas un champ libre : seul un nœud qui
+    # déclare `activation` peut demander un redémarrage du worker
+    if "deploy_sha" in result and not ctx.config.get("activation"):
+        return _autopsy(proc, log, ValueError(
+            "deploy_sha rendu par un nœud sans activation déclarée"),
+            timeout=False)
     # la porte déclarée du nœud rejoue sa preuve mécanique sur le résultat :
     # elle peut rétrograder un succès, jamais l'inverse — voir `gates`
     if gate := ctx.config.get("gate"):

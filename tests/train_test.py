@@ -8,7 +8,7 @@ promet :
     1. avancement nominal, journal contigu v1..vN
     2. issue inconnue (« le nœud rend n'importe quoi ») → invalid_result,
        retries sur place, puis escalade
-    3. crash → retry ; échec identique répété → escalade anticipée
+    3. crash → retry sur place, avec sa marge de tentatives
     4. timed_out / starved → escalade immédiate ; stalled → retry sur place
     5. résultat tardif → superseded, l'état de l'item ne bouge pas
     6. le budget d'escalades ne se régénère jamais → budget_exhausted
@@ -24,15 +24,18 @@ promet :
    14. bail expiré, agent déjà mort → faucheur → crashed
    15. bail expiré, agent encore vivant → faucheur → timed_out, et le
        groupe de processus est bien révoqué
+   16. le même échec, à l'identique, une seconde fois → escalade anticipée,
+       sans brûler le reste de la marge
 
   partie 3 — le train entier (ordonnanceur réel, blocs stub) :
-   16. admission → FETCH → ACT → JUDGE → WAIT → réponse → terminal
-   17. échéance de question dépassée → expired
-   18. wall_deadline dépassée → exhausted_to
+   17. admission → FETCH → ACT → JUDGE → WAIT → réponse → terminal
+   18. échéance de question dépassée → expired
+   19. wall_deadline dépassée → exhausted_to
 
 Hermétique : aucun réseau, aucun agent LLM, aucun GitHub. Postgres vient
-d'un conteneur docker jetable (sauf si GRAPHATOM_DSN est déjà posé), les
-workspaces vont dans un répertoire temporaire.
+d'un conteneur docker jetable — GRAPHATOM_DSN de l'environnement n'est
+jamais touché ; seule une base explicitement donnée par GRAPHATOM_TRAIN_DSN
+est réutilisée. Les workspaces vont dans un répertoire temporaire.
 
 Usage : uv run python tests/train_test.py
 """
@@ -54,8 +57,11 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from outils import provision_postgres  # noqa: E402
 
-if "GRAPHATOM_DSN" not in os.environ:
-    os.environ["GRAPHATOM_DSN"] = provision_postgres("graphatom-train")
+# Jamais la base que GRAPHATOM_DSN désigne : la porte migre, termine les
+# items et libère la voie — sur une production, ce serait un dégât. Seule
+# une base explicitement donnée POUR la porte est réutilisée.
+os.environ["GRAPHATOM_DSN"] = (os.environ.get("GRAPHATOM_TRAIN_DSN")
+                               or provision_postgres("graphatom-train"))
 
 from graphatom import blocks, channel, db, effects, graph, kernel, scheduler  # noqa: E402
 from graphatom.blocks import PGID_FILE, Context  # noqa: E402
@@ -454,6 +460,20 @@ def part2_faucheur_vivant(conn) -> None:
     print("15. bail expiré, agent vivant → timed_out, groupe révoqué ✓")
 
 
+def part2_echec_identique(conn) -> None:
+    item_id = admet(conn, bundle_commande("exit 3"))
+    run = kernel.claim(conn, item_id)
+    execute_bloc(conn, item_id, run)
+    assert etat(conn, item_id)["state"] == "travail", "premier crash : retry"
+    run = kernel.claim(conn, item_id)
+    assert run["attempt"] == 2, run["attempt"]
+    execute_bloc(conn, item_id, run)
+    assert etat(conn, item_id)["state"] == "escalate", \
+        "un échec identique répété doit escalader sans brûler la marge"
+    termine(conn, item_id)
+    print("16. le même échec deux fois → escalade anticipée ✓")
+
+
 # --------------------------------------- partie 3 : le train entier, en stub
 
 def _tick_jusqu_a(conn, item_id: int, etat_visé: str, seconds: float = 30.0):
@@ -476,7 +496,7 @@ def part3_train_complet(conn) -> None:
     journal_contigu(conn, item_id)
     chemin = [e["kind"] for e in journal(conn, item_id)]
     assert chemin[0] == "admitted" and chemin[-1] == "answer", chemin
-    print("16. train entier : ingest → travail → verif → question → fini ✓")
+    print("17. train entier : ingest → travail → verif → question → fini ✓")
 
 
 def part3_echeance_question(conn) -> None:
@@ -486,7 +506,7 @@ def part3_echeance_question(conn) -> None:
                  "WHERE item_id = %s AND state = 'open'", (item_id,))
     _tick_jusqu_a(conn, item_id, "abandon")
     assert journal(conn, item_id)[-1]["kind"] == "deadline"
-    print("17. question sans réponse → expired → abandon ✓")
+    print("18. question sans réponse → expired → abandon ✓")
 
 
 def part3_wall_deadline(conn) -> None:
@@ -497,7 +517,7 @@ def part3_wall_deadline(conn) -> None:
     _tick_jusqu_a(conn, item_id, "abandon")
     assert journal(conn, item_id)[-1]["kind"] == "wall"
     journal_contigu(conn, item_id)
-    print("18. wall_deadline dépassée → abandon, journal contigu ✓")
+    print("19. wall_deadline dépassée → abandon, journal contigu ✓")
 
 
 def main() -> None:
@@ -529,6 +549,7 @@ def main() -> None:
         part2_pendu_apres_travail(conn)
         part2_faucheur_mort(conn)
         part2_faucheur_vivant(conn)
+        part2_echec_identique(conn)
         conn.execute("UPDATE work_item SET terminal_at = now() "
                      "WHERE terminal_at IS NULL")
 

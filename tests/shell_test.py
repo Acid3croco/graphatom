@@ -1166,7 +1166,8 @@ def main() -> None:
                 "nodes": {
                     "deploy": {
                         "block": "ACT",
-                        "config": {"lease_s": 30, "execution": {
+                        "config": {"lease_s": 30, "activation": True,
+                                   "execution": {
                             "kind": "command",
                             "cmd": "printf '%s\\n' '" + json.dumps({
                                 "outcome": "done", "summary": "chemin réel",

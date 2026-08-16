@@ -157,18 +157,33 @@ def _validate_executions(bundle: dict) -> None:
 
 
 def _validate_gates(bundle: dict) -> None:
-    """La porte déclarée d'un nœud doit exister dans le registre fermé."""
+    """Porte et activation déclarées : registre fermé, variantes comprises."""
     from . import gates
 
+    def check(place: str, spec: dict, config: dict) -> None:
+        gate = config.get("gate")
+        if gate is not None:
+            if spec.get("block") not in EXECUTABLE_BLOCKS:
+                raise GraphError(f"{place} : gate sur un bloc {spec.get('block')}")
+            if gate not in gates.GATES:
+                raise GraphError(f"{place} : porte inconnue {gate!r} — "
+                                 f"livrées : {sorted(gates.GATES)}")
+        activation = config.get("activation")
+        if activation is not None and not isinstance(activation, bool):
+            raise GraphError(
+                f"{place} : activation doit être un booléen, vu {activation!r}")
+
     for name, spec in bundle["nodes"].items():
-        gate = (spec.get("config") or {}).get("gate")
-        if gate is None:
+        config = spec.get("config") or {}
+        check(name, spec, config)
+        fanout = config.get("fanout")
+        variants = fanout.get("variants") if isinstance(fanout, dict) else None
+        if not isinstance(variants, list):
             continue
-        if spec.get("block") not in EXECUTABLE_BLOCKS:
-            raise GraphError(f"{name} : gate sur un bloc {spec.get('block')}")
-        if gate not in gates.GATES:
-            raise GraphError(f"{name} : porte inconnue {gate!r} — "
-                             f"livrées : {sorted(gates.GATES)}")
+        for index, variant in enumerate(variants):
+            if isinstance(variant, dict):
+                check(f"{name}.fanout.variants[{index}]", spec,
+                      _overlay(config, variant))
 
 
 def _validate_agent_values(place: str, agent: dict, allowed: set[str]) -> None:

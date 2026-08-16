@@ -37,7 +37,8 @@ import psycopg
 
 from . import activation, heartbeat, kernel
 from .blocks import BLOCKS, Context
-from .graph import FANOUT_MAX_CANDIDATES, candidate_node, fanout_variants, load_bundle
+from .graph import (FANOUT_MAX_CANDIDATES, GraphError, candidate_node,
+                    fanout_variants, load_bundle, validate)
 
 RECONNECT_MAX_S = 30.0  # plafond du backoff : une base absente n'est jamais abandonnée
 
@@ -113,6 +114,7 @@ def run_forever(poll_s: float = 0.5) -> None:
     while True:
         try:
             with connect() as conn:
+                _preflight(conn)
                 current_incarnation = incarnation(conn)
                 if (previous_incarnation is not None
                         and current_incarnation != previous_incarnation):
@@ -132,6 +134,27 @@ def run_forever(poll_s: float = 0.5) -> None:
                   flush=True)
             time.sleep(wait_s)
             wait_s = min(wait_s * 2, RECONNECT_MAX_S)
+
+
+def _preflight(conn: psycopg.Connection) -> None:
+    """Refuse de démarrer sur un item actif à la révision devenue invalide.
+
+    Le contrat d'exécution a une rupture assumée : une révision historique
+    doit être republiée. Un item encore actif dessus ne doit surtout pas
+    continuer — ses agents deviendraient des stubs muets. Le refus est
+    bruyant et nomme l'item ; le remède est de republier puis réadmettre.
+    """
+    for row in conn.execute(
+            "SELECT id, revision FROM work_item WHERE terminal_at IS NULL"
+    ).fetchall():
+        try:
+            validate(load_bundle(conn, row["revision"]))
+        except GraphError as exc:
+            raise SystemExit(
+                f"item {row['id']} épinglé sur une révision incompatible "
+                f"({row['revision'][:12]}…) : {exc} — republier le graph et "
+                "réadmettre l'item avant de relancer le rail"
+            )
 
 
 def _cause(exc: Exception) -> str:
