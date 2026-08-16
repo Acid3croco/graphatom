@@ -22,6 +22,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# La porte du train : la métrique unique — noyau + pannes + train entier,
+# sur un Postgres jetable qu'elle provisionne elle-même (docker requis).
+TRAIN_PY = ("train_test.py",)
+
 CORE_PY = (
     "agent_executor_test.py", "answer_test.py", "api_test.py",
     "checklist_test.py", "codex_routing_test.py", "criteria_test.py",
@@ -62,7 +66,7 @@ def _inventory() -> None:
     shell = {path.name for path in tests.glob("*_test.sh")}
     node = {path.name for suffix in ("*.mjs", "*.cjs")
             for path in tests.glob(suffix) if path.stem.endswith("_test")}
-    expected_python = set(CORE_PY) | set(FULL_PY) | set(LIVE_PY)
+    expected_python = set(TRAIN_PY) | set(CORE_PY) | set(FULL_PY) | set(LIVE_PY)
     expected_shell = set(CORE_SH) | set(FULL_SH)
     problems = []
     for label, seen, expected in (
@@ -109,8 +113,10 @@ def main() -> None:
     args = parser.parse_args()
 
     _inventory()
-    print(f"inventaire fermé : {len(CORE_PY) + len(FULL_PY) + len(LIVE_PY)} "
+    print(f"inventaire fermé : "
+          f"{len(TRAIN_PY) + len(CORE_PY) + len(FULL_PY) + len(LIVE_PY)} "
           f"tests Python, {len(CORE_SH) + len(FULL_SH)} portes shell ✓")
+    _python(TRAIN_PY)
     _run(["uv", "run", "python", "-c",
           "import graphatom.blocks, graphatom.graph, graphatom.kernel, "
           "graphatom.scheduler, graphatom.web"])
