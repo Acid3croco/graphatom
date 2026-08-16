@@ -38,7 +38,6 @@ Usage : uv run python tests/train_test.py
 """
 
 import atexit
-import json
 import os
 import shutil
 import subprocess
@@ -53,50 +52,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-
-# ------------------------------------------------------------ provisionnement
-
-def _provision_postgres() -> str:
-    """Une base jetable dans un conteneur au nom et au port uniques."""
-    name = f"graphatom-train-{os.getpid()}-{uuid.uuid4().hex[:6]}"
-    subprocess.run(
-        ["docker", "run", "-d", "--rm", "--name", name,
-         "-e", "POSTGRES_USER=graphatom", "-e", "POSTGRES_PASSWORD=graphatom",
-         "-e", "POSTGRES_DB=graphatom", "-p", "127.0.0.1:0:5432",
-         "postgres:17"],
-        check=True, capture_output=True,
-    )
-    atexit.register(subprocess.run, ["docker", "rm", "-f", name],
-                    capture_output=True)
-    port = None
-    for _ in range(100):
-        out = subprocess.run(["docker", "port", name, "5432/tcp"],
-                             capture_output=True, text=True)
-        if out.returncode == 0 and out.stdout.strip():
-            port = out.stdout.strip().splitlines()[0].rsplit(":", 1)[1]
-            ready = subprocess.run(
-                ["docker", "exec", name, "pg_isready", "-U", "graphatom"],
-                capture_output=True)
-            if ready.returncode == 0:
-                break
-        time.sleep(0.3)
-    else:
-        sys.exit("ÉCHEC : le Postgres jetable ne démarre pas")
-    dsn = f"postgresql://graphatom:graphatom@127.0.0.1:{port}/graphatom"
-    # pg_isready répond dans le conteneur avant que le serveur n'écoute
-    # vraiment côté hôte : l'init de l'image redémarre postgres une fois
-    import psycopg
-    for _ in range(100):
-        try:
-            psycopg.connect(dsn).close()
-            return dsn
-        except psycopg.OperationalError:
-            time.sleep(0.3)
-    sys.exit("ÉCHEC : le Postgres jetable ne répond pas côté hôte")
-
+from outils import provision_postgres  # noqa: E402
 
 if "GRAPHATOM_DSN" not in os.environ:
-    os.environ["GRAPHATOM_DSN"] = _provision_postgres()
+    os.environ["GRAPHATOM_DSN"] = provision_postgres("graphatom-train")
 
 from graphatom import blocks, channel, db, effects, graph, kernel, scheduler  # noqa: E402
 from graphatom.blocks import PGID_FILE, Context  # noqa: E402

@@ -89,7 +89,8 @@ PROMPT = "Tu travailles sur {subject_key}, dans l'atelier de {label}."
 
 def bundle(labels: list[str]) -> dict:
     """Le graph de la course : un ACT en fan-out, un candidat par label."""
-    variantes = [{"label": nom, "agent": {"cmd": RAPIDE if nom == "rapide" else LENT}}
+    variantes = [{"label": nom,
+                  "execution": {"cmd": RAPIDE if nom == "rapide" else LENT}}
                  for nom in labels]
     return {
         "name": f"fanout-worktree-{'-'.join(labels)}",
@@ -100,8 +101,9 @@ def bundle(labels: list[str]) -> dict:
             "travail": {
                 "block": "ACT",
                 "config": {
-                    "agent": {"cmd": LENT, "prompt": PROMPT,
-                              "timeout_s": 120, "silence_s": 120},
+                    "execution": {"kind": "agent", "cmd": LENT,
+                                  "timeout_s": 120, "silence_s": 120},
+                    "agent": {"prompt": PROMPT, "cli": "codex"},
                     "lease_s": 300,  # le faucheur n'a rien à faire ici
                     "fanout": {"variants": variantes, "reduce": "first_pass"},
                 },

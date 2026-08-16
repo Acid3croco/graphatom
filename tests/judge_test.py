@@ -98,8 +98,8 @@ def bundle(issues: list[str], elu: str = "B", keep: int = 2) -> dict:
     """
     variantes = [
         {"label": f"angle-{i}", "strategy": f"stratégie numéro {i}",
-         "agent": {"cmd": (CANDIDAT.replace("{marqueur}", MARQUEURS[i])
-                           + (REUSSIT if issue == "ok" else RATE))}}
+         "execution": {"cmd": (CANDIDAT.replace("{marqueur}", MARQUEURS[i])
+                               + (REUSSIT if issue == "ok" else RATE))}}
         for i, issue in enumerate(issues)]
     return {
         "name": f"judge-{'-'.join(issues)}-{elu}-{keep}",
@@ -111,9 +111,10 @@ def bundle(issues: list[str], elu: str = "B", keep: int = 2) -> dict:
                 "block": "ACT",
                 "config": {
                     "lease_s": 300,  # le faucheur n'a rien à faire ici
-                    "agent": {"cmd": CANDIDAT + REUSSIT,
-                              "prompt": "Angle {label} : {strategy}.",
-                              "timeout_s": 60, "silence_s": 60},
+                    "execution": {"kind": "agent", "cmd": CANDIDAT + REUSSIT,
+                                  "timeout_s": 60, "silence_s": 60},
+                    "agent": {"prompt": "Angle {label} : {strategy}.",
+                              "cli": "codex"},
                     "fanout": {"variants": variantes, "reduce": "keep_n", "n": keep},
                 },
                 "edges": {"ok": "juge"},
@@ -124,11 +125,15 @@ def bundle(issues: list[str], elu: str = "B", keep: int = 2) -> dict:
                 "config": {
                     "lease_s": 300,
                     "finalists_from": "travail",
-                    "agent": {
+                    "execution": {
+                        "kind": "agent",
                         "cmd": (f"# modèle {MODELE}\n"
                                 + JUGE.replace("{elu}", elu).replace("{raison}", RAISON)),
-                        "prompt": "Départage les finalistes de {subject_key}.",
                         "timeout_s": 60, "silence_s": 60,
+                    },
+                    "agent": {
+                        "prompt": "Départage les finalistes de {subject_key}.",
+                        "cli": "codex",
                     },
                 },
                 "edges": {"sole": "fini", "chosen": "fini", "none": "travail"},

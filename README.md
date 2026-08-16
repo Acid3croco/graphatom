@@ -54,16 +54,21 @@ Une seule commande tient l'inventaire fermé de toutes les preuves. Elle
 refuse aussi un fichier de test neuf qui n'est classé dans aucune porte :
 
 ```sh
-uv run python scripts/check.py          # noyau, sans service DB, Docker ni LLM réel
-uv run python scripts/check.py --full   # ajoute base, crash, concurrence et image Docker
-uv run python scripts/check.py --live   # ajoute le vrai fournisseur LLM gratuit
+uv run python scripts/check.py        # train + core (défaut)
+uv run python scripts/check.py train  # la métrique unique : la porte du train
+uv run python scripts/check.py ui     # build Next.js + portes DOM
+uv run python scripts/check.py full   # base, crash, concurrence, image Docker
+uv run python scripts/check.py live   # le vrai fournisseur LLM gratuit
 ```
 
-La porte s'arrête au premier échec et imprime la commande exacte. `--full`
-est la preuve locale avant publication. `--live` dépend de `opencode`, de son
-modèle gratuit et du réseau ; ce fournisseur externe n'est pas une condition
-de la preuve hermétique. GitHub Actions rejoue la porte de noyau sur chaque
-push et chaque pull request.
+La porte s'arrête au premier échec et imprime la commande exacte. La porte
+du train (`tests/train_test.py`) est la métrique unique : elle provisionne
+son propre Postgres jetable (docker) et prouve le noyau, ses pannes et le
+train entier en une douzaine de secondes. `full` est la preuve locale avant
+publication ; ses tests destructeurs provisionnent chacun leur base jetable
+et ne touchent jamais celle de l'environnement. `live` dépend de `opencode`,
+de son modèle gratuit et du réseau. GitHub Actions rejoue `train`, `core`
+et `ui` en trois jobs séparés sur chaque push et chaque pull request.
 
 ## Lancer le squelette (milestone 1)
 

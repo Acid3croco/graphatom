@@ -87,18 +87,15 @@ tests/criteria_test.py
 tests/depends_test.py
 tests/split_deps_test.py
 tests/heartbeat_test.py
-tests/postgres_recovery_test.py
 tests/links_test.py
 tests/live_test.py
 tests/failure_trace_test.py
 tests/agent_executor_test.py
 tests/test_harness_test.py
-tests/seed_test.py
 tests/codex_routing_test.py
 tests/orphans_test.py
 tests/passation_test.py
 tests/starved_test.py
-tests/timeout_marge_test.py
 tests/timeout_test.py"
 
 dit() {  # une ligne de journal, à l'écran et dans le compte rendu

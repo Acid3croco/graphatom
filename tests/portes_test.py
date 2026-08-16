@@ -255,7 +255,7 @@ def portes_sans_base() -> None:
     choisies = bloc.group(1).split()
     assert len(choisies) >= 5, choisies
     assert "tests/crash_test.py" not in choisies, \
-        "crash_test.py détruit la base nommée par GRAPHATOM_DSN : jamais en porte"
+        "crash_test.py est bien trop lent pour une porte au budget de 85 s"
     for nom in choisies:
         chemin = ROOT / nom
         assert chemin.is_file(), f"{nom} : porte nommée, test introuvable"

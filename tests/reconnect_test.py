@@ -30,9 +30,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import psycopg  # noqa: E402
 
-from graphatom import blocks, db, kernel, scheduler  # noqa: E402
+from outils import kill_group, provision_postgres, sh  # noqa: E402
 
-from outils import kill_group, sh  # noqa: E402
+# une base à lui, détruite avec lui : jamais celle que GRAPHATOM_DSN désigne
+os.environ["GRAPHATOM_DSN"] = provision_postgres("graphatom-reconnect")
+
+from graphatom import blocks, db, kernel, scheduler  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 # comme le crash-test : le test travaille dans un répertoire à lui, jamais

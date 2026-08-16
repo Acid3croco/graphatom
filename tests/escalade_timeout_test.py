@@ -70,8 +70,8 @@ def bundle(nom: str) -> dict:
         "nodes": {
             "travail": {
                 "block": "ACT",
-                "config": {"agent": {"cmd": "true", "prompt": "ne fais rien",
-                                     "timeout_s": BUDGET_S}},
+                "config": {"execution": {"kind": "command", "cmd": "true",
+                                         "timeout_s": BUDGET_S}},
                 "edges": {"ok": "fini"},
             },
             "escalate": {
@@ -110,8 +110,8 @@ class FauxConn:
 def contexte(workdir: Path, cmd: str, node: str) -> blocks.Context:
     blocks.DATA_DIR = workdir
     spec = {"block": "ACT", "edges": {"ok": "fini"},
-            "config": {"agent": {"cmd": cmd, "prompt": "ne fais rien",
-                                 "timeout_s": COURT_S}}}
+            "config": {"execution": {"kind": "command", "cmd": cmd,
+                                     "timeout_s": COURT_S}}}
     return blocks.Context(
         FauxConn(),
         {"id": 1, "node": node, "cycle": 1, "attempt": 1},

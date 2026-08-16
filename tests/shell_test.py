@@ -992,16 +992,16 @@ def main() -> None:
     # 22. l'activation vient du résultat appliqué, jamais du HEAD vu pendant
     # le shell. Une erreur reste durable et le tick suivant la rejoue ; seul
     # le heartbeat du worker neuf acquitte la demande.
-    activation = tmp / "activation"
-    activation.mkdir()
-    cible = depot(activation)
+    quartier = tmp / "activation"
+    quartier.mkdir()
+    cible = depot(quartier)
     wanted = git(cible, "rev-parse", "HEAD")
-    outil, journal, code = faux_systemctl(activation / "systemctl")
-    deploiement = activation / "bin"
+    outil, journal, code = faux_systemctl(quartier / "systemctl")
+    deploiement = quartier / "bin"
     faux_deploiement(deploiement)
-    for service in scheduler.DEPLOYED_SERVICES:
+    for service in blocks.DEPLOYED_SERVICES:
         (deploiement / f"sha-{service}.txt").write_text(wanted)
-    donnees, ancienne_data = activation / "data", blocks.DATA_DIR
+    donnees, ancienne_data = quartier / "data", blocks.DATA_DIR
     blocks.DATA_DIR = donnees
     ancien_sha = activation.WORKER_SHA
     ancien_repo = os.environ.get("GRAPHATOM_REPO_DIR")
@@ -1075,7 +1075,7 @@ def main() -> None:
             conn.execute("UPDATE heartbeat SET worker_sha = %s WHERE who = 'rail'",
                          (wanted,))
 
-            for service in scheduler.DEPLOYED_SERVICES:
+            for service in blocks.DEPLOYED_SERVICES:
                 label = deploiement / f"sha-{service}.txt"
                 label.write_text("0" * 40)
                 assert activation.reconcile(conn) == 0
@@ -1112,7 +1112,7 @@ def main() -> None:
                 "status": "active", "worker_sha": wanted,
             }, saved
             rapport = (workspace / "deploy.md").read_text()
-            for service in scheduler.DEPLOYED_SERVICES:
+            for service in blocks.DEPLOYED_SERVICES:
                 assert f"{service} porte finalement {wanted}" in rapport
 
             # Deux releases proches : le réconciliateur ne lit que la plus
@@ -1121,7 +1121,7 @@ def main() -> None:
             git(cible, "add", "seconde.txt")
             git(cible, "commit", "-qm", "seconde release")
             newest = git(cible, "rev-parse", "HEAD")
-            for service in scheduler.DEPLOYED_SERVICES:
+            for service in blocks.DEPLOYED_SERVICES:
                 (deploiement / f"sha-{service}.txt").write_text(newest)
             second_id = kernel.admit(
                 conn, revision, f"activation-plus-recente:{os.getpid()}",
@@ -1155,7 +1155,7 @@ def main() -> None:
             git(cible, "add", "troisieme.txt")
             git(cible, "commit", "-qm", "troisième release")
             target = git(cible, "rev-parse", "HEAD")
-            for service in scheduler.DEPLOYED_SERVICES:
+            for service in blocks.DEPLOYED_SERVICES:
                 (deploiement / f"sha-{service}.txt").write_text(target)
             real_bundle = {
                 "name": f"activation-reelle-{os.getpid()}",
@@ -1166,14 +1166,13 @@ def main() -> None:
                 "nodes": {
                     "deploy": {
                         "block": "ACT",
-                        "config": {"lease_s": 30, "agent": {
+                        "config": {"lease_s": 30, "execution": {
+                            "kind": "command",
                             "cmd": "printf '%s\\n' '" + json.dumps({
                                 "outcome": "done", "summary": "chemin réel",
                                 "deploy_sha": target,
                             }) + "' > outcome.json",
-                            "prompt": "Doublure déterministe du déploiement.",
                             "timeout_s": 10, "silence_s": 10,
-                            "passation": False,
                         }},
                         "edges": {"done": "fini"},
                     },
@@ -1252,17 +1251,17 @@ def main() -> None:
     # 23. Les images Python de production ne contiennent pas Git. Le SHA du
     # worker est une information de diagnostic : son absence ne doit jamais
     # empêcher la migration, le web ou le canal GitHub de démarrer.
-    vraie_execution = scheduler.subprocess.run
+    vraie_execution = activation.subprocess.run
 
     def sans_git(*_args, **_kwargs):
         raise FileNotFoundError("git")
 
-    scheduler.subprocess.run = sans_git
+    activation.subprocess.run = sans_git
     try:
-        assert scheduler._worker_sha() == "inconnu"
+        assert activation._worker_sha() == "inconnu"
     finally:
-        scheduler.subprocess.run = vraie_execution
-    print("23. scheduler importable sans Git dans l'image de production ✓")
+        activation.subprocess.run = vraie_execution
+    print("23. activation importable sans Git dans l'image de production ✓")
 
     shutil.rmtree(tmp, ignore_errors=True)
     print("\nnœuds shell : OK — déterministes, et jamais sans outcome")
