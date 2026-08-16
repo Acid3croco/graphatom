@@ -156,6 +156,21 @@ def _validate_executions(bundle: dict) -> None:
                 )
 
 
+def _validate_gates(bundle: dict) -> None:
+    """La porte déclarée d'un nœud doit exister dans le registre fermé."""
+    from . import gates
+
+    for name, spec in bundle["nodes"].items():
+        gate = (spec.get("config") or {}).get("gate")
+        if gate is None:
+            continue
+        if spec.get("block") not in EXECUTABLE_BLOCKS:
+            raise GraphError(f"{name} : gate sur un bloc {spec.get('block')}")
+        if gate not in gates.GATES:
+            raise GraphError(f"{name} : porte inconnue {gate!r} — "
+                             f"livrées : {sorted(gates.GATES)}")
+
+
 def _validate_agent_values(place: str, agent: dict, allowed: set[str]) -> None:
     """Valide les réglages déclaratifs, sans accepter de clé sensible cachée."""
     if not isinstance(agent, dict):
@@ -383,6 +398,7 @@ def validate(bundle: dict) -> None:
     nodes = bundle["nodes"]
     _validate_agents(bundle)
     _validate_executions(bundle)
+    _validate_gates(bundle)
     if bundle["entry"] not in nodes:
         raise GraphError(f"entry inconnu : {bundle['entry']}")
 

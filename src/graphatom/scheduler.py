@@ -212,8 +212,10 @@ def _execute(run_id: int, item_id: int) -> None:
         except Exception as exc:  # le bloc a le droit d'échouer, pas de router
             result = {"outcome": "crashed", "error": str(exc)}
         status = kernel.apply(conn, run_id, result)
-        if (status == "applied" and run["node"] == "deploy"
-                and result.get("outcome") == "done"):
+        # un résultat qui demande un SHA de worker déclenche l'activation —
+        # le contrat, pas le nom du nœud
+        if (status == "applied" and result.get("outcome") == "done"
+                and result.get("deploy_sha")):
             activation.reconcile(conn)
 
 

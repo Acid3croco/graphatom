@@ -19,7 +19,8 @@ from pathlib import Path
 import psycopg
 
 from . import kernel
-from .blocks import DEPLOYED_SERVICES, deployed_service_shas, item_workspace
+from .blocks import item_workspace
+from .gates import DEPLOYED_SERVICES, deployed_service_shas
 
 WORKER_STARTED_AT = dt.datetime.now(dt.timezone.utc)
 
@@ -43,10 +44,14 @@ os.environ.setdefault("GRAPHATOM_WORKER_STARTED_AT", WORKER_STARTED_AT.isoformat
 
 
 def _request(conn: psycopg.Connection) -> dict | None:
-    """Rend la dernière release appliquée qui demande un SHA de worker."""
+    """Rend la dernière release appliquée qui demande un SHA de worker.
+
+    La demande est le contrat, pas le nom du nœud : n'importe quel run
+    appliqué dont le résultat porte un ``deploy_sha`` est une demande.
+    """
     return conn.execute(
         "SELECT id, item_id, result FROM node_run "
-        "WHERE node = 'deploy' AND status = 'applied' AND outcome = 'done' "
+        "WHERE status = 'applied' AND outcome = 'done' "
         "AND result->>'deploy_sha' IS NOT NULL "
         "ORDER BY finished_at DESC, id DESC LIMIT 1"
     ).fetchone()

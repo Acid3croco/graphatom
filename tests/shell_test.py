@@ -68,7 +68,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import activation, blocks, db, executors, graph, kernel, scheduler  # noqa: E402
+from graphatom import activation, blocks, db, executors, gates, graph, kernel, scheduler  # noqa: E402
 from graphatom.blocks import AGENT_TIMEOUT_S  # noqa: E402
 
 from outils import git  # noqa: E402
@@ -999,7 +999,7 @@ def main() -> None:
     outil, journal, code = faux_systemctl(quartier / "systemctl")
     deploiement = quartier / "bin"
     faux_deploiement(deploiement)
-    for service in blocks.DEPLOYED_SERVICES:
+    for service in gates.DEPLOYED_SERVICES:
         (deploiement / f"sha-{service}.txt").write_text(wanted)
     donnees, ancienne_data = quartier / "data", blocks.DATA_DIR
     blocks.DATA_DIR = donnees
@@ -1057,16 +1057,16 @@ def main() -> None:
                 "at = now(), worker_sha = EXCLUDED.worker_sha",
                 (wanted,),
             )
-            assert blocks.verify_deploy_error(conn, item_id, cible) is None
+            assert gates.verify_deploy_error(conn, item_id, cible) is None
             conn.execute("UPDATE heartbeat SET worker_sha = %s WHERE who = 'rail'",
                          ("0" * 40,))
-            assert "worker" in blocks.verify_deploy_error(conn, item_id, cible)
+            assert "worker" in gates.verify_deploy_error(conn, item_id, cible)
             conn.execute(
                 "UPDATE node_run SET result = jsonb_set(result, "
                 "'{deploy_sha}', %s::jsonb) WHERE id = %s",
                 (json.dumps("0" * 40), run["id"]),
             )
-            assert "checkout" in blocks.verify_deploy_error(conn, item_id, cible)
+            assert "checkout" in gates.verify_deploy_error(conn, item_id, cible)
             conn.execute(
                 "UPDATE node_run SET result = jsonb_set(result, "
                 "'{deploy_sha}', %s::jsonb) WHERE id = %s",
@@ -1075,7 +1075,7 @@ def main() -> None:
             conn.execute("UPDATE heartbeat SET worker_sha = %s WHERE who = 'rail'",
                          (wanted,))
 
-            for service in blocks.DEPLOYED_SERVICES:
+            for service in gates.DEPLOYED_SERVICES:
                 label = deploiement / f"sha-{service}.txt"
                 label.write_text("0" * 40)
                 assert activation.reconcile(conn) == 0
@@ -1112,7 +1112,7 @@ def main() -> None:
                 "status": "active", "worker_sha": wanted,
             }, saved
             rapport = (workspace / "deploy.md").read_text()
-            for service in blocks.DEPLOYED_SERVICES:
+            for service in gates.DEPLOYED_SERVICES:
                 assert f"{service} porte finalement {wanted}" in rapport
 
             # Deux releases proches : le réconciliateur ne lit que la plus
@@ -1121,7 +1121,7 @@ def main() -> None:
             git(cible, "add", "seconde.txt")
             git(cible, "commit", "-qm", "seconde release")
             newest = git(cible, "rev-parse", "HEAD")
-            for service in blocks.DEPLOYED_SERVICES:
+            for service in gates.DEPLOYED_SERVICES:
                 (deploiement / f"sha-{service}.txt").write_text(newest)
             second_id = kernel.admit(
                 conn, revision, f"activation-plus-recente:{os.getpid()}",
@@ -1155,7 +1155,7 @@ def main() -> None:
             git(cible, "add", "troisieme.txt")
             git(cible, "commit", "-qm", "troisième release")
             target = git(cible, "rev-parse", "HEAD")
-            for service in blocks.DEPLOYED_SERVICES:
+            for service in gates.DEPLOYED_SERVICES:
                 (deploiement / f"sha-{service}.txt").write_text(target)
             real_bundle = {
                 "name": f"activation-reelle-{os.getpid()}",

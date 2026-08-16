@@ -91,7 +91,7 @@ from pathlib import Path
 
 import psycopg
 
-from . import db, effects, executors, worktree
+from . import db, effects, executors, gates, worktree
 from .graph import KERNEL_OUTCOMES, judge_source
 from .worktree import run_git, run_worktree
 
@@ -130,8 +130,6 @@ POLL_S = 0.2  # granularité de l'attente du process : ce qui borne le budget to
 PRUNED_DIRS = {".git", "node_modules", ".next", "__pycache__", ".venv"}
 GIT_CHARS = 8000  # l'état du worktree cité dans le prompt d'une reprise
 GIT_TIMEOUT_S = 20
-DEPLOY_PROBE_TIMEOUT_S = 5
-DEPLOYED_SERVICES = ("github-sync", "web", "front")
 # la passation du prédécesseur citée dans le prompt. Resserrée à la mesure :
 # les 809 prompts déjà rendus par le rail pèsent 2 750 caractères en médiane,
 # et trois sections courtes tiennent largement dans 2 500 — au-delà, ce n'est
@@ -404,7 +402,7 @@ def _prompt(ctx: Context, workspace: Path, subject: str,
         raise ValueError(f"{ctx.run['node']} : exécution agent sans prompt résolu")
     return os.path.expandvars(
         _fill(ctx, resolved.prompt, subject)
-    ) + ctx.extra + _phase_contract(ctx) + (
+    ) + ctx.extra + (
         "\n\n--- Contrat GraphAtom ---\n"
         f"Tu es le bloc « {ctx.run['node']} » d'un rail d'exécution. "
         f"Ton workspace : {workspace}\n"
@@ -414,33 +412,6 @@ def _prompt(ctx: Context, workspace: Path, subject: str,
         "Sans ce fichier, ta tentative est classée crashed et sera retentée."
         + _demande_passation(ctx, workspace, resolved)
     ) + _passation(ctx) + _reprise(ctx, workspace)
-
-
-def _phase_contract(ctx: Context) -> str:
-    """N'exige pas d'une validation une preuve créée par une phase future."""
-    if ctx.run["node"] != "validate":
-        return ""
-    nodes = ctx.bundle.get("nodes") or {}
-    pending = list((ctx.node.get("edges") or {}).values())
-    seen = set()
-    while pending:
-        node = pending.pop()
-        if node in seen:
-            continue
-        seen.add(node)
-        if node == "deploy":
-            return (
-                "\n\n--- Contrat de phase pré-déploiement ---\n"
-                "Le nœud `deploy` est encore en aval. Son rapport réel "
-                "`deploy.md` ne peut donc pas exister à cette phase. Pour un "
-                "critère de déploiement, rejoue la preuve déterministe et "
-                "versionnée qui le simule. Ne laisse pas une case vide pour "
-                "la seule absence de `deploy.md`. La porte `verify_deploy` "
-                "contrôlera ensuite le checkout, le worker et les services "
-                "réels ; tu ne remplaces pas cette porte.\n"
-            )
-        pending.extend((nodes.get(node) or {}).get("edges", {}).values())
-    return ""
 
 
 def _demande_passation(ctx: Context, workspace: Path,
@@ -913,16 +884,6 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
                         # Copiée avant que la base jetable de l'item remplace
                         # GRAPHATOM_DSN : toutes les places vivent ici.
                         "GRAPHATOM_QUOTA_DSN": db.DSN}
-    if ctx.run["node"] == "verify_deploy":
-        deployed = ctx.conn.execute(
-            "SELECT result->>'deploy_sha' AS sha FROM node_run "
-            "WHERE item_id = %s AND node = 'deploy' AND status = 'applied' "
-            "AND outcome = 'done' AND result->>'deploy_sha' IS NOT NULL "
-            "ORDER BY finished_at DESC, id DESC LIMIT 1",
-            (ctx.item["id"],),
-        ).fetchone()
-        if deployed:
-            env["GRAPHATOM_DEPLOY_SHA"] = deployed["sha"]
     if ctx.worktree is not None:
         # le bloc ne devine pas son checkout : celui d'un candidat n'est pas
         # celui de son item, et aucune convention de nom ne l'en déduit
@@ -986,39 +947,12 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
         outcome = result["outcome"]
     except (OSError, ValueError, KeyError, TypeError) as exc:  # pas d'issue valide
         return _starved(starved_path) or _autopsy(proc, log, exc, timeout=False)
-    if ctx.run["node"] == "verify_deploy" and outcome == "pass":
-        repo = Path(os.environ.get(
-            "GRAPHATOM_REPO_DIR", Path(__file__).resolve().parents[2],
-        ))
-        if error := verify_deploy_error(ctx.conn, ctx.item["id"], repo):
-            result = {"outcome": "fail", "summary": error}
-            outcome = "fail"
-            try:
-                with (workspace / "verify_deploy.md").open("a") as report:
-                    report.write(f"porte du noyau - {error}\n")
-            except OSError:
-                pass  # le résultat durable porte déjà l'échec explicite
-    if ctx.run["node"] == "validate" and outcome == "pass":
-        failures = elected_failures(workspace / "verdict.md")
-        if failures:
-            malformed = failures == [0]
-            listed = ("format du verdict" if malformed else
-                      ", ".join(str(number) for number in failures))
-            result = {
-                "outcome": "fail",
-                "summary": (("la section du finaliste élu ne donne aucun "
-                             "statut numéroté Tenu/Raté") if malformed else
-                            ("le finaliste élu garde des critères ratés par le "
-                             f"juge : {listed}; un nouveau cycle doit les prouver")),
-            }
-            outcome = "fail"
-            try:
-                with (workspace / "validate.md").open("a") as report:
-                    report.write(
-                        f"\n- [ ] {listed} : preuve du juge élu insuffisante.\n"
-                    )
-            except OSError:
-                pass
+    # la porte déclarée du nœud rejoue sa preuve mécanique sur le résultat :
+    # elle peut rétrograder un succès, jamais l'inverse — voir `gates`
+    if gate := ctx.config.get("gate"):
+        if rewritten := gates.apply(gate, ctx, workspace, result):
+            result = rewritten
+            outcome = result["outcome"]
     if resolved.handoff and not is_failure_outcome(outcome):
         if erreur := _passation_invalide(handoff_path):
             return _autopsy(proc, log, ValueError(erreur), timeout=False)
@@ -1038,114 +972,6 @@ def read_outcome(path: Path) -> dict:
             raise ValueError("deploy_sha doit être un SHA git canonique complet")
         result["deploy_sha"] = deploy_sha
     return result
-
-
-def verify_deploy_error(conn: psycopg.Connection, item_id: int,
-                        repo: Path) -> str | None:
-    """Refuse un faux succès si le code actif n'est pas la release demandée.
-
-    Le shell contrôle les services et les URLs. Cette porte du noyau contrôle
-    les deux identités qu'un shell ne doit jamais deviner : la demande durable
-    du run `deploy`, puis le SHA réellement chargé par le worker hôte.
-    """
-    deployed = conn.execute(
-        "SELECT result->>'deploy_sha' AS sha FROM node_run "
-        "WHERE item_id = %s AND node = 'deploy' AND status = 'applied' "
-        "AND outcome = 'done' AND result->>'deploy_sha' IS NOT NULL "
-        "ORDER BY finished_at DESC, id DESC LIMIT 1",
-        (item_id,),
-    ).fetchone()
-    expected = deployed["sha"] if deployed else ""
-    worker = conn.execute(
-        "SELECT worker_sha FROM heartbeat WHERE who = 'rail'"
-    ).fetchone()
-    worker_sha = worker["worker_sha"] if worker else ""
-    checkout_sha = _command_output(
-        ["git", "-C", str(repo), "rev-parse", "HEAD"], timeout=GIT_TIMEOUT_S,
-    )
-    service_shas = deployed_service_shas(repo)
-
-    errors = []
-    if not re.fullmatch(r"[0-9a-f]{40}", expected or ""):
-        errors.append("SHA de déploiement durable absent ou invalide")
-    if checkout_sha != expected:
-        errors.append(f"checkout {checkout_sha or 'inconnu'} différent de {expected or 'inconnu'}")
-    if worker_sha != expected:
-        errors.append(f"worker {worker_sha or 'inconnu'} différent de {expected or 'inconnu'}")
-    wrong = [name for name in DEPLOYED_SERVICES if service_shas[name] != expected]
-    if wrong:
-        errors.append("services discordants : " + ", ".join(wrong))
-    return "; ".join(errors) if errors else None
-
-
-def _command_output(args: list[str], *, cwd: Path | None = None,
-                    env: dict | None = None, timeout: float) -> str:
-    """Rend stdout, ou une valeur vide pour toute commande locale en échec."""
-    try:
-        result = subprocess.run(
-            args, cwd=cwd, env=env, capture_output=True, text=True,
-            check=False, timeout=timeout,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
-    return result.stdout.strip() if result.returncode == 0 else ""
-
-
-def deployed_service_shas(repo: Path) -> dict[str, str]:
-    """Lit sans repli les labels des quatre services réellement lancés."""
-    gh = os.environ.get("GRAPHATOM_GH", "gh")
-    token = _command_output(
-        [gh, "auth", "token"], timeout=DEPLOY_PROBE_TIMEOUT_S,
-    )
-    env = os.environ | {"GITHUB_TOKEN": token}
-    docker = os.environ.get("GRAPHATOM_DOCKER", "docker")
-    seen = {}
-    for service in DEPLOYED_SERVICES:
-        containers = _command_output(
-            [docker, "compose", "ps", "-q", service], cwd=repo, env=env,
-            timeout=DEPLOY_PROBE_TIMEOUT_S,
-        ).splitlines()
-        seen[service] = (_command_output(
-            [docker, "inspect", "--format",
-             '{{ index .Config.Labels "com.graphatom.sha" }}', containers[0]],
-            timeout=DEPLOY_PROBE_TIMEOUT_S,
-        ) if containers else "")
-    return seen
-
-
-def elected_failures(path: Path) -> list[int]:
-    """Rend les critères explicitement ratés dans la section du finaliste élu."""
-    try:
-        verdict = path.read_text()
-    except OSError:
-        return []
-    choices = re.findall(r"Élu\s*:\s*finaliste\s+([A-Z])", verdict)
-    if not choices:
-        return []
-    letter = choices[-1]
-    section = re.search(
-        rf"(?ms)^#{{1,6}}\s+Finaliste\s+{re.escape(letter)}\s*$\n"
-        rf"(.*?)(?=^#{{1,6}}\s+(?:Finaliste|Comparaison|Verdict)\b|\Z)",
-        verdict,
-    )
-    if not section:
-        return [0]
-    content = section.group(1)
-    entries = re.findall(
-        r"(?im)^\s*(?:[-*+]\s+)?(\d+)[.)]\s+(.+)$", content
-    )
-    if not entries:
-        return [0]
-    failed = {int(number) for number, status in entries
-              if re.search(r"\brat(?:é|ée|e|ee)\b", status, re.IGNORECASE)}
-    for line in content.splitlines():
-        if not re.search(r"\brat(?:é|ée|e|ee)\b", line, re.IGNORECASE):
-            continue
-        number = re.search(r"(?i)(?:critère\s*)?(\d+)", line)
-        if number is None:
-            return [0]
-        failed.add(int(number.group(1)))
-    return sorted(failed)
 
 
 def _starved(path: Path) -> dict | None:

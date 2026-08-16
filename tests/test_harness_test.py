@@ -12,6 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks  # noqa: E402
+from graphatom.gates import elected_failures  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
@@ -68,21 +69,21 @@ def main() -> None:
         "# Finaliste B\n\n1. **Tenu.** oui\n4. **Raté.** preuve absente\n\n"
         "# Comparaison\n\nB choisi.\n\n## Verdict\n\nÉlu : finaliste B\n"
     )
-    assert blocks.elected_failures(verdict) == [4]
+    assert elected_failures(verdict) == [4]
     verdict.write_text(verdict.read_text().replace("**Raté.**", "**Tenu.**"))
-    assert blocks.elected_failures(verdict) == []
+    assert elected_failures(verdict) == []
     verdict.write_text(
         "## Finaliste B\n\n1) Tenu. oui\n4) Critère raté : preuve absente\n\n"
         "## Verdict\n\nÉlu : finaliste B\n"
     )
-    assert blocks.elected_failures(verdict) == [4]
+    assert elected_failures(verdict) == [4]
     verdict.write_text(
         "## Finaliste B\n\n1. Tenu. oui\n- 4. Raté. preuve absente\n\n"
         "## Verdict\n\nÉlu : finaliste B\n"
     )
-    assert blocks.elected_failures(verdict) == [4]
+    assert elected_failures(verdict) == [4]
     verdict.write_text("Comparaison libre.\n\n## Verdict\n\nÉlu : finaliste B\n")
-    assert blocks.elected_failures(verdict) == [0]
+    assert elected_failures(verdict) == [0]
     print("4. le faux positif #124 est bloqué tant que le juge élu garde un raté ✓")
 
     HARNESS._write(root, "backend", ["src/x.py"], evidence, "fail",
