@@ -43,7 +43,7 @@ FULL_PY = (
     "escalade_timeout_test.py", "fanout_opencode_test.py", "fanout_test.py",
     "fanout_worktree_test.py", "hermetic_test.py", "item_lane_test.py",
     "judge_test.py", "migration_test.py", "passage_test.py",
-    "plafond_test.py", "portes_test.py", "quota_test.py",
+    "plafond_test.py", "portes_test.py", "preflight_test.py", "quota_test.py",
     "reconnect_test.py", "shell_test.py", "silence_test.py", "solo_test.py",
     "verrou_test.py",
 )
