@@ -131,7 +131,7 @@ PRUNED_DIRS = {".git", "node_modules", ".next", "__pycache__", ".venv"}
 GIT_CHARS = 8000  # l'état du worktree cité dans le prompt d'une reprise
 GIT_TIMEOUT_S = 20
 DEPLOY_PROBE_TIMEOUT_S = 5
-DEPLOYED_SERVICES = ("github-sync", "pricing-sync", "web", "front")
+DEPLOYED_SERVICES = ("github-sync", "web", "front")
 # la passation du prédécesseur citée dans le prompt. Resserrée à la mesure :
 # les 809 prompts déjà rendus par le rail pèsent 2 750 caractères en médiane,
 # et trois sections courtes tiennent largement dans 2 500 — au-delà, ce n'est

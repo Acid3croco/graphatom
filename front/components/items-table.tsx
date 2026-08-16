@@ -46,7 +46,6 @@ export function ItemsTable({ initial }: { initial: Item[] }) {
           <TableHead>graph</TableHead>
           <TableHead>gén.</TableHead>
           <TableHead>rapporté $</TableHead>
-          <TableHead>API estimé $</TableHead>
           <TableHead>état</TableHead>
           <TableHead>version</TableHead>
           <TableHead>mis à jour</TableHead>
@@ -88,13 +87,6 @@ export function ItemsTable({ initial }: { initial: Item[] }) {
               </TableCell>
               <TableCell className="text-muted-foreground whitespace-nowrap">
                 {cost(item.reported_cost_usd)}
-              </TableCell>
-              <TableCell
-                className="text-muted-foreground whitespace-nowrap"
-                title={`${item.cost_estimated_runs} run(s) chiffré(s), ${item.cost_unestimated_runs} sans tarif`}
-              >
-                {cost(item.estimated_cost_usd)}
-                {item.cost_unestimated_runs ? " *" : ""}
               </TableCell>
               <TableCell>
                 <Badge variant={tone(item.status)}>{item.state}</Badge>

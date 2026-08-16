@@ -90,12 +90,12 @@ nu=$(printf '%s' "$page" | sed 's/<!-- -->//g; s/\xc2\xa0//g; s/\xe2\x80\xaf//g;
 # Les trois parts, chacune avec ses propres chiffres. Que les trois lignes
 # se lisent séparément est tout l'objet : le total ne dit pas si le juge
 # coûte plus cher que ce qu'il départage, ces deux-là le disent.
-JUGEMENT='700000in·9000out·2.5000$rapportés·3.5000$APIestimés'
-CANDIDATS='300000in·21000out·6.2500$rapportés·4.2500$APIestimés'
-TOTAL='1000000in·30000out·8.7500$rapportés·7.7500$APIestimés'
+JUGEMENT='700000in·9000out·2.5000$rapportés'
+CANDIDATS='300000in·21000out·6.2500$rapportés'
+TOTAL='1000000in·30000out·8.7500$rapportés'
 for attendu in 'data-testid="cout-jugement"' \
                "jugement$JUGEMENT" "candidats$CANDIDATS" "$TOTAL" \
-               'coûtrapporté$8.7500·coûtAPIestimé$7.7500'; do
+               'coûtrapporté$8.7500'; do
     case $nu in
         *"$attendu"*) ;;
         *) echo "ÉCHEC : « $attendu » absent du DOM rendu" >&2

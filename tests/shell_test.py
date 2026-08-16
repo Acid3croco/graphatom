@@ -246,7 +246,7 @@ def faux_deploiement(dossier: Path, duree: str = "0", etiquette: bool = True,
     dossier.mkdir(parents=True)
     (dossier / "duree.txt").write_text(duree)
     (dossier / "conflit.txt").write_text(conflit)
-    (dossier / "services.txt").write_text("github-sync\npricing-sync\nweb\nfront\n")
+    (dossier / "services.txt").write_text("github-sync\nweb\nfront\n")
     (dossier / "journal.txt").write_text("")
     if etiquette:
         (dossier / "etiquette").write_text("")
@@ -269,7 +269,7 @@ def faux_deploiement(dossier: Path, duree: str = "0", etiquette: bool = True,
         '      cat "$ICI/conflit.txt"; : > "$ICI/conflit.txt"; exit 1\n'
         "    fi\n"
         '    if [ -f "$ICI/etiquette" ]; then\n'
-        '      for S in github-sync pricing-sync web front; do\n'
+        '      for S in github-sync web front; do\n'
         '        printf "%s" "${GRAPHATOM_SHA:-}" > "$ICI/sha-$S.txt"\n'
         "      done\n"
         "    fi\n"
@@ -739,7 +739,7 @@ def main() -> None:
             "worker_started_at = EXCLUDED.worker_started_at",
             (sha_portes,),
         )
-    docker = faux_docker(tmp, "docker-en-marche", "github-sync\npricing-sync\nweb\nfront\n")
+    docker = faux_docker(tmp, "docker-en-marche", "github-sync\nweb\nfront\n")
     lent, secours = Serveur(delai=4.0), Serveur(corps="{}")
     lent.start()
     secours.start()
@@ -772,7 +772,7 @@ def main() -> None:
         conn.execute(
             "UPDATE heartbeat SET worker_sha = %s WHERE who = 'rail'", (sha_portes,)
         )
-    for service in ("github-sync", "pricing-sync", "web", "front"):
+    for service in ("github-sync", "web", "front"):
         outcome = joue("verify_deploy", cible_portes, portes, plus={
             "PATH": docker, "GRAPHATOM_FRONT_URL": lent.url,
             "GRAPHATOM_WEB_URL": secours.url,

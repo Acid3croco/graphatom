@@ -58,24 +58,6 @@ import { TraceViewer } from "@/components/run-trace";
 const RESULT_ORDER = ["outcome", "exit_code", "timeout", "error"];
 const RESULT_APART = new Set(["_retry_signature", "log_tail", "usage"]);
 
-/** Les quatre parts du prix et le relevé qui les a fixées. */
-function estimateTitle(run: Run): string | undefined {
-  const estimate = run.cost_estimate;
-  if (!estimate) {
-    return undefined;
-  }
-  const inferred = estimate.model_source === "legacy_default" ? " · modèle inféré" : "";
-  return [
-    `${estimate.provider}/${estimate.model}${inferred}`,
-    "tarif API standard de base",
-    `entrée $${cost(estimate.input_cost_usd)}`,
-    `cache lu $${cost(estimate.cache_read_cost_usd)}`,
-    `cache écrit $${cost(estimate.cache_write_cost_usd)}`,
-    `sortie $${cost(estimate.output_cost_usd)}`,
-    `tarif relevé ${moment(estimate.price_fetched_at, true)}`,
-  ].join(" · ");
-}
-
 /** Le résultat d'un run : les champs en ligne, la queue de log en bloc. */
 function Result({ run }: { run: Run }) {
   const result = run.result;
@@ -155,13 +137,7 @@ export function ItemHeader({ id, initial }: { id: number; initial: ItemHead }) {
         {total || "aucun usage rapporté"}
       </p>
       <p className="text-sm text-muted-foreground">
-        coût rapporté {cost(item.reported_cost_usd) ? `$${cost(item.reported_cost_usd)}` : "inconnu"} · coût API estimé{" "}
-        {cost(item.estimated_cost_usd) ? `$${cost(item.estimated_cost_usd)}` : "inconnu"} ({item.cost_estimated_runs}{" "}
-        run(s) chiffré(s)
-        {item.cost_unestimated_runs
-          ? `, ${item.cost_unestimated_runs} sans tarif`
-          : ""}
-        )
+        coût rapporté {cost(item.reported_cost_usd) ? `$${cost(item.reported_cost_usd)}` : "inconnu"}
       </p>
       <CostSplit split={item.usage_split} />
     </section>
@@ -299,7 +275,7 @@ function Candidates({ candidates }: { candidates: Candidate[] }) {
           <TableHead>durée</TableHead>
           <TableHead>tokens in</TableHead>
           <TableHead>tokens out</TableHead>
-          <TableHead>API estimé $</TableHead>
+          <TableHead>rapporté $</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -348,11 +324,8 @@ function Candidates({ candidates }: { candidates: Candidate[] }) {
             <TableCell className="whitespace-nowrap">
               {count(candidate.run.usage?.output_tokens)}
             </TableCell>
-            <TableCell
-              className="whitespace-nowrap"
-              title={estimateTitle(candidate.run)}
-            >
-              {cost(candidate.run.usage?.estimated_cost_usd)}
+            <TableCell className="whitespace-nowrap">
+              {cost(candidate.run.usage?.total_cost_usd)}
             </TableCell>
           </TableRow>
         ))}
@@ -469,7 +442,7 @@ export function ItemJournal({
             <TableHead>run</TableHead>
             <TableHead>tokens in</TableHead>
             <TableHead>tokens out</TableHead>
-            <TableHead>API estimé $</TableHead>
+            <TableHead>rapporté $</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -526,7 +499,7 @@ export function ItemJournal({
                     {count(usage?.output_tokens)}
                   </TableCell>
                   <TableCell className="whitespace-nowrap">
-                    {cost(usage?.estimated_cost_usd)}
+                    {cost(usage?.total_cost_usd)}
                   </TableCell>
                 </TableRow>
                 {shown && candidates.length > 0 && (
@@ -553,7 +526,7 @@ export function ItemJournal({
               {count(sum("output_tokens"))}
             </TableCell>
             <TableCell className="whitespace-nowrap">
-              {cost(sum("estimated_cost_usd"))}
+              {cost(sum("total_cost_usd"))}
             </TableCell>
           </TableRow>
         </TableFooter>
@@ -629,7 +602,7 @@ export function ItemRuns({ id, initial }: { id: number; initial: Run[] }) {
                 {duration(run.duration_s)}
               </TableCell>
               <TableCell className="whitespace-nowrap">
-                <span title={estimateTitle(run)}>{tokens(run.usage)}</span>
+                <span>{tokens(run.usage)}</span>
               </TableCell>
               {/* le post-mortem est le plus large de la table : on le
                   borne au doigt pour raccourcir le glissement */}

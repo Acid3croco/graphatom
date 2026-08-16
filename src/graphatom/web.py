@@ -310,30 +310,10 @@ def _reported_cost_value(run: dict) -> int | float | None:
     return value if type(value) in (int, float) else None
 
 
-def _estimated_cost(run: dict) -> int | float | None:
-    """Le coût API équivalent épinglé par le service de tarifs."""
-    value = run.get("estimated_cost_usd")
-    return value if type(value) in (int, float) else None
-
-
-COST_COLUMNS = (
-    "rc.estimated_cost_usd::float AS estimated_cost_usd, "
-    "rc.input_cost_usd::float AS estimated_input_cost_usd, "
-    "rc.cache_read_cost_usd::float AS estimated_cache_read_cost_usd, "
-    "rc.cache_write_cost_usd::float AS estimated_cache_write_cost_usd, "
-    "rc.output_cost_usd::float AS estimated_output_cost_usd, "
-    "rc.model_source, mp.provider AS price_provider, mp.model AS price_model, "
-    "mp.source_url AS price_source_url, mp.fetched_at AS price_fetched_at "
-)
-
-
-def _runs_with_cost(conn, where: str, params: tuple) -> list[dict]:
-    """Les runs et leur estimation, sans rendre le prix obligatoire."""
+def _runs(conn, where: str, params: tuple) -> list[dict]:
+    """Les runs, tels qu'ils sont en base."""
     return conn.execute(
-        "SELECT nr.*, " + COST_COLUMNS + "FROM node_run nr "
-        "LEFT JOIN run_cost rc ON rc.run_id = nr.id "
-        "LEFT JOIN model_price mp ON mp.id = rc.price_id " + where,
-        params,
+        "SELECT nr.* FROM node_run nr " + where, params,
     ).fetchall()
 
 
@@ -341,15 +321,14 @@ def _items_data(conn) -> list[dict]:
     """Tous les items, du plus récent au plus ancien — même requête pour la
     page et pour l'API : une seule lecture, deux rendus.
 
-    Le coût prend tous les runs de chaque item, quel que soit leur statut.
-    Un usage absent ou un coût qui n'est pas un nombre vaut zéro.
+    Le coût est celui que les fournisseurs rapportent dans l'usage des runs,
+    tous statuts confondus. Un usage absent vaut zéro.
     """
     rows = [dict(row) for row in
             conn.execute(ITEM_SELECT + "ORDER BY w.id DESC").fetchall()]
-    costs = {row["id"]: {"reported": 0.0, "reported_runs": 0, "estimated": 0.0,
-                         "priced": 0, "unpriced": 0} for row in rows}
+    costs = {row["id"]: {"reported": 0.0, "reported_runs": 0} for row in rows}
     if rows:
-        runs = _runs_with_cost(
+        runs = _runs(
             conn, "WHERE nr.item_id = ANY(%s)", ([row["id"] for row in rows],))
         for run in runs:
             if run.get("item_id") in costs:
@@ -358,20 +337,11 @@ def _items_data(conn) -> list[dict]:
                 if reported is not None:
                     cost["reported"] += reported
                     cost["reported_runs"] += 1
-                estimated = _estimated_cost(run)
-                if estimated is not None:
-                    cost["estimated"] += estimated
-                    cost["priced"] += 1
-                elif _usage(run):
-                    cost["unpriced"] += 1
     for row in rows:
         cost = costs[row["id"]]
         row["total_cost_usd"] = cost["reported"]
         row["reported_cost_usd"] = (cost["reported"]
                                     if cost["reported_runs"] else None)
-        row["estimated_cost_usd"] = cost["estimated"] if cost["priced"] else None
-        row["cost_estimated_runs"] = cost["priced"]
-        row["cost_unestimated_runs"] = cost["unpriced"]
     return rows
 
 
@@ -389,8 +359,6 @@ def _items_page(conn, beat: dt.datetime | None) -> str:
             f"<td>g{r['generation']}</td>"
             + (f"<td>{r['reported_cost_usd']:.4f}</td>"
                if r["reported_cost_usd"] is not None else "<td>—</td>")
-            + (f"<td>{r['estimated_cost_usd']:.4f}</td>"
-               if r["estimated_cost_usd"] is not None else "<td>—</td>")
             + f"<td><span class='badge {'terminal' if r['terminal_at'] else 'active'}'>"
             f"{_e(r['state'])}</span></td>"
             f"<td>v{r['version']}</td><td>{r['escalations']}</td>"
@@ -398,7 +366,7 @@ def _items_page(conn, beat: dt.datetime | None) -> str:
             for r in rows)
         body.append("<table><tr><th>item</th><th>issue</th><th>titre</th>"
                     "<th>graph</th><th>gén.</th>"
-                    "<th>coût rapporté $</th><th>coût API estimé $</th>"
+                    "<th>coût rapporté $</th>"
                     "<th>état</th><th>version</th><th>escalades</th><th>fin</th></tr>"
                     f"{lines}</table>")
     version = max((r["version"] for r in rows), default=0)
@@ -525,36 +493,13 @@ TOKEN_LABELS = {"input_tokens": "in", "output_tokens": "out",
                 "reasoning_tokens": "raisonnement",
                 "cache_read_input_tokens": "cache lu",
                 "cache_creation_input_tokens": "cache écrit",
-                "total_cost_usd": "$ rapportés",
-                "estimated_cost_usd": "$ API estimés"}
+                "total_cost_usd": "$ rapportés"}
 
 
 def _usage(run: dict) -> dict:
-    """L'usage rapporté, complété par le coût estimé de la projection."""
+    """L'usage rapporté par le run, tel quel."""
     usage = (run["result"] or {}).get("usage")
-    usage = dict(usage) if isinstance(usage, dict) else {}
-    if type(run.get("estimated_cost_usd")) in (int, float):
-        usage["estimated_cost_usd"] = run["estimated_cost_usd"]
-    return usage
-
-
-def _cost_estimate(run: dict) -> dict | None:
-    """Le relevé et les classes qui rendent une estimation vérifiable."""
-    if _estimated_cost(run) is None:
-        return None
-    return {
-        "provider": run.get("price_provider"),
-        "model": run.get("price_model"),
-        "model_source": run.get("model_source"),
-        "pricing_basis": "base_standard",
-        "source_url": run.get("price_source_url"),
-        "price_fetched_at": run.get("price_fetched_at"),
-        "input_cost_usd": run.get("estimated_input_cost_usd"),
-        "cache_read_cost_usd": run.get("estimated_cache_read_cost_usd"),
-        "cache_write_cost_usd": run.get("estimated_cache_write_cost_usd"),
-        "output_cost_usd": run.get("estimated_output_cost_usd"),
-        "total_cost_usd": run.get("estimated_cost_usd"),
-    }
+    return dict(usage) if isinstance(usage, dict) else {}
 
 
 def _candidate(run: dict) -> str:
@@ -753,17 +698,12 @@ def _item_data(conn, item_id: int) -> dict | None:
     events = conn.execute(
         "SELECT * FROM event WHERE item_id = %s ORDER BY item_version", (item_id,)
     ).fetchall()
-    runs = _runs_with_cost(conn, "WHERE nr.item_id = %s ORDER BY nr.id", (item_id,))
+    runs = _runs(conn, "WHERE nr.item_id = %s ORDER BY nr.id", (item_id,))
     item = dict(item)
     item["total_cost_usd"] = sum(_reported_cost(run) for run in runs)
     reported = [value for run in runs
                 if (value := _reported_cost_value(run)) is not None]
     item["reported_cost_usd"] = sum(reported) if reported else None
-    estimates = [value for run in runs if (value := _estimated_cost(run)) is not None]
-    item["estimated_cost_usd"] = sum(estimates) if estimates else None
-    item["cost_estimated_runs"] = len(estimates)
-    item["cost_unestimated_runs"] = sum(
-        1 for run in runs if _usage(run) and _estimated_cost(run) is None)
     effects = conn.execute(
         "SELECT * FROM effect WHERE item_id = %s ORDER BY op_id", (item_id,)
     ).fetchall()
@@ -919,9 +859,6 @@ def _api_item_row(row: dict) -> dict:
         "escalations": row["escalations"],
         "total_cost_usd": row["total_cost_usd"],
         "reported_cost_usd": row.get("reported_cost_usd"),
-        "estimated_cost_usd": row.get("estimated_cost_usd"),
-        "cost_estimated_runs": row.get("cost_estimated_runs", 0),
-        "cost_unestimated_runs": row.get("cost_unestimated_runs", 0),
         "issue_url": _issue_href(row["subject_key"]),
         "pr_url": _pr_url(row["id"]),
         "terminal_at": row["terminal_at"],
@@ -1088,7 +1025,7 @@ def _api_item(conn, item_id: int) -> dict | None:
                   "lease_expires_at": r["lease_expires_at"],
                   "finished_at": r["finished_at"],
                   "duration_s": run_span.get(r["id"]),
-                  "usage": _usage(r), "cost_estimate": _cost_estimate(r),
+                  "usage": _usage(r),
                   "result": r["result"]} for r in data["runs"]],
         "effects": [{"op_id": f["op_id"], "logical_key": f["logical_key"],
                      "target_uri": f["target_uri"], "observation": f["observation"]}

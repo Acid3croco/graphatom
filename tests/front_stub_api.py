@@ -20,9 +20,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 # qui ne tombent pas ronds : le front écrit un entier autrement qu'un
 # décimal, et le test lit le texte rendu au caractère près.
 JUGEMENT = {"input_tokens": 700000, "output_tokens": 9000,
-            "total_cost_usd": 2.5, "estimated_cost_usd": 3.5}
+            "total_cost_usd": 2.5}
 CANDIDATS = {"input_tokens": 300000, "output_tokens": 21000,
-             "total_cost_usd": 6.25, "estimated_cost_usd": 4.25}
+             "total_cost_usd": 6.25}
 TOTAL = {k: JUGEMENT[k] + CANDIDATS[k] for k in JUGEMENT}  # l'ordre des clés tient
 
 ITEM = {
@@ -31,8 +31,6 @@ ITEM = {
         "graph": "code-task", "generation": 1, "state": "close",
         "status": "terminal", "version": 6, "cycle": 1, "escalations": 5,
         "total_cost_usd": 8.75, "reported_cost_usd": 8.75,
-        "estimated_cost_usd": 7.75,
-        "cost_estimated_runs": 2, "cost_unestimated_runs": 0,
         "issue_url": None, "pr_url": None,
         "terminal_at": "2026-01-01T12:00:00+00:00",
         "updated_at": "2026-01-01T12:00:00+00:00",
