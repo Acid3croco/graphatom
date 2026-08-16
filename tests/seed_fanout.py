@@ -41,7 +41,7 @@ os.environ.pop("GRAPHATOM_AGENT_DSN", None)
 
 UTC = dt.timezone.utc
 
-# la variante lente hérite de la commande du nœud ; la rapide la surcharge —
+# la variante lente hérite du modèle du nœud ; la rapide le surcharge —
 # c'est exactement le pari que le fan-out sert à trancher, et la page doit
 # montrer les deux modèles côte à côte
 BUNDLE = {
@@ -52,22 +52,21 @@ BUNDLE = {
     "nodes": {
         "prepare": {
             "block": "FETCH",
-            "config": {"agent": {"cmd": 'claude --model sonnet -p "$PROMPT"',
-                                 "prompt": "Prépare le terrain.", "timeout_s": 600}},
+            "config": {"materialize": ["terrain"]},
             "edges": {"ok": "travail"},
         },
         "travail": {
             "block": "ACT",
             "config": {
                 "lease_s": 900,
-                "agent": {"cmd": 'claude --model opus -p "$PROMPT"',
-                          "prompt": "Fais le travail. Stratégie : {strategy}.",
-                          "timeout_s": 1800},
+                "execution": {"kind": "agent", "timeout_s": 1800},
+                "agent": {"cli": "claude", "model": "opus",
+                          "prompt": "Fais le travail. Stratégie : {strategy}."},
                 "fanout": {
                     "variants": [
                         {"label": "opus", "strategy": "raisonne longtemps"},
                         {"label": "haiku", "strategy": "va droit au but",
-                         "agent": {"cmd": 'claude --model haiku -p "$PROMPT"'}},
+                         "agent": {"model": "haiku"}},
                     ],
                     "repeat": 2,
                     "reduce": "first_pass",

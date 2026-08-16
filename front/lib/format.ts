@@ -44,7 +44,6 @@ const TOKEN_LABELS: Record<string, string> = {
   cache_read_input_tokens: "cache lu",
   cache_creation_input_tokens: "cache écrit",
   total_cost_usd: "$ rapportés",
-  estimated_cost_usd: "$ API estimés",
 };
 
 /** Un nombre de tokens en français — vide quand il n'y en a pas. */

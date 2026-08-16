@@ -94,13 +94,14 @@ def bundle_agent() -> dict:
             "travail": {
                 "block": "ACT",
                 "config": {
-                    "agent": {"cmd": LENT, "prompt": PROMPT,
-                              "timeout_s": 60, "silence_s": 60},
+                    "execution": {"kind": "agent", "cmd": LENT,
+                                  "timeout_s": 60, "silence_s": 60},
+                    "agent": {"prompt": PROMPT, "cli": "codex"},
                     "fanout": {
                         "variants": [
                             {"label": "lent", "strategy": "prends ton temps"},
                             {"label": "rapide", "strategy": "va droit au but",
-                             "agent": {"cmd": RAPIDE}},
+                             "execution": {"cmd": RAPIDE}},
                         ],
                         "repeat": 2,
                         "reduce": "first_pass",

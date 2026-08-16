@@ -68,7 +68,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import blocks, db, executors, graph, kernel, scheduler  # noqa: E402
+from graphatom import activation, blocks, db, executors, gates, graph, kernel, scheduler  # noqa: E402
 from graphatom.blocks import AGENT_TIMEOUT_S  # noqa: E402
 
 from outils import git  # noqa: E402
@@ -246,7 +246,7 @@ def faux_deploiement(dossier: Path, duree: str = "0", etiquette: bool = True,
     dossier.mkdir(parents=True)
     (dossier / "duree.txt").write_text(duree)
     (dossier / "conflit.txt").write_text(conflit)
-    (dossier / "services.txt").write_text("github-sync\npricing-sync\nweb\nfront\n")
+    (dossier / "services.txt").write_text("github-sync\nweb\nfront\n")
     (dossier / "journal.txt").write_text("")
     if etiquette:
         (dossier / "etiquette").write_text("")
@@ -269,7 +269,7 @@ def faux_deploiement(dossier: Path, duree: str = "0", etiquette: bool = True,
         '      cat "$ICI/conflit.txt"; : > "$ICI/conflit.txt"; exit 1\n'
         "    fi\n"
         '    if [ -f "$ICI/etiquette" ]; then\n'
-        '      for S in github-sync pricing-sync web front; do\n'
+        '      for S in github-sync web front; do\n'
         '        printf "%s" "${GRAPHATOM_SHA:-}" > "$ICI/sha-$S.txt"\n'
         "      done\n"
         "    fi\n"
@@ -739,7 +739,7 @@ def main() -> None:
             "worker_started_at = EXCLUDED.worker_started_at",
             (sha_portes,),
         )
-    docker = faux_docker(tmp, "docker-en-marche", "github-sync\npricing-sync\nweb\nfront\n")
+    docker = faux_docker(tmp, "docker-en-marche", "github-sync\nweb\nfront\n")
     lent, secours = Serveur(delai=4.0), Serveur(corps="{}")
     lent.start()
     secours.start()
@@ -772,7 +772,7 @@ def main() -> None:
         conn.execute(
             "UPDATE heartbeat SET worker_sha = %s WHERE who = 'rail'", (sha_portes,)
         )
-    for service in ("github-sync", "pricing-sync", "web", "front"):
+    for service in ("github-sync", "web", "front"):
         outcome = joue("verify_deploy", cible_portes, portes, plus={
             "PATH": docker, "GRAPHATOM_FRONT_URL": lent.url,
             "GRAPHATOM_WEB_URL": secours.url,
@@ -992,18 +992,18 @@ def main() -> None:
     # 22. l'activation vient du résultat appliqué, jamais du HEAD vu pendant
     # le shell. Une erreur reste durable et le tick suivant la rejoue ; seul
     # le heartbeat du worker neuf acquitte la demande.
-    activation = tmp / "activation"
-    activation.mkdir()
-    cible = depot(activation)
+    quartier = tmp / "activation"
+    quartier.mkdir()
+    cible = depot(quartier)
     wanted = git(cible, "rev-parse", "HEAD")
-    outil, journal, code = faux_systemctl(activation / "systemctl")
-    deploiement = activation / "bin"
+    outil, journal, code = faux_systemctl(quartier / "systemctl")
+    deploiement = quartier / "bin"
     faux_deploiement(deploiement)
-    for service in scheduler.DEPLOYED_SERVICES:
+    for service in gates.DEPLOYED_SERVICES:
         (deploiement / f"sha-{service}.txt").write_text(wanted)
-    donnees, ancienne_data = activation / "data", blocks.DATA_DIR
+    donnees, ancienne_data = quartier / "data", blocks.DATA_DIR
     blocks.DATA_DIR = donnees
-    ancien_sha = scheduler.WORKER_SHA
+    ancien_sha = activation.WORKER_SHA
     ancien_repo = os.environ.get("GRAPHATOM_REPO_DIR")
     ancien_systemctl = os.environ.get("GRAPHATOM_SYSTEMCTL")
     ancien_docker = os.environ.get("GRAPHATOM_DOCKER")
@@ -1057,16 +1057,16 @@ def main() -> None:
                 "at = now(), worker_sha = EXCLUDED.worker_sha",
                 (wanted,),
             )
-            assert blocks.verify_deploy_error(conn, item_id, cible) is None
+            assert gates.verify_deploy_error(conn, item_id, cible) is None
             conn.execute("UPDATE heartbeat SET worker_sha = %s WHERE who = 'rail'",
                          ("0" * 40,))
-            assert "worker" in blocks.verify_deploy_error(conn, item_id, cible)
+            assert "worker" in gates.verify_deploy_error(conn, item_id, cible)
             conn.execute(
                 "UPDATE node_run SET result = jsonb_set(result, "
                 "'{deploy_sha}', %s::jsonb) WHERE id = %s",
                 (json.dumps("0" * 40), run["id"]),
             )
-            assert "checkout" in blocks.verify_deploy_error(conn, item_id, cible)
+            assert "checkout" in gates.verify_deploy_error(conn, item_id, cible)
             conn.execute(
                 "UPDATE node_run SET result = jsonb_set(result, "
                 "'{deploy_sha}', %s::jsonb) WHERE id = %s",
@@ -1075,10 +1075,10 @@ def main() -> None:
             conn.execute("UPDATE heartbeat SET worker_sha = %s WHERE who = 'rail'",
                          (wanted,))
 
-            for service in scheduler.DEPLOYED_SERVICES:
+            for service in gates.DEPLOYED_SERVICES:
                 label = deploiement / f"sha-{service}.txt"
                 label.write_text("0" * 40)
-                assert scheduler._activation_worker(conn) == 0
+                assert activation.reconcile(conn) == 0
                 assert journal.read_text() == "", \
                     "restart malgré une image discordante"
                 saved = conn.execute(
@@ -1098,11 +1098,11 @@ def main() -> None:
             assert saved["worker_activation"]["status"] == "error", saved
 
             code.write_text("0")
-            assert scheduler._activation_worker(conn) == 1
+            assert activation.reconcile(conn) == 1
             assert len(journal.read_text().splitlines()) == 2, journal.read_text()
-            scheduler.WORKER_SHA = wanted
-            assert scheduler._activation_worker(conn) == 0
-            assert scheduler._activation_worker(conn) == 0
+            activation.WORKER_SHA = wanted
+            assert activation.reconcile(conn) == 0
+            assert activation.reconcile(conn) == 0
             assert len(journal.read_text().splitlines()) == 2, \
                 "le worker neuf a relancé une demande déjà acquittée"
             saved = conn.execute(
@@ -1112,7 +1112,7 @@ def main() -> None:
                 "status": "active", "worker_sha": wanted,
             }, saved
             rapport = (workspace / "deploy.md").read_text()
-            for service in scheduler.DEPLOYED_SERVICES:
+            for service in gates.DEPLOYED_SERVICES:
                 assert f"{service} porte finalement {wanted}" in rapport
 
             # Deux releases proches : le réconciliateur ne lit que la plus
@@ -1121,7 +1121,7 @@ def main() -> None:
             git(cible, "add", "seconde.txt")
             git(cible, "commit", "-qm", "seconde release")
             newest = git(cible, "rev-parse", "HEAD")
-            for service in scheduler.DEPLOYED_SERVICES:
+            for service in gates.DEPLOYED_SERVICES:
                 (deploiement / f"sha-{service}.txt").write_text(newest)
             second_id = kernel.admit(
                 conn, revision, f"activation-plus-recente:{os.getpid()}",
@@ -1137,11 +1137,11 @@ def main() -> None:
                 "deploy_sha": newest,
             }) == "applied"
             before = len(journal.read_text().splitlines())
-            assert scheduler._activation_worker(conn) == 1
+            assert activation.reconcile(conn) == 1
             assert len(journal.read_text().splitlines()) == before + 1
-            scheduler.WORKER_SHA = newest
-            assert scheduler._activation_worker(conn) == 0
-            assert scheduler._activation_worker(conn) == 0
+            activation.WORKER_SHA = newest
+            assert activation.reconcile(conn) == 0
+            assert activation.reconcile(conn) == 0
             latest = conn.execute(
                 "SELECT result FROM node_run WHERE id = %s", (second_run["id"],)
             ).fetchone()["result"]
@@ -1155,7 +1155,7 @@ def main() -> None:
             git(cible, "add", "troisieme.txt")
             git(cible, "commit", "-qm", "troisième release")
             target = git(cible, "rev-parse", "HEAD")
-            for service in scheduler.DEPLOYED_SERVICES:
+            for service in gates.DEPLOYED_SERVICES:
                 (deploiement / f"sha-{service}.txt").write_text(target)
             real_bundle = {
                 "name": f"activation-reelle-{os.getpid()}",
@@ -1166,14 +1166,14 @@ def main() -> None:
                 "nodes": {
                     "deploy": {
                         "block": "ACT",
-                        "config": {"lease_s": 30, "agent": {
+                        "config": {"lease_s": 30, "activation": True,
+                                   "execution": {
+                            "kind": "command",
                             "cmd": "printf '%s\\n' '" + json.dumps({
                                 "outcome": "done", "summary": "chemin réel",
                                 "deploy_sha": target,
                             }) + "' > outcome.json",
-                            "prompt": "Doublure déterministe du déploiement.",
                             "timeout_s": 10, "silence_s": 10,
-                            "passation": False,
                         }},
                         "edges": {"done": "fini"},
                     },
@@ -1189,7 +1189,7 @@ def main() -> None:
             real_run = kernel.claim(conn, real_item)
             assert real_run is not None
             observations = []
-            real_activation = scheduler._activation_worker
+            real_activation = activation.reconcile
 
             def observe_after_apply(observed_conn):
                 stored = observed_conn.execute(
@@ -1203,19 +1203,19 @@ def main() -> None:
                 observations.append((stored, event))
                 return real_activation(observed_conn)
 
-            scheduler._activation_worker = observe_after_apply
+            activation.reconcile = observe_after_apply
             before = len(journal.read_text().splitlines())
             try:
                 scheduler._execute(real_run["id"], real_item)
             finally:
-                scheduler._activation_worker = real_activation
+                activation.reconcile = real_activation
             assert len(observations) == 1, observations
             assert observations[0][0]["status"] == "applied", observations
             assert observations[0][0]["result"]["deploy_sha"] == target
             assert observations[0][1] == {"kind": "result"}, observations
             assert len(journal.read_text().splitlines()) == before + 1
-            scheduler.WORKER_SHA = target
-            assert scheduler._activation_worker(conn) == 0
+            activation.WORKER_SHA = target
+            assert activation.reconcile(conn) == 0
 
             brut.write_text(json.dumps({
                 "outcome": "done", "summary": "SHA tronqué",
@@ -1231,7 +1231,7 @@ def main() -> None:
         print("22. résultat durable puis activation --user, erreur rejouée, "
               "acquittement idempotent par le worker neuf ✓")
     finally:
-        scheduler.WORKER_SHA = ancien_sha
+        activation.WORKER_SHA = ancien_sha
         blocks.DATA_DIR = ancienne_data
         if ancien_repo is None:
             os.environ.pop("GRAPHATOM_REPO_DIR", None)
@@ -1252,17 +1252,17 @@ def main() -> None:
     # 23. Les images Python de production ne contiennent pas Git. Le SHA du
     # worker est une information de diagnostic : son absence ne doit jamais
     # empêcher la migration, le web ou le canal GitHub de démarrer.
-    vraie_execution = scheduler.subprocess.run
+    vraie_execution = activation.subprocess.run
 
     def sans_git(*_args, **_kwargs):
         raise FileNotFoundError("git")
 
-    scheduler.subprocess.run = sans_git
+    activation.subprocess.run = sans_git
     try:
-        assert scheduler._worker_sha() == "inconnu"
+        assert activation._worker_sha() == "inconnu"
     finally:
-        scheduler.subprocess.run = vraie_execution
-    print("23. scheduler importable sans Git dans l'image de production ✓")
+        activation.subprocess.run = vraie_execution
+    print("23. activation importable sans Git dans l'image de production ✓")
 
     shutil.rmtree(tmp, ignore_errors=True)
     print("\nnœuds shell : OK — déterministes, et jamais sans outcome")

@@ -8,7 +8,39 @@ permissions:
   contents: read
 
 jobs:
+  # La métrique unique : le noyau du train, ses pannes, le train entier.
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+      - name: Run the train gate
+        run: uv run python scripts/check.py train
+
+  # Les preuves hermétiques : validation, blocs, canaux — sans service.
   core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+      - name: Run the hermetic core gates
+        run: uv run python scripts/check.py core
+
+  # Le front : build Next.js et portes DOM. Séparé — un front qui ne builde
+  # pas ne doit pas masquer un noyau vert, ni l'inverse.
+  ui:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -23,5 +55,5 @@ jobs:
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
-      - name: Run the closed core gate
-        run: uv run python scripts/check.py
+      - name: Build the front and run its DOM gates
+        run: uv run python scripts/check.py ui

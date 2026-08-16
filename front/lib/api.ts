@@ -39,10 +39,6 @@ export type Item = {
   /** Coût réellement rapporté par le fournisseur, quand il en donne un. */
   total_cost_usd: number;
   reported_cost_usd: number | null;
-  /** Même usage aux tarifs API publics épinglés par run. */
-  estimated_cost_usd: number | null;
-  cost_estimated_runs: number;
-  cost_unestimated_runs: number;
   issue_url: string | null;
   pr_url: string | null;
   terminal_at: string | null;
@@ -141,19 +137,6 @@ export type Run = {
   finished_at: string | null;
   duration_s: number | null;
   usage: Usage;
-  cost_estimate: {
-    provider: string;
-    model: string;
-    model_source: "usage" | "graph" | "legacy_default";
-    pricing_basis: "base_standard";
-    source_url: string;
-    price_fetched_at: string;
-    input_cost_usd: number;
-    cache_read_cost_usd: number;
-    cache_write_cost_usd: number;
-    output_cost_usd: number;
-    total_cost_usd: number;
-  } | null;
   result: Record<string, unknown> | null;
 };
 

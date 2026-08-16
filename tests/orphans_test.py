@@ -74,8 +74,9 @@ def context(workdir: Path, cmd: str, attempt: int,
             timeout_s: float = TIMEOUT_S) -> blocks.Context:
     blocks.DATA_DIR = workdir
     node = {"block": "ACT", "edges": {"ok": "done"},
-            "config": {"agent": {"cmd": cmd, "prompt": "ne fais rien",
-                                 "timeout_s": timeout_s}}}
+            "config": {"execution": {"kind": "agent", "cmd": cmd,
+                                     "timeout_s": timeout_s},
+                       "agent": {"prompt": "ne fais rien"}}}
     return blocks.Context(
         FakeConn(),
         {"id": RUN_ID, "node": NODE, "cycle": CYCLE, "attempt": attempt},

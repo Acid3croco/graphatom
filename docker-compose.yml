@@ -94,31 +94,6 @@ services:
       init:
         condition: service_completed_successfully
 
-  # La relève des tarifs publics ne porte aucun secret. Elle tourne à part :
-  # un site de prix lent ou indisponible ne bloque ni le rail, ni GitHub, ni
-  # le web. Chaque run garde le relevé qui l'a chiffré.
-  pricing-sync:
-    build: .
-    # `init` peut être un conteneur déjà terminé lors d'une mise à jour. Le
-    # service rejoue donc lui-même la migration avant de devenir sain.
-    command: sh -c "graphatom init-db && exec graphatom pricing-sync"
-    environment:
-      <<: *env
-      # Les premiers runs Codex utilisaient le défaut de la session sans le
-      # tracer. L'instance nomme ici ce défaut historique ; l'estimation le
-      # marque explicitement comme inféré.
-      GRAPHATOM_LEGACY_CODEX_MODEL: ${GRAPHATOM_LEGACY_CODEX_MODEL:-gpt-5.6-sol}
-    restart: unless-stopped
-    labels: *sha
-    healthcheck:
-      test: ["CMD", "graphatom", "pricing-ready"]
-      interval: 2s
-      timeout: 2s
-      retries: 15
-    depends_on:
-      init:
-        condition: service_completed_successfully
-
   # Le canal web stdlib : l'API JSON que lit `front`, l'unique porte
   # d'écriture (`POST /answer`), la route des fichiers de workspace, et le
   # canal de secours en HTML. Il n'est plus à la bordure — pas de `proxy`,
@@ -138,8 +113,6 @@ services:
     depends_on:
       init:
         condition: service_completed_successfully
-      pricing-sync:
-        condition: service_healthy
 
   # Le front Next.js : le service public. Il ne parle qu'à l'API de `web`,
   # par le réseau interne du compose — d'où `GRAPHATOM_API_URL` en nom de

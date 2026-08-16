@@ -53,11 +53,10 @@ MD=""            # portes.md, connu dès que le workspace l'est
 
 # Les douze modules du paquet : une erreur de syntaxe n'importe où dans
 # `src/` tombe ici, avant même qu'un test soit choisi.
-MODULES="import graphatom.blocks, graphatom.channel, graphatom.cli, \
-graphatom.db, graphatom.github_sync, graphatom.graph, graphatom.heartbeat, \
-graphatom.kernel, graphatom.pricing, graphatom.quota, graphatom.scheduler, \
-graphatom.executors, graphatom.web, \
-graphatom.worktree"
+MODULES="import graphatom.activation, graphatom.blocks, graphatom.channel, \
+graphatom.cli, graphatom.db, graphatom.gates, graphatom.github_sync, \
+graphatom.graph, graphatom.heartbeat, graphatom.kernel, graphatom.quota, \
+graphatom.scheduler, graphatom.executors, graphatom.web, graphatom.worktree"
 
 # Ce qui rend la suite concernée : le diff du candidat touche du code, un
 # bundle, le schéma ou la déclaration du projet. Un diff qui n'a que de la
@@ -87,20 +86,15 @@ tests/criteria_test.py
 tests/depends_test.py
 tests/split_deps_test.py
 tests/heartbeat_test.py
-tests/postgres_recovery_test.py
 tests/links_test.py
 tests/live_test.py
 tests/failure_trace_test.py
 tests/agent_executor_test.py
 tests/test_harness_test.py
-tests/seed_test.py
-tests/graph_executor_migration_test.py
 tests/codex_routing_test.py
-tests/pricing_test.py
 tests/orphans_test.py
 tests/passation_test.py
 tests/starved_test.py
-tests/timeout_marge_test.py
 tests/timeout_test.py"
 
 dit() {  # une ligne de journal, à l'écran et dans le compte rendu

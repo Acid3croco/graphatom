@@ -19,7 +19,8 @@ from outils import etat  # noqa: E402
 
 def bundle(fanout: bool = False) -> dict:
     """Un travail relançable et son escalade, avec fan-out facultatif."""
-    config = {"agent": {"cmd": "exit 3", "prompt": "test"}}
+    config = {"execution": {"kind": "agent", "cmd": "exit 3"},
+              "agent": {"prompt": "test", "cli": "codex"}}
     if fanout:
         config["fanout"] = {
             "variants": [{"label": "a"}, {"label": "b"}],
@@ -49,7 +50,9 @@ def command(run: dict, value: str = "exit 3") -> None:
     workspace = blocks.run_workspace(run["item_id"], run)
     workspace.mkdir(parents=True, exist_ok=True)
     blocks.attempt_command(workspace, run).write_text(json.dumps({
-        "kind": "shell", "executor": None, "command": value,
+        "kind": "composed",
+        "executor": {"cli": "codex", "model": None, "effort": None},
+        "command": value,
     }))
 
 

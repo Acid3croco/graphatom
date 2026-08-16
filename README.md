@@ -54,16 +54,21 @@ Une seule commande tient l'inventaire fermé de toutes les preuves. Elle
 refuse aussi un fichier de test neuf qui n'est classé dans aucune porte :
 
 ```sh
-uv run python scripts/check.py          # noyau, sans service DB, Docker ni LLM réel
-uv run python scripts/check.py --full   # ajoute base, crash, concurrence et image Docker
-uv run python scripts/check.py --live   # ajoute le vrai fournisseur LLM gratuit
+uv run python scripts/check.py        # train + core (défaut)
+uv run python scripts/check.py train  # la métrique unique : la porte du train
+uv run python scripts/check.py ui     # build Next.js + portes DOM
+uv run python scripts/check.py full   # base, crash, concurrence, image Docker
+uv run python scripts/check.py live   # le vrai fournisseur LLM gratuit
 ```
 
-La porte s'arrête au premier échec et imprime la commande exacte. `--full`
-est la preuve locale avant publication. `--live` dépend de `opencode`, de son
-modèle gratuit et du réseau ; ce fournisseur externe n'est pas une condition
-de la preuve hermétique. GitHub Actions rejoue la porte de noyau sur chaque
-push et chaque pull request.
+La porte s'arrête au premier échec et imprime la commande exacte. La porte
+du train (`tests/train_test.py`) est la métrique unique : elle provisionne
+son propre Postgres jetable (docker) et prouve le noyau, ses pannes et le
+train entier en une douzaine de secondes. `full` est la preuve locale avant
+publication ; ses tests destructeurs provisionnent chacun leur base jetable
+et ne touchent jamais celle de l'environnement. `live` dépend de `opencode`,
+de son modèle gratuit et du réseau. GitHub Actions rejoue `train`, `core`
+et `ui` en trois jobs séparés sur chaque push et chaque pull request.
 
 ## Lancer le squelette (milestone 1)
 
@@ -130,10 +135,6 @@ uv run python tests/criteria_test.py                 # le nœud scope qui parle 
 uv run python tests/api_test.py                      # l'API JSON du canal web : les
                                                      # mêmes vues en données, sans
                                                      # base ni serveur
-uv run python tests/pricing_test.py                  # tarifs publics : parsing,
-                                                     # cache et modèle, sans réseau
-uv run python tests/pricing_db_test.py               # estimation épinglée en base
-                                                     # et projetée dans l'API
 uv run python tests/answer_test.py                   # `/answer` : la première ligne
                                                      # décide, la prose passe, et la
                                                      # commande mal formée se dit
@@ -1081,26 +1082,11 @@ chaque run la sienne et ses tokens, et l'en-tête le temps total de l'item
 avec le total par type de token. Les durées sortent des horodatages du
 journal, les tokens du résultat des runs.
 
-**Le coût rapporté et le coût API estimé ne sont pas la même donnée.** Une
-session Codex par abonnement ne rapporte aucun dollar ; un modèle OpenCode
-gratuit rapporte zéro. Le service `pricing-sync` relève donc une fois par
-jour les tarifs standard sur les pages officielles OpenAI et DeepSeek, sans
-clé API, puis chiffre les quatre classes disjointes : entrée, cache lu, cache
-écrit et sortie. Le raisonnement Codex est déjà inclus dans sa sortie ; celui
-d'OpenCode est séparé et rejoint la sortie. Aucun token ne paie deux fois.
-Le montant OpenAI emploie le tarif standard de base. Codex rapporte le total
-d'un tour, pas la taille d'entrée de chaque requête du tour ; le seuil de
-contexte long ne peut donc pas être appliqué sans inventer une répartition.
-
-Chaque run épingle son relevé dans `run_cost` : le coût d'hier ne change pas
-quand le tarif de demain arrive. La table `model_price` garde la source et la
-date du relevé. Le frontend montre les deux montants séparément et signale
-les runs sans modèle ou sans tarif. Un nouveau run est chiffré en moins d'une
-minute. Pour les anciens runs Codex qui n'avaient
-pas écrit leur modèle, `GRAPHATOM_LEGACY_CODEX_MODEL` permet une reprise
-explicite ; leur provenance reste `legacy_default`, donc visible comme une
-inférence. Une panne de page tarifaire conserve les anciens relevés et ne
-touche ni le worker, ni GitHub, ni le web.
+**Le coût affiché est celui que le fournisseur rapporte, et rien d'autre.**
+Une session par abonnement ne rapporte aucun dollar ; un modèle gratuit
+rapporte zéro ; ces absences se voient telles quelles. L'estimation aux
+tarifs API publics a été retirée avec son service : moins une table de prix
+à relever, moins un scraper à entretenir.
 
 [`examples/code-task.json`](examples/code-task.json) est le graph qui fait
 tourner ce repo : **jugement de la taille et des critères** (`scope`),
@@ -1110,7 +1096,7 @@ implémentation par agent, **agent de test backend**
 un par un** (`validate`), puis review humaine —
 question fermée sur l'issue GitHub. La boucle se ferme ensuite toute
 seule : **release** (commit, push, PR, merge surveillé jusqu'au SHA),
-**deploy** (`docker compose up -d --build github-sync pricing-sync web front`) et
+**deploy** (`docker compose up -d --build github-sync web front`) et
 **verify_deploy** (conteneurs en marche, `/items` rendu par le front, le
 secours en 200, logs du sync propres) — ces deux derniers sans aucun
 modèle, comme la préparation du worktree : du shell.

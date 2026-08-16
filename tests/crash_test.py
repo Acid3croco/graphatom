@@ -23,9 +23,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import blocks, db, kernel  # noqa: E402
+from outils import kill_group, provision_postgres, sh  # noqa: E402
 
-from outils import kill_group, sh  # noqa: E402
+# une base à lui, détruite avec lui : jamais celle que GRAPHATOM_DSN désigne
+os.environ["GRAPHATOM_DSN"] = provision_postgres("graphatom-crash")
+
+from graphatom import blocks, db, kernel  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 # le test travaille dans un répertoire à lui : jamais dans ROOT/data, qui
@@ -61,8 +64,9 @@ def bundle() -> dict:
                 "block": "ACT",
                 "config": {
                     "lease_s": LEASE_S,
-                    "agent": {"cmd": AGENT, "prompt": "Travaille.",
-                              "silence_s": LEASE_S},
+                    "execution": {"kind": "agent", "cmd": AGENT,
+                                  "silence_s": LEASE_S},
+                    "agent": {"prompt": "Travaille.", "cli": "codex"},
                     "fanout": {"variants": [{"label": f"c{i}"} for i in range(3)],
                                "reduce": "first_pass"},
                 },

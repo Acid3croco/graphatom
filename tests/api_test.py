@@ -268,51 +268,6 @@ def main() -> None:
         assert web._api_fanout(BUNDLE, {"block": "ACT", "config": {}}) is None
         print("   fanout projeté : 4 agents structurés effectifs ✓")
 
-        # L'ancienne révision de l'item 115 ne portait que ces commandes.
-        legacy = {"nodes": {}, "agent": {}}
-        commands = [
-            "CODEX_MODEL=gpt-5.6-luna CODEX_REASONING_EFFORT=medium "
-            "CODEX_TIMEOUT_S=1500 bash \"${GRAPHATOM_WORKTREE:-.}/scripts/agent-codex.sh\"",
-            "CODEX_MODEL=gpt-5.6-sol CODEX_REASONING_EFFORT=high "
-            "CODEX_TIMEOUT_S=1500 bash \"${GRAPHATOM_WORKTREE:-.}/scripts/agent-codex.sh\"",
-            "OPENCODE_TIMEOUT_S=1500 bash \"${GRAPHATOM_WORKTREE:-.}/scripts/agent-opencode.sh\" "
-            "opencode/deepseek-v4-flash-free",
-        ]
-        projected = [web._api_candidate(
-            legacy, {"config": {"fanout": {"variants": [
-                {"agent": {"cmd": command}},
-            ]}}}, 0, {},
-        )["agent"] for command in commands]
-        assert projected[0] == {
-            "cli": "codex", "model": "gpt-5.6-luna", "effort": "medium",
-            "cmd_uses_executor": True, "cmd": commands[0],
-        }, projected[0]
-        assert projected[1] == {
-            "cli": "codex", "model": "gpt-5.6-sol", "effort": "high",
-            "cmd_uses_executor": True, "cmd": commands[1],
-        }, projected[1]
-        assert projected[2] == {
-            "cli": "opencode", "model": "deepseek-v4-flash-free",
-            "cmd_uses_executor": True, "cmd": commands[2],
-        }, projected[2]
-        shell = web._api_candidate(
-            legacy, {"config": {"fanout": {"variants": [
-                {"agent": {"cmd": "printf 'agent-codex.sh ordinaire'"}},
-            ]}}}, 0, {},
-        )["agent"]
-        assert shell == {"cmd": "printf 'agent-codex.sh ordinaire'"}, shell
-        structured = web._api_candidate(
-            legacy, {"config": {"fanout": {"variants": [{"agent": {
-                "cmd": "bash scripts/agent-codex.sh", "cli": "claude",
-                "model": "opus", "effort": "low", "cmd_uses_executor": False,
-            }}]}}}, 0, {},
-        )["agent"]
-        assert structured == {
-            "cli": "claude", "model": "opus", "effort": "low",
-            "cmd": "bash scripts/agent-codex.sh",
-        }, structured
-        print("   commandes historiques : métadonnées d'exécuteur restaurées ✓")
-
         # les fichiers du workspace, avec l'URL qui les sert
         names = {f["name"]: f["href"] for f in payload["files"]}
         assert names["criteria.md"] == "/item/14/file/criteria.md", names

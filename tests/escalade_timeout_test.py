@@ -70,8 +70,8 @@ def bundle(nom: str) -> dict:
         "nodes": {
             "travail": {
                 "block": "ACT",
-                "config": {"agent": {"cmd": "true", "prompt": "ne fais rien",
-                                     "timeout_s": BUDGET_S}},
+                "config": {"execution": {"kind": "command", "cmd": "true",
+                                         "timeout_s": BUDGET_S}},
                 "edges": {"ok": "fini"},
             },
             "escalate": {
@@ -110,8 +110,8 @@ class FauxConn:
 def contexte(workdir: Path, cmd: str, node: str) -> blocks.Context:
     blocks.DATA_DIR = workdir
     spec = {"block": "ACT", "edges": {"ok": "fini"},
-            "config": {"agent": {"cmd": cmd, "prompt": "ne fais rien",
-                                 "timeout_s": COURT_S}}}
+            "config": {"execution": {"kind": "command", "cmd": cmd,
+                                     "timeout_s": COURT_S}}}
     return blocks.Context(
         FauxConn(),
         {"id": 1, "node": node, "cycle": 1, "attempt": 1},
@@ -297,11 +297,12 @@ def faucheur(conn, revision: str) -> None:
     blocks.attempt_log(espace, run_vif).write_text(JOURNAL)
     dormeur = subprocess.Popen(["sleep", "300"], start_new_session=True)
     blocks._write_pgid(espace / blocks.PGID_FILE, dormeur, "sleep 300", run_vif["id"])
-    assert blocks.agent_alive(vif, run_vif["id"]) is True
+    assert blocks.agent_state(vif, run_vif["id"]) == blocks.AGENT_ALIVE
     assert dormeur.pid != os.getpgid(0), "le cobaye doit avoir sa propre session"
 
     mort, run_mort = en_vol(conn, revision, "faucheur-mort")
-    assert blocks.agent_alive(mort, run_mort["id"]) is False, "pas de trace, pas d'agent"
+    assert blocks.agent_state(mort, run_mort["id"]) != blocks.AGENT_ALIVE, \
+        "pas de trace, pas d'agent"
 
     fences = {vif: etat(conn, vif)["fence"], mort: etat(conn, mort)["fence"]}
     kernel.reap(conn)

@@ -70,8 +70,9 @@ def bundle(nom: str) -> dict:
         "nodes": {
             NOEUD: {
                 "block": "ACT",
-                "config": {"agent": {"cmd": "true", "prompt": "ne fais rien",
-                                     "timeout_s": BUDGET_S, "silence_s": SILENCE_S}},
+                "config": {"execution": {"kind": "command", "cmd": "true",
+                                         "timeout_s": BUDGET_S,
+                                         "silence_s": SILENCE_S}},
                 "edges": {"ok": "fini"},
             },
             "escalate": {
@@ -118,8 +119,10 @@ def contexte(workdir: Path, cmd: str, node: str, budget_s: float = BUDGET_S,
              precedente: dict | None = None) -> blocks.Context:
     blocks.DATA_DIR = workdir
     spec = {"block": "ACT", "edges": {"ok": "fini"},
-            "config": {"agent": {"cmd": cmd, "prompt": "fais le travail",
-                                 "timeout_s": budget_s, "silence_s": SILENCE_S}}}
+            "config": {"execution": {"kind": "agent", "cmd": cmd,
+                                     "timeout_s": budget_s,
+                                     "silence_s": SILENCE_S},
+                       "agent": {"prompt": "fais le travail", "cli": "codex"}}}
     return blocks.Context(
         FauxConn(precedente),
         {"id": 1, "node": node, "cycle": cycle, "attempt": attempt},
