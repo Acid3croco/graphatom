@@ -68,7 +68,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import blocks, db, executors, graph, kernel, scheduler  # noqa: E402
+from graphatom import activation, blocks, db, executors, graph, kernel, scheduler  # noqa: E402
 from graphatom.blocks import AGENT_TIMEOUT_S  # noqa: E402
 
 from outils import git  # noqa: E402
@@ -1003,7 +1003,7 @@ def main() -> None:
         (deploiement / f"sha-{service}.txt").write_text(wanted)
     donnees, ancienne_data = activation / "data", blocks.DATA_DIR
     blocks.DATA_DIR = donnees
-    ancien_sha = scheduler.WORKER_SHA
+    ancien_sha = activation.WORKER_SHA
     ancien_repo = os.environ.get("GRAPHATOM_REPO_DIR")
     ancien_systemctl = os.environ.get("GRAPHATOM_SYSTEMCTL")
     ancien_docker = os.environ.get("GRAPHATOM_DOCKER")
@@ -1078,7 +1078,7 @@ def main() -> None:
             for service in scheduler.DEPLOYED_SERVICES:
                 label = deploiement / f"sha-{service}.txt"
                 label.write_text("0" * 40)
-                assert scheduler._activation_worker(conn) == 0
+                assert activation.reconcile(conn) == 0
                 assert journal.read_text() == "", \
                     "restart malgré une image discordante"
                 saved = conn.execute(
@@ -1098,11 +1098,11 @@ def main() -> None:
             assert saved["worker_activation"]["status"] == "error", saved
 
             code.write_text("0")
-            assert scheduler._activation_worker(conn) == 1
+            assert activation.reconcile(conn) == 1
             assert len(journal.read_text().splitlines()) == 2, journal.read_text()
-            scheduler.WORKER_SHA = wanted
-            assert scheduler._activation_worker(conn) == 0
-            assert scheduler._activation_worker(conn) == 0
+            activation.WORKER_SHA = wanted
+            assert activation.reconcile(conn) == 0
+            assert activation.reconcile(conn) == 0
             assert len(journal.read_text().splitlines()) == 2, \
                 "le worker neuf a relancé une demande déjà acquittée"
             saved = conn.execute(
@@ -1137,11 +1137,11 @@ def main() -> None:
                 "deploy_sha": newest,
             }) == "applied"
             before = len(journal.read_text().splitlines())
-            assert scheduler._activation_worker(conn) == 1
+            assert activation.reconcile(conn) == 1
             assert len(journal.read_text().splitlines()) == before + 1
-            scheduler.WORKER_SHA = newest
-            assert scheduler._activation_worker(conn) == 0
-            assert scheduler._activation_worker(conn) == 0
+            activation.WORKER_SHA = newest
+            assert activation.reconcile(conn) == 0
+            assert activation.reconcile(conn) == 0
             latest = conn.execute(
                 "SELECT result FROM node_run WHERE id = %s", (second_run["id"],)
             ).fetchone()["result"]
@@ -1189,7 +1189,7 @@ def main() -> None:
             real_run = kernel.claim(conn, real_item)
             assert real_run is not None
             observations = []
-            real_activation = scheduler._activation_worker
+            real_activation = activation.reconcile
 
             def observe_after_apply(observed_conn):
                 stored = observed_conn.execute(
@@ -1203,19 +1203,19 @@ def main() -> None:
                 observations.append((stored, event))
                 return real_activation(observed_conn)
 
-            scheduler._activation_worker = observe_after_apply
+            activation.reconcile = observe_after_apply
             before = len(journal.read_text().splitlines())
             try:
                 scheduler._execute(real_run["id"], real_item)
             finally:
-                scheduler._activation_worker = real_activation
+                activation.reconcile = real_activation
             assert len(observations) == 1, observations
             assert observations[0][0]["status"] == "applied", observations
             assert observations[0][0]["result"]["deploy_sha"] == target
             assert observations[0][1] == {"kind": "result"}, observations
             assert len(journal.read_text().splitlines()) == before + 1
-            scheduler.WORKER_SHA = target
-            assert scheduler._activation_worker(conn) == 0
+            activation.WORKER_SHA = target
+            assert activation.reconcile(conn) == 0
 
             brut.write_text(json.dumps({
                 "outcome": "done", "summary": "SHA tronqué",
@@ -1231,7 +1231,7 @@ def main() -> None:
         print("22. résultat durable puis activation --user, erreur rejouée, "
               "acquittement idempotent par le worker neuf ✓")
     finally:
-        scheduler.WORKER_SHA = ancien_sha
+        activation.WORKER_SHA = ancien_sha
         blocks.DATA_DIR = ancienne_data
         if ancien_repo is None:
             os.environ.pop("GRAPHATOM_REPO_DIR", None)
