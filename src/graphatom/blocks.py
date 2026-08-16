@@ -940,11 +940,9 @@ def _attempt(ctx: Context, workspace: Path) -> dict:
         resolved = replace(resolved, timeout_s=_agent_timeout_s(ctx.config))
     env.update(executors.environment(resolved))
     cmd = _fill(ctx, executors.command(resolved), subject)
-    uses_executor = resolved.cmd is None or resolved.cmd_uses_executor
+    uses_executor = resolved.kind in {"model", "composed"}
     attempt_command(workspace, ctx.run).write_text(json.dumps({
-        "kind": ("composed" if resolved.cmd_uses_executor else
-                 "command" if resolved.kind in {"command", "harness"} else
-                 "shell" if resolved.cmd is not None else "model"),
+        "kind": resolved.kind,
         "executor": ({
             "cli": resolved.cli,
             "model": resolved.model,

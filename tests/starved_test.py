@@ -57,8 +57,9 @@ def contexte(workdir: Path, cmd: str, attempt: int) -> blocks.Context:
     spec = {
         "block": "ACT",
         "edges": {"ok": "fini"},
-        "config": {"agent": {"cmd": cmd, "prompt": "fais le travail",
-                             "timeout_s": 5, "silence_s": 5,
+        "config": {"execution": {"kind": "agent", "cmd": cmd,
+                                 "timeout_s": 5, "silence_s": 5},
+                   "agent": {"prompt": "fais le travail",
                              "passation": False}},
     }
     return blocks.Context(

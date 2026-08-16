@@ -10,9 +10,9 @@ Un wagon exécutable déclare ``config.execution.kind`` :
     Le wagon exécute une commande déterministe. Il n'a ni modèle, ni prompt,
     ni passation à fabriquer.
 
-Les anciennes révisions publiées restent lisibles : ``agent.cmd`` et
-``harness_cmd`` sont résolus selon leur ancien contrat. Les graphes sources
-actuels n'emploient plus ces deux formes.
+C'est la seule forme. Les clés historiques (``agent.cmd``, ``harness_cmd``,
+``cmd_uses_executor``) ne sont plus ni validées ni résolues : une révision
+qui les portait doit être republiée sous ``execution``.
 """
 
 from dataclasses import dataclass
@@ -30,7 +30,6 @@ class Adapter:
     cli: str
     script: str
     model_env: str
-    binary_env: str
     effort_env: str | None = None
     timeout_env: str | None = None
 
@@ -49,12 +48,12 @@ class Adapter:
 
 
 ADAPTERS = {
-    "claude": Adapter("claude", "agent-claude.sh", "CLAUDE_MODEL", "CLAUDE_BIN",
-                       timeout_env="CLAUDE_TIMEOUT_S"),
-    "codex": Adapter("codex", "agent-codex.sh", "CODEX_MODEL", "CODEX_BIN",
-                      "CODEX_REASONING_EFFORT", "CODEX_TIMEOUT_S"),
+    "claude": Adapter("claude", "agent-claude.sh", "CLAUDE_MODEL",
+                      timeout_env="CLAUDE_TIMEOUT_S"),
+    "codex": Adapter("codex", "agent-codex.sh", "CODEX_MODEL",
+                     "CODEX_REASONING_EFFORT", "CODEX_TIMEOUT_S"),
     "opencode": Adapter("opencode", "agent-opencode.sh", "OPENCODE_MODEL",
-                        "OPENCODE_BIN", timeout_env="OPENCODE_TIMEOUT_S"),
+                        timeout_env="OPENCODE_TIMEOUT_S"),
 }
 SUPPORTED_CLIS = frozenset(ADAPTERS)
 
@@ -73,16 +72,10 @@ class Executor:
     prompt: str | None = None
     handoff: bool = False
 
-    @property
-    def cmd_uses_executor(self) -> bool:
-        """Compatibilité de lecture : un wrapper composé appelle le modèle."""
-        return self.kind == "composed"
-
 
 def configured(node: dict) -> bool:
-    """Dit si le wagon déclare une exécution réelle, nouvelle ou historique."""
-    config = node.get("config") or {}
-    return any(key in config for key in ("execution", "harness_cmd", "agent"))
+    """Dit si le wagon déclare une exécution réelle."""
+    return "execution" in (node.get("config") or {})
 
 
 def resolve(bundle: dict, node: dict) -> Executor:
@@ -90,54 +83,29 @@ def resolve(bundle: dict, node: dict) -> Executor:
     defaults = bundle.get("agent") or {}
     config = node.get("config") or {}
     local = config.get("agent") or {}
-    execution = config.get("execution")
+    execution = config.get("execution") or {}
 
-    if execution is not None:
-        kind = execution["kind"]
-        if kind == "command":
-            return Executor(
-                kind="command",
-                cli=None,
-                model=None,
-                cmd=execution["cmd"],
-                timeout_s=execution.get("timeout_s"),
-                silence_s=execution.get("silence_s"),
-            )
-        command = execution.get("cmd")
+    kind = execution.get("kind")
+    if kind == "command":
         return Executor(
-            kind="composed" if command is not None else "model",
-            cli=local.get("cli", defaults.get("cli")),
-            model=local.get("model", defaults.get("model")),
-            cmd=command,
-            effort=local.get("effort", defaults.get("effort")),
-            timeout_s=execution.get(
-                "timeout_s", local.get("timeout_s", defaults.get("timeout_s"))
-            ),
-            silence_s=execution.get("silence_s", local.get("silence_s")),
-            prompt=local.get("prompt"),
-            handoff=local.get("passation", True),
+            kind="command",
+            cli=None,
+            model=None,
+            cmd=execution["cmd"],
+            timeout_s=execution.get("timeout_s"),
+            silence_s=execution.get("silence_s"),
         )
-
-    # Compatibilité des révisions déjà publiées. Une nouvelle publication
-    # qui porte `execution` ne passe jamais par ce chemin implicite.
-    harness = config.get("harness_cmd")
-    command = harness if harness is not None else local.get("cmd")
-    composed = harness is None and local.get("cmd_uses_executor", False)
+    command = execution.get("cmd")
     return Executor(
-        kind=("harness" if harness is not None else
-              "composed" if composed else
-              "shell" if command is not None else "model"),
-        cli=(None if harness is not None
-             else local.get("cli", defaults.get("cli"))),
-        model=(None if harness is not None
-               else local.get("model", defaults.get("model"))),
+        kind="composed" if command is not None else "model",
+        cli=local.get("cli", defaults.get("cli")),
+        model=local.get("model", defaults.get("model")),
         cmd=command,
-        effort=(None if harness is not None
-                else local.get("effort", defaults.get("effort"))),
-        timeout_s=local.get("timeout_s", defaults.get("timeout_s")),
-        silence_s=local.get("silence_s"),
+        effort=local.get("effort", defaults.get("effort")),
+        timeout_s=execution.get("timeout_s", defaults.get("timeout_s")),
+        silence_s=execution.get("silence_s"),
         prompt=local.get("prompt"),
-        handoff=(harness is None and local.get("passation", True)),
+        handoff=local.get("passation", True),
     )
 
 

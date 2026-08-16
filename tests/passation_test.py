@@ -89,7 +89,8 @@ def contexte(workdir: Path, node: str, events: list[dict],
              runs: dict[int, dict]) -> blocks.Context:
     blocks.DATA_DIR = workdir
     spec = {"block": "ACT", "edges": {"done": "suite"},
-            "config": {"agent": {"cmd": "true", "prompt": "fais le travail"}}}
+            "config": {"execution": {"kind": "agent", "cmd": "true"},
+                       "agent": {"prompt": "fais le travail"}}}
     return blocks.Context(
         FauxConn(events, runs),
         {"id": 99, "node": node, "cycle": 1, "attempt": 1},
@@ -130,7 +131,7 @@ def passation_obligatoire(workdir: Path) -> None:
     ctx = contexte(workdir, "scope", [], {})
     fichier = blocks.passation_path(ITEM, ctx.run)
     fichier.write_text("ancienne passation sans sections")
-    ctx.config["agent"]["cmd"] = (
+    ctx.config["execution"]["cmd"] = (
         "printf '%s' '{\"outcome\":\"done\",\"summary\":\"trop tôt\"}' "
         "> outcome.json"
     )
@@ -139,7 +140,7 @@ def passation_obligatoire(workdir: Path) -> None:
     assert "passation absente" in resultat["error"], resultat
     assert not fichier.exists(), "la passation de la tentative précédente a survécu"
 
-    ctx.config["agent"]["cmd"] = (
+    ctx.config["execution"]["cmd"] = (
         "printf '%s\\n' '## Fait' 'travail fait' '' '## Appris' 'rien' '' "
         "'## Pas fait' 'rien' > passation-scope.md; "
         "printf '%s' '{\"outcome\":\"done\",\"summary\":\"complet\"}' "

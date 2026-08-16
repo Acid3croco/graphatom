@@ -958,31 +958,12 @@ def _api_candidate(bundle: dict, spec: dict, candidate: int,
                    variant: dict) -> dict:
     """Une variante et les champs de son exécuteur résolu."""
     resolved = executors.resolve(bundle, candidate_node(spec, candidate))
-    cli, model, effort = resolved.cli, resolved.model, resolved.effort
-    cmd_uses_executor = resolved.cmd_uses_executor
-    codex = resolved.cmd and re.search(
-        r"\bbash\s+[^\s;]*agent-codex\.sh[\"']?(?=\s|;|$)", resolved.cmd)
-    opencode = resolved.cmd and re.search(
-        r"\bbash\s+[^\s;]*agent-opencode\.sh[\"']?(?=\s|;|$)", resolved.cmd)
-    if cli is None and codex:
-        cli, cmd_uses_executor = "codex", True
-        if match := re.search(r"(?:^|\s)CODEX_MODEL=([^\s;]+)", resolved.cmd):
-            model = match.group(1).strip("'\"")
-        if match := re.search(r"(?:^|\s)CODEX_REASONING_EFFORT=([^\s;]+)",
-                              resolved.cmd):
-            effort = match.group(1).strip("'\"")
-    elif cli is None and opencode:
-        cli, cmd_uses_executor = "opencode", True
-        match = re.search(r"agent-opencode\.sh[\"']?\s+opencode/([^\s;]+)",
-                          resolved.cmd)
-        if match:
-            model = match.group(1).strip("'\"")
     agent = {key: value for key, value in {
-        "cli": cli,
-        "model": model,
-        "effort": effort,
+        "cli": resolved.cli,
+        "model": resolved.model,
+        "effort": resolved.effort,
         "cmd": resolved.cmd,
-        "cmd_uses_executor": cmd_uses_executor,
+        "cmd_uses_executor": resolved.kind == "composed",
     }.items() if value is not None
              and not (key == "cmd_uses_executor" and value is False)}
     return {"variant": variant, "agent": agent, "cmd": resolved.cmd}

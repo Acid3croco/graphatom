@@ -31,8 +31,9 @@ DEEPSEEK = """<table><tr><td>MODEL</td><td>deepseek-v4-flash</td>
 <tr><td>1M OUTPUT TOKENS</td><td>$0.28</td><td>$0.87</td></tr></table>"""
 
 
-def graph(command: str, fanout: bool = False) -> dict:
-    config = {"agent": {"cmd": command}}
+def graph(fanout: bool = False) -> dict:
+    config: dict = {"execution": {"kind": "agent"},
+                    "agent": {"prompt": "travaille"}}
     if fanout:
         config["fanout"] = {
             "reduce": "first_pass",
@@ -70,34 +71,18 @@ def main() -> None:
     assert opencode == pricing.Tokens(100, 200, 300, 900)
     print("2. Codex et OpenCode : cache et raisonnement jamais comptés deux fois ✓")
 
-    structured = graph("", fanout=True)
+    structured = graph(fanout=True)
     assert pricing.run_model(
         structured, {"node": "work", "candidate": 0}, {}) == (
             "openai", "gpt-5.6-luna", "graph")
-    legacy = graph("CODEX_MODEL=gpt-5.6-sol bash scripts/agent-codex.sh")
-    assert pricing.run_model(legacy, {"node": "work", "candidate": None}, {}) == (
-        "openai", "gpt-5.6-sol", "graph")
-    guarded = graph("if test -f x; then CODEX_MODEL=gpt-5.6-luna bash scripts/agent-codex.sh; fi")
-    assert pricing.run_model(guarded, {"node": "work", "candidate": None}, {}) == (
-        "openai", "gpt-5.6-luna", "graph")
     reported = pricing.run_model(
-        graph(""), {"node": "work", "candidate": None},
+        graph(), {"node": "work", "candidate": None},
         {"model": "opencode/deepseek-v4-flash-free"})
     assert reported == ("deepseek", "deepseek-v4-flash", "usage")
-
-    old = os.environ.get("GRAPHATOM_LEGACY_CODEX_MODEL")
-    os.environ["GRAPHATOM_LEGACY_CODEX_MODEL"] = "gpt-5.6-sol"
-    try:
-        inferred = pricing.run_model(
-            graph("bash scripts/agent-codex.sh"),
-            {"node": "work", "candidate": None}, {})
-    finally:
-        if old is None:
-            os.environ.pop("GRAPHATOM_LEGACY_CODEX_MODEL", None)
-        else:
-            os.environ["GRAPHATOM_LEGACY_CODEX_MODEL"] = old
-    assert inferred == ("openai", "gpt-5.6-sol", "legacy_default")
-    print("3. modèle : usage, graph, ancienne commande et défaut inféré distingués ✓")
+    # un run sans modèle déclaré ni rapporté reste non estimé — jamais deviné
+    assert pricing.run_model(graph(), {"node": "work", "candidate": None},
+                             {}) is None
+    print("3. modèle : usage puis graph, jamais deviné ✓")
     print("\npricing : OK")
 
 

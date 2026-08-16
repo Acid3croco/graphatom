@@ -49,12 +49,12 @@ def declaration() -> None:
     assert "release-node.sh" in cmd("release"), cmd("release")
     for name in ("implement", "release"):
         resolved = executors.resolve(BUNDLE, BUNDLE["nodes"][name])
-        assert resolved.cmd is not None and resolved.cmd_uses_executor is True, (
+        assert resolved.cmd is not None and resolved.kind == "composed", (
             name, resolved
         )
     for name in ("test_backend", "test_frontend"):
         resolved = executors.resolve(BUNDLE, BUNDLE["nodes"][name])
-        assert resolved.cmd is not None and resolved.cmd_uses_executor is False
+        assert resolved.cmd is not None and resolved.kind == "command"
         assert "test_harness.py" in resolved.cmd, (name, resolved)
         assert (resolved.cli, resolved.model, resolved.effort) == (None, None, None)
 

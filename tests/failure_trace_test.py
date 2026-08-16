@@ -57,8 +57,9 @@ def context(node: str, attempt: int, cmd: str, outcome: str,
     run = {"id": attempt, "node": node, "cycle": 1, "attempt": attempt,
            "candidate": 4}
     spec = {"block": "ACT", "edges": {outcome: "suite"},
-            "config": {"agent": {"cmd": cmd, "prompt": "test déterministe",
-                                 "timeout_s": 10, "silence_s": 10}}}
+            "config": {"execution": {"kind": "agent", "cmd": cmd,
+                                     "timeout_s": 10, "silence_s": 10},
+                       "agent": {"prompt": "test déterministe"}}}
     return blocks.Context(FakeConn(), run, {"id": item_id, "subject_id": 1},
                           spec, {"name": "failure-trace"})
 

@@ -70,9 +70,7 @@ class GraphError(Exception):
 
 
 GRAPH_AGENT_KEYS = {"cli", "model", "effort", "timeout_s"}
-NODE_AGENT_KEYS = {"cli", "model", "effort", "cmd", "cmd_reason",
-                   "cmd_uses_executor", "prompt", "timeout_s", "silence_s",
-                   "passation"}
+NODE_AGENT_KEYS = {"cli", "model", "effort", "prompt", "passation"}
 EXECUTION_KEYS = {"kind", "cmd", "timeout_s", "silence_s"}
 EXECUTION_KINDS = {"agent", "command"}
 EXECUTABLE_BLOCKS = {"JUDGE", "ACT", "CHECK"}
@@ -142,18 +140,6 @@ def _validate_executions(bundle: dict) -> None:
                     or not execution["cmd"].strip()):
                 raise GraphError(f"{name} : execution agent avec cmd invalide")
 
-        if "harness_cmd" in config:
-            raise GraphError(f"{name} : execution et harness_cmd sont incompatibles")
-        if isinstance(local, dict):
-            legacy = {
-                "cmd", "cmd_reason", "cmd_uses_executor", "timeout_s", "silence_s"
-            } & set(local)
-            if legacy:
-                raise GraphError(
-                    f"{name} : execution et réglages agent historiques "
-                    f"incompatibles {sorted(legacy)}"
-                )
-
     for name, spec in bundle["nodes"].items():
         config = spec.get("config") or {}
         check(name, spec, config)
@@ -192,14 +178,6 @@ def _validate_agent_values(place: str, agent: dict, allowed: set[str]) -> None:
                                  or not isinstance(agent["timeout_s"], (int, float))
                                  or agent["timeout_s"] <= 0):
         raise GraphError(f"{place} : timeout d'agent invalide {agent['timeout_s']!r}")
-    if "cmd_reason" in agent and "cmd" not in agent:
-        raise GraphError(f"{place} : cmd_reason sans cmd")
-    if "cmd_uses_executor" in agent:
-        if not isinstance(agent["cmd_uses_executor"], bool):
-            raise GraphError(
-                f"{place} : cmd_uses_executor doit être un booléen, "
-                f"vu {agent['cmd_uses_executor']!r}"
-            )
     if "passation" in agent and not isinstance(agent["passation"], bool):
         raise GraphError(
             f"{place} : passation doit être un booléen, vu {agent['passation']!r}"
@@ -220,28 +198,18 @@ def _validate_agents(bundle: dict) -> None:
         variants = fanout.get("variants") or [] if isinstance(fanout, dict) else []
         if local is not None:
             _validate_agent_values(name, local, NODE_AGENT_KEYS)
-        effective = {**(defaults or {}), **(local or {})}
-        if local is not None:
-            if "cmd" not in effective and "cli" not in effective:
-                raise GraphError(f"{name} : agent sans cmd ni CLI structurée")
-            _validate_composed(name, effective)
+            if "execution" not in (spec.get("config") or {}):
+                raise GraphError(f"{name} : agent sans execution — un agent "
+                                 "réel se déclare par config.execution")
+            effective = {**(defaults or {}), **local}
+            if "cli" not in effective:
+                raise GraphError(f"{name} : agent sans CLI structurée")
         for index, variant in enumerate(variants):
             override = variant.get("agent") if isinstance(variant, dict) else None
             if override is None:
                 continue
             place = f"{name}.fanout.variants[{index}]"
             _validate_agent_values(place, override, NODE_AGENT_KEYS)
-            _validate_composed(place, {**effective, **override})
-
-
-def _validate_composed(place: str, agent: dict) -> None:
-    """Une commande composée nomme une commande et l'exécuteur qu'elle lance."""
-    if "cmd_uses_executor" not in agent:
-        return
-    if "cmd" not in agent:
-        raise GraphError(f"{place} : cmd_uses_executor sans cmd")
-    if agent["cmd_uses_executor"] and not agent.get("cli"):
-        raise GraphError(f"{place} : cmd_uses_executor sans CLI structurée")
 
 
 def canonical(bundle: dict) -> str:

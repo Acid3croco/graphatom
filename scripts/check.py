@@ -30,7 +30,7 @@ CORE_PY = (
     "agent_executor_test.py", "answer_test.py", "api_test.py",
     "checklist_test.py", "codex_routing_test.py", "criteria_test.py",
     "depends_test.py", "failure_trace_test.py", "fanout_config_test.py",
-    "graph_executor_migration_test.py", "heartbeat_test.py", "links_test.py",
+    "heartbeat_test.py", "links_test.py",
     "live_test.py", "orphans_test.py", "passation_test.py",
     "postgres_recovery_test.py", "pricing_test.py", "seed_test.py",
     "split_deps_test.py", "starved_test.py", "test_harness_test.py",

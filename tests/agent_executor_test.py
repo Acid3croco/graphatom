@@ -57,10 +57,15 @@ def node(agent: dict, fanout: dict | None = None) -> dict:
 
 
 def legacy_node(agent: dict) -> dict:
-    """Une ancienne révision, réservée aux preuves de compatibilité."""
+    """Une ancienne forme sans execution : la validation doit la refuser."""
     return {"block": "ACT",
             "config": {"agent": {"prompt": "ancien prompt", **agent}},
             "edges": {"done": "fin"}}
+
+
+# le contrat shell des adaptateurs : la variable qui désigne le binaire
+BINARY_ENV = {"claude": "CLAUDE_BIN", "codex": "CODEX_BIN",
+              "opencode": "OPENCODE_BIN"}
 
 
 def bundle(agent: dict, spec: dict | None = None) -> dict:
@@ -134,7 +139,7 @@ def adapter(cli: str, model: str, expected_input: int, tmp: Path) -> None:
     binary = workspace / f"fake-{cli}"
     capture = workspace / "args.txt"
     executable(binary, FAKES[cli])
-    env_name = executors.ADAPTERS[cli].binary_env
+    env_name = BINARY_ENV[cli]
     old = os.environ.get(env_name)
     os.environ[env_name] = str(binary)
     os.environ["CAPTURE"] = str(capture)
@@ -257,24 +262,24 @@ def validation() -> None:
             assert attendu in texte, texte
         else:
             raise AssertionError(f"configuration acceptée : {mauvais}")
-    for mauvais, attendu in (
-        ({"cmd": "true", "cmd_uses_executor": "oui"}, "booléen"),
-        ({"cmd_uses_executor": True}, "sans cmd"),
-    ):
+    # les clés historiques sont refusées, pas migrées en silence
+    for mauvais in ({"cmd": "true"}, {"cmd_uses_executor": True},
+                    {"cmd": "true", "cmd_reason": "outillage"}):
         try:
             graph.validate(bundle({"cli": "codex", "model": "gpt"},
                                   legacy_node(mauvais)))
         except graph.GraphError as exc:
-            assert attendu in str(exc), str(exc)
+            assert "inconnu" in str(exc), str(exc)
         else:
-            raise AssertionError(f"configuration composée acceptée : {mauvais}")
+            raise AssertionError(f"clé historique acceptée : {mauvais}")
+    # un agent sans execution n'est plus un agent implicite : refus explicite
     try:
-        graph.validate(bundle({}, legacy_node(
-            {"cmd": "true", "cmd_uses_executor": True})))
+        graph.validate(bundle({"cli": "codex", "model": "gpt"},
+                              legacy_node({})))
     except graph.GraphError as exc:
-        assert "sans CLI" in str(exc), str(exc)
+        assert "sans execution" in str(exc), str(exc)
     else:
-        raise AssertionError("commande composée sans CLI acceptée")
+        raise AssertionError("agent sans execution accepté")
     command = node({"cmd": "true"})
     command["config"]["agent"] = {"prompt": "parasite"}
     try:
@@ -306,7 +311,7 @@ def validation() -> None:
     try:
         graph.validate(bundle({"cli": "codex"}, duplicate))
     except graph.GraphError as exc:
-        assert "historiques" in str(exc) and "timeout_s" in str(exc), str(exc)
+        assert "inconnu" in str(exc) and "timeout_s" in str(exc), str(exc)
     else:
         raise AssertionError("deux timeout_s concurrents acceptés")
     variant = node({}, {"variants": [{"agent": {"cmd": "true"}}],

@@ -16,9 +16,7 @@ from __future__ import annotations
 import datetime as dt
 import html.parser
 import json
-import os
 import re
-import shlex
 import time
 import urllib.request
 from dataclasses import dataclass
@@ -211,38 +209,11 @@ def components(tokens: Tokens, price: Price | dict) -> dict[str, Decimal]:
     return costs | {"estimated_cost_usd": sum(costs.values(), Decimal(0))}
 
 
-def _shell_assignments(command: str) -> dict[str, str]:
-    """Les affectations simples au début d'une commande historique."""
-    try:
-        words = shlex.split(command)
-    except ValueError:
-        return {}
-    result = {}
-    for word in words:
-        if "=" not in word:
-            break
-        name, value = word.split("=", 1)
-        if name.isidentifier():
-            result[name] = value
-    return result
-
-
-def _model_in_command(command: str, name: str) -> str | None:
-    """Une affectation de modèle, même derrière le garde d'un ancien shell."""
-    match = re.search(
-        rf"(?:^|[\s;]){name}=(?:'([^']+)'|\"([^\"]+)\"|([A-Za-z0-9._:/-]+))",
-        command,
-    )
-    return next((part for part in match.groups() if part), None) if match else None
-
-
 def run_model(bundle: dict, run: dict, usage: dict) -> tuple[str, str, str] | None:
     """Rend fournisseur, modèle tarifé et provenance du choix.
 
-    Le modèle écrit dans l'usage gagne. Vient ensuite l'exécuteur structuré
-    du graph, puis les anciennes commandes à variables d'environnement. Les
-    tout premiers runs Codex n'épinglaient rien : un modèle historique peut
-    être fourni explicitement au service, et reste marqué ``legacy_default``.
+    Le modèle écrit dans l'usage gagne ; sinon c'est l'exécuteur structuré
+    du graph. Un run sans l'un ni l'autre reste non estimé.
     """
     reported = usage.get("model")
     if isinstance(reported, str) and reported:
@@ -255,31 +226,11 @@ def run_model(bundle: dict, run: dict, usage: dict) -> tuple[str, str, str] | No
     if run.get("candidate") is not None:
         spec = candidate_node(spec, run["candidate"])
     resolved = executors.resolve(bundle, spec)
-    command = resolved.cmd or ""
-    assignments = _shell_assignments(command)
-    model = resolved.model
-    cli = resolved.cli
-    if not model:
-        model = (assignments.get("CODEX_MODEL") or assignments.get("OPENCODE_MODEL")
-                 or _model_in_command(command, "CODEX_MODEL")
-                 or _model_in_command(command, "OPENCODE_MODEL"))
-    if not model and "agent-opencode.sh" in command:
-        positional = re.search(r"agent-opencode\.sh[^\n]*?\s+(opencode/[A-Za-z0-9._/-]+)",
-                               command)
-        model = positional.group(1) if positional else None
-    if not cli:
-        if "agent-codex.sh" in command:
-            cli = "codex"
-        elif "agent-opencode.sh" in command:
-            cli = "opencode"
+    model, cli = resolved.model, resolved.cli
     if cli == "codex" and model:
         return "openai", model, "graph"
     if cli == "opencode" and model and "deepseek-v4-flash" in model:
         return "deepseek", "deepseek-v4-flash", "graph"
-    if cli == "codex" or "agent-codex.sh" in command:
-        legacy = os.environ.get("GRAPHATOM_LEGACY_CODEX_MODEL")
-        if legacy:
-            return "openai", legacy, "legacy_default"
     return None
 
 
