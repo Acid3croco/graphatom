@@ -29,3 +29,7 @@ agent:169:17:compare:0:GtE  # instant du couperet de silence : idem
 arbitrage:18:19:int  # JUDGE_WORK_CHARS : la borne du diff cité au juge, un réglage de taille
 arbitrage:82:55:int  # la sentinelle -1 devenue -2 reste négative : « aucune lettre » se lit pareil
 routing:94:51:int  # la valeur par défaut de attempt n'est jamais lue : apply passe le run entier, apply_item pose attempt=0
+kernel:325:61:int  # le run synthétique d'apply_item ne passe jamais par une issue relançable : son numéro de tentative n'est jamais lu
+kernel:164:52:int  # sans fan-out, la tentative est au complet dès le premier candidat : le second numéro de la plage n'est jamais tiré
+reaper:36:19:compare:0:Lt  # instant d'expiration du bail : < et <= sont indistinguables sur une horloge
+reaper:56:7:compare:0:Lt  # idem, relu sous les verrous
