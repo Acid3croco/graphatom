@@ -65,9 +65,16 @@ def refus(out: subprocess.CompletedProcess, message: str) -> None:
 
 
 def demon(*args: str) -> subprocess.Popen:
+    """Un démon du rail, chef de sa session, SIGINT rendu à sa valeur par défaut.
+
+    Un lanceur qui tourne en tâche de fond d'un shell hérite d'un SIGINT
+    ignoré, et Python le garde ignoré : la preuve porte sur l'arrêt du
+    démon, pas sur l'humeur du lanceur.
+    """
     return subprocess.Popen([sys.executable, "-m", "graphatom.cli", *args], cwd=ROOT,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                            env=ENV, start_new_session=True)
+                            env=ENV, start_new_session=True,
+                            preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
 
 
 def arret(proc: subprocess.Popen) -> str:
