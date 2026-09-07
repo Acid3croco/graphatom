@@ -24,7 +24,7 @@ from psycopg.conninfo import make_conninfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import db, graph, kernel, quota, web  # noqa: E402
+from graphatom import db, graph, kernel, quota  # noqa: E402
 from graphatom import api  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -128,16 +128,19 @@ def plafond_global(conn) -> None:
 
 
 def configuration() -> None:
-    """Le défaut vient des cœurs et GRAPHATOM_MAX_BUILDS le surcharge."""
+    """Le défaut vient des cœurs, GRAPHATOM_MAX_BUILDS le surcharge, et un item
+    garde une place de moins que le quota — jamais moins d'une."""
     attendu = max(1, (os.cpu_count() or 4) // 6)
     assert quota.MAX_BUILDS == attendu, (quota.MAX_BUILDS, attendu)
-    env = {**os.environ, "GRAPHATOM_MAX_BUILDS": "3"}
-    out = subprocess.run(
-        [PYTHON, "-c", "from graphatom.quota import MAX_BUILDS; print(MAX_BUILDS)"],
-        cwd=ROOT, env=env, capture_output=True, text=True, check=True,
-    )
-    assert out.stdout.strip() == "3", out.stdout
-    print(f"6. {os.cpu_count()} cœurs → quota {attendu} ; surcharge 3 lue ✓")
+    assert quota.MAX_BUILDS_PER_ITEM == max(1, quota.MAX_BUILDS - 1), quota.MAX_BUILDS_PER_ITEM
+    lecture = "from graphatom import quota; print(quota.MAX_BUILDS, quota.MAX_BUILDS_PER_ITEM)"
+    for surcharge, par_item in ((1, 1), (2, 1), (3, 2)):
+        env = {**os.environ, "GRAPHATOM_MAX_BUILDS": str(surcharge)}
+        out = subprocess.run([PYTHON, "-c", lecture], cwd=ROOT, env=env,
+                             capture_output=True, text=True, check=True)
+        assert out.stdout.split() == [str(surcharge), str(par_item)], out.stdout
+    print(f"6. {os.cpu_count()} cœurs → quota {attendu} ; surcharges 1, 2, 3 lues, "
+          "une place d'item de moins, jamais moins d'une ✓")
 
 
 def attente_gratuite(conn) -> None:

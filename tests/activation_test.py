@@ -7,7 +7,7 @@ un docker qui rend les étiquettes qu'on lui pose, un gh absent :
   1. sans demande durable, rien ; le worker déjà sur le SHA voulu :
      `active`, écrit une fois, muet ensuite
   2. checkout différent : erreur écrite une fois, aucun redémarrage, et le
-     tick suivant ne la redit pas
+     tick suivant ne la redit pas ; un dépôt sans git : « checkout inconnu »
   3. services discordants : l'erreur les nomme, le rapport dit ce que chacun
      porte — ou qu'il ne porte rien —, aucun redémarrage
   4. tout concorde : l'état `pending` est en base AVANT l'appel de systemctl,
@@ -21,7 +21,8 @@ un docker qui rend les étiquettes qu'on lui pose, un gh absent :
      la demande passe
   9. demande remplacée sous le verrou : en attente, l'ancienne intouchée
  10. checkout qui bouge sous le verrou : plus en attente, rien d'écrit
- 11. `cksum` indisponible ou illisible : erreur notée, imprimée, en attente
+ 11. la clé du verrou est le `cksum` du chemin du dépôt ; `cksum` en échec,
+     muet ou illisible : erreur notée, imprimée, en attente
  12. rapport inaccessible : la ligne est imprimée, l'état reste en base
 
 Après chaque chemin qui échoue — 2, 3, 6, 7, 11 — une autre session prend le
@@ -183,8 +184,17 @@ def checkout_different(banc: Banc) -> None:
     assert len(banc.rapport()) == 3, banc.rapport()
     assert banc.redemarrages() == [], "redémarrage sur un checkout étranger"
     assert banc.verrou_libre(), "verrou gardé après un checkout différent"
-    print("2. checkout différent : erreur notée une fois sur deux ticks, aucun restart, "
-          "verrou libre ✓")
+    hors_git = banc.repo.with_name("hors-git")
+    hors_git.mkdir()
+    os.environ["GRAPHATOM_REPO_DIR"] = str(hors_git)
+    try:
+        assert activation.reconcile(banc.conn) is False
+    finally:
+        os.environ["GRAPHATOM_REPO_DIR"] = str(banc.repo)
+    assert banc.etat(run)["error"] == "checkout inconnu différent", banc.etat(run)
+    assert banc.rapport()[-1] == "activation en attente - checkout inconnu différent"
+    print("2. checkout différent, puis dépôt sans git : erreur notée une fois sur deux "
+          "ticks, checkout inconnu nommé, aucun restart, verrou libre ✓")
 
 
 def services_discordants(banc: Banc) -> None:
@@ -325,9 +335,14 @@ def checkout_mouvant(banc: Banc) -> None:
 
 
 def sans_cksum(banc: Banc) -> None:
-    """11. `cksum` indisponible ou illisible : erreur notée, imprimée, en attente."""
+    """11. la clé du verrou est le `cksum` du chemin du dépôt ; `cksum` en échec,
+    muet ou illisible : erreur notée, imprimée, en attente."""
+    cksum = subprocess.run(["cksum"], input=str(banc.repo), capture_output=True,
+                           text=True, check=True, timeout=10)
+    assert banc.cle == int(cksum.stdout.split()[0]), (banc.cle, cksum.stdout)
     reel = subprocess.run
-    for reponse in (dict(returncode=1, stdout=""), dict(returncode=0, stdout="pas un nombre")):
+    for reponse in (dict(returncode=1, stdout=""), dict(returncode=0, stdout=""),
+                    dict(returncode=0, stdout="pas un nombre")):
         run = banc.demande(banc.wanted)
         avant = banc.redemarrages()
 
@@ -343,8 +358,8 @@ def sans_cksum(banc: Banc) -> None:
         assert banc.rapport()[-1] == "activation du worker échouée - cksum indisponible"
         assert banc.redemarrages() == avant
         assert banc.verrou_libre(), "verrou gardé sans cksum"
-    print("11. cksum en échec ou illisible : erreur en base, imprimée, en attente, "
-          "verrou libre ✓")
+    print("11. clé = cksum du dépôt ; cksum en échec, muet ou illisible : erreur en base, "
+          "imprimée, en attente, verrou libre ✓")
 
 
 def rapport_inaccessible(banc: Banc) -> None:
