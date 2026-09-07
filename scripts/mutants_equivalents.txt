@@ -42,3 +42,16 @@ scheduler:156:37:int  # longueur d'affichage d'une révision dans un message d'a
 worktree:46:16:int  # GIT_TIMEOUT_S : délai des git du dépôt, réglage de patience
 worktree:252:75:int  # une branche dont l'atelier vient d'être retiré n'est plus tenue : la seconde boucle la supprime et la compte de toute façon
 worktree:259:34:compare:0:Eq  # branch -D ne rate que sur une branche tenue par un atelier, que 'tenues' vient d'exclure : le code est toujours 0
+activation:116:11:compare:0:Lt  # instant de la reprise autorisée : < et <= sont indistinguables sur une horloge
+activation:99:74:bool  # text=False rend des bytes, et int() les lit pareil : la clé du verrou est la même
+quota:37:23:int  # BUILD_LOCK_NAMESPACE est un identifiant arbitraire, lu des deux côtés par le symbole : toute valeur fait le même verrou
+quota:113:17:binop:Add  # l'ordre de parcours des places ne change rien : toutes sont essayées, la première libre est prise
+quota:31:24:int  # repli quand cpu_count() est inconnu : un choix de machine
+quota:31:46:int  # diviseur de la taille par défaut : le plancher max(1, …) est le contrat
+quota:154:15:compare:0:GtE  # instant du rapport d'attente : >= et > sont indistinguables sur une horloge
+quota:149:15:compare:0:GtE  # instant du renouvellement du bail : idem
+quota:153:29:binop:Add  # cadence de renouvellement : renouveler à chaque tour tient la même garantie, plus cher
+quota:141:29:binop:Add  # idem, dans la boucle des places d'item
+quota:177:26:int  # durée de grâce entre SIGTERM et SIGKILL : un réglage
+quota:207:70:int  # connect_timeout : un réglage de patience
+quota:217:40:compare:0:Is  # le ménage du finally double celui du gestionnaire psycopg.Error et celui du signal : un enfant fini ou déjà arrêté rend le même état
