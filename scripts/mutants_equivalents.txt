@@ -60,3 +60,5 @@ heartbeat:77:26:compare:0:Gt  # l'âge exact STALE_S n'est pas observable sur un
 github_speech:24:39:int  # un sujet gh ne porte qu'un dièse : rsplit à 1 ou 2 coupures rend la même paire
 github_admission:229:19:bool  # free n'est qu'un raccourci : le verrou de voie du noyau refuse de toute façon une seconde admission dans le tick, l'issue finit en file pareil
 github_admission:237:15:bool  # idem après une voie déjà occupée
+github_questions:29:17:int  # CRITERIA_LINES : combien de lignes de critères on cite, un réglage de lecture ; la coupe est prouvée sur le symbole
+github_sync:262:65:int  # longueur d'affichage de la révision dans la ligne de démarrage du canal
