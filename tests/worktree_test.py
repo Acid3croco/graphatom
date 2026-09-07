@@ -208,6 +208,23 @@ def menage_prudent() -> None:
     print("7. ménage : l'étranger est nommé et laissé, le verrouillé attend ✓")
 
 
+def hors_des_ateliers() -> None:
+    """9 bis. Un atelier enregistré hors de `.worktrees/`, ou un dépôt relatif :
+    jamais détruit — le garde-fou est le chemin, pas la branche."""
+    item = 61
+    branche, _ = atelier_item(REPO, item)
+    mine = worktree.candidate_branch(branche, 0)
+    ailleurs = REPO.parent / f"ailleurs-{item}-c0"
+    git(REPO, "worktree", "add", "-q", str(ailleurs), "-b", mine)
+    assert not worktree._mine(REPO, ailleurs), "hors de .worktrees : pas à nous"
+    assert worktree._mine(REPO, REPO / worktree.WORKTREES / "x")
+    assert not worktree._mine(Path("depot-relatif"), Path("depot-relatif") / worktree.WORKTREES / "x")
+    retirees = worktree.discard(item)
+    assert retirees == [] and ailleurs.is_dir() and enregistre(ailleurs), retirees
+    print("9 bis. un atelier hors de .worktrees/ reste en place ; un dépôt relatif "
+          "n'est jamais nettoyé ✓")
+
+
 def git_injouable() -> None:
     chemin = os.environ["PATH"]
     os.environ["PATH"] = str(TMP / "vide")
@@ -231,6 +248,7 @@ def main() -> None:
         merge_non_ff()
         travail_du_candidat()
         menage_prudent()
+        hors_des_ateliers()
         git_injouable()
     finally:
         shutil.rmtree(TMP, ignore_errors=True)

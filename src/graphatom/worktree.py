@@ -113,7 +113,7 @@ def open_run(item_id: int, candidate: int) -> Path | None:
     """
     root, path = repo(), candidate_path(item_id, candidate)
     item = item_worktree(item_id)
-    if root is None or path is None or item is None:
+    if item is None:  # pas de dépôt, ou pas d'atelier d'item : rien à ouvrir
         return None
     if path.is_dir():
         return path
@@ -162,7 +162,7 @@ def promote(item_id: int, candidate: int) -> str | None:
     """
     root, item = repo(), item_worktree(item_id)
     path = candidate_path(item_id, candidate)
-    if root is None or item is None or path is None:
+    if item is None:
         return None  # pas de dépôt, pas d'atelier d'item : rien à promouvoir
 
     registered = _registered(root)

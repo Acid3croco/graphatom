@@ -67,3 +67,4 @@ quota:158:15:compare:0:Is  # idem pour la boucle des places globales
 quota:137:15:compare:0:GtE  # instant du renouvellement du bail dans la boucle d'item : >= et > se rejoignent
 reaper:37:20:boolop:And  # le balayage d'avant les verrous n'a pas d'autorité : élargir les suspects ne classe rien de plus, _doomed re-décide sous les verrous avec la même conjonction
 activation:131:52:int  # le code du CompletedProcess factice n'est jamais lu : l'erreur est déjà posée depuis l'OSError, et seul le non-zéro compte
+worktree:252:69:int  # lire la sortie au lieu du code : la branche de l'atelier retiré est reprise et comptée par la seconde boucle, comme pour 252:75

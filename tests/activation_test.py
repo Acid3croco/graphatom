@@ -339,8 +339,10 @@ def sha_du_module(banc: Banc) -> None:
     et « inconnu » sans git ; sans GRAPHATOM_REPO_DIR, c'est ce dépôt-là que
     reconcile relit comme checkout."""
     depot = Path(activation.__file__).resolve().parents[2]
-    tete = subprocess.run(["git", "-C", str(depot), "rev-parse", "HEAD"],
-                          capture_output=True, text=True, check=True).stdout.strip()
+    git_dit = subprocess.run(["git", "-C", str(depot), "rev-parse", "HEAD"],
+                             capture_output=True, text=True, check=False)
+    # hors d'un checkout — une archive du dépôt —, git ne répond pas : « inconnu »
+    tete = git_dit.stdout.strip() if git_dit.returncode == 0 else "inconnu"
     assert activation._worker_sha() == tete, (activation._worker_sha(), tete)
     reel = subprocess.run
 
@@ -367,7 +369,10 @@ def sha_du_module(banc: Banc) -> None:
     finally:
         os.environ["GRAPHATOM_REPO_DIR"] = repo_dir
     erreur = (banc.etat(run) or {}).get("error", "")
-    assert not erreur.startswith("checkout"), erreur
+    if tete == "inconnu":  # pas de checkout sous le module : le défaut le dit tel quel
+        assert erreur.startswith("checkout inconnu différent"), erreur
+    else:
+        assert not erreur.startswith("checkout"), erreur
     print("13. SHA du module lu dans son dépôt, « inconnu » sans git ; sans "
           "GRAPHATOM_REPO_DIR, le checkout est ce dépôt ✓")
 
