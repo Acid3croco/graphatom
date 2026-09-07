@@ -169,8 +169,11 @@ def lettres_aux_bornes() -> None:
     assert hors["outcome"] == "invalid_result", hors
     _, second = elu("b", attempt=8)
     assert second["elu"] == "B" and "son workspace : c5" in verdict(), verdict()
+    purge()
+    _, en_mots = elu("B — le plus sobre", attempt=9)  # la première lettre suffit
+    assert en_mots["elu"] == "B" and "son workspace : c5" in verdict(), verdict()
     print(f"9. A élit le premier (c2) ; {hors_liste}, au-delà du dernier : "
-          "invalid_result ; b minuscule élit le second (c5) ✓")
+          "invalid_result ; b minuscule, ou « B — … » en mots, élit le second (c5) ✓")
 
 
 def delegations() -> None:

@@ -16,6 +16,8 @@ Usage : uv run python tests/agent_progress_test.py
 """
 
 import os
+import subprocess
+import threading
 import sys
 import time
 from pathlib import Path
@@ -26,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 for variable in ("GRAPHATOM_REPO_DIR", "GRAPHATOM_AGENT_DSN", "GRAPHATOM_WORKTREE"):
     os.environ.pop(variable, None)
 
-from graphatom import agent, context, executors  # noqa: E402
+from graphatom import agent, context, executors, quota  # noqa: E402
 
 from bords_outils import SUJET, commande, contexte  # noqa: E402
 from outils import data_dir_jetable  # noqa: E402
@@ -104,12 +106,45 @@ def stub_instantane(workdir: Path) -> None:
     print("4. stub sans duration_s : instantané ; avec : la durée déclarée ✓")
 
 
+def attente_du_quota_creditee(workdir: Path) -> None:
+    """5. Le temps passé à attendre le quota est rendu au budget, ni plus ni moins.
+
+    Un marqueur d'attente de 0.6 s sur un budget total de 1 s : le couperet
+    tombe vers 1.6 s, pas à 1 s (l'attente ne compte pas), et pas jamais
+    (elle ne rend que ce qu'elle a pris).
+    """
+    atelier = workdir / "attente"
+    atelier.mkdir()
+    log = atelier / "agent.log"
+    log.write_text("")
+    marqueur = atelier / quota.WAIT_FILE
+    marqueur.touch()
+    threading.Timer(0.6, marqueur.unlink).start()
+    proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    debut = time.monotonic()
+    try:
+        agent._wait(proc, (log, atelier, None), agent.mark(log, atelier, None),
+                    budget_s=1.0, silence_s=30.0)
+    except subprocess.TimeoutExpired:
+        pass
+    else:
+        raise AssertionError("le couperet total devait tomber")
+    finally:
+        proc.kill()
+        proc.wait()
+    ecoule = time.monotonic() - debut
+    assert 1.4 <= ecoule <= 3.0, f"couperet à {ecoule:.2f} s : l'attente n'est pas rendue juste"
+    print("5. l'attente du quota est créditée au budget : couperet à ~1.6 s, "
+          "ni à 1 s ni jamais ✓")
+
+
 def main() -> None:
     workdir = data_dir_jetable("graphatom-agent-progress-")
     univers(workdir)
     machinerie(workdir)
     progres()
     stub_instantane(workdir)
+    attente_du_quota_creditee(workdir)
     print("\nprogrès et univers de l'agent : OK")
 
 
