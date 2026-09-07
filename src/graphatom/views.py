@@ -76,16 +76,15 @@ def runs(conn, where: str, params: tuple) -> list[dict]:
     return conn.execute("SELECT nr.* FROM node_run nr " + where, params).fetchall()
 
 
-def _costs(conn, rows: list[dict]) -> dict[int, tuple[float, int]]:
-    """Par item : la somme des coûts rapportés, et combien de runs en ont un."""
-    costs = {row["id"]: (0.0, 0) for row in rows}
+def _costs(conn, rows: list[dict]) -> dict[int, float | None]:
+    """Par item : la somme des coûts rapportés — None tant qu'aucun run n'en rapporte."""
+    costs: dict[int, float | None] = {row["id"]: None for row in rows}
     if not rows:
         return costs
     for run in runs(conn, "WHERE nr.item_id = ANY(%s)", ([row["id"] for row in rows],)):
         reported = reported_cost_value(run)
         if run.get("item_id") in costs and reported is not None:
-            total, count = costs[run["item_id"]]
-            costs[run["item_id"]] = (total + reported, count + 1)
+            costs[run["item_id"]] = (costs[run["item_id"]] or 0.0) + reported
     return costs
 
 
@@ -100,9 +99,8 @@ def items_data(conn) -> list[dict]:
             conn.execute(ITEM_SELECT + "ORDER BY w.id DESC").fetchall()]
     costs = _costs(conn, rows)
     for row in rows:
-        total, count = costs[row["id"]]
-        row["total_cost_usd"] = total
-        row["reported_cost_usd"] = total if count else None
+        row["reported_cost_usd"] = costs[row["id"]]
+        row["total_cost_usd"] = costs[row["id"]] or 0.0
     return rows
 
 
@@ -202,11 +200,13 @@ def _finalists(source_runs: list[dict]) -> list[dict]:
 
 
 def _elected(run: dict, mapping: list[dict]) -> dict | None:
-    result = run.get("result") or {}
+    """L'élu du juge : sa lettre, ou A pour un finaliste unique ; « none » n'élit personne."""
     if run["outcome"] == "chosen":
-        letter = result.get("elu")
+        letter = (run.get("result") or {}).get("elu")
+    elif run["outcome"] == "sole":
+        letter = "A"
     else:
-        letter = "A" if run["outcome"] == "sole" and mapping else None
+        return None
     return next((entry for entry in mapping if entry["letter"] == letter), None)
 
 

@@ -171,6 +171,10 @@ def preuve_en_tete(conn, item_id: int, page: str) -> None:
 def preuve_journal_runs(conn, item_id: int, page: str) -> None:
     """3b. le journal et les runs : chaque cellule vient d'une ligne de la base."""
     data = views.item_data(conn, item_id)
+    sans_run = [e["item_version"] for e in data["events"][1:] if e["run_id"] is None]
+    assert sans_run, "la réponse humaine est une transition sans run"
+    assert set(data["run_span"]) == {e["run_id"] for e in data["events"] if e["run_id"]}, \
+        "une durée par run ayant produit une transition, aucune clé pour les transitions sans run"
     ev = data["events"][2]
     assert (ev["kind"], ev["from_state"], ev["to_state"]) == ("result", "travail", "verif")
     assert (f"<tr><td>v3</td><td>{ev['at']:%d/%m %H:%M:%S}</td>"
