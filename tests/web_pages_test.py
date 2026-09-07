@@ -271,6 +271,42 @@ def preuve_release_cassee(conn, item_id: int) -> None:
     print("   release.json cassé : dit en page, None en JSON ✓")
 
 
+def preuve_partage(conn, fanout: int) -> None:
+    """5b. le prix du jugement face à celui des candidats — et le graph qui le permet."""
+    bundle = {"name": "juge", "entry": "gen", "on_kernel": {}, "agent": {"cli": "codex"},
+              "nodes": {"gen": {"block": "ACT", "config": {"fanout": {
+                            "variants": [{"label": "x"}], "reduce": "keep_n", "n": 1}}},
+                        "juge": {"block": "JUDGE", "config": {"finalists_from": "gen"}}}}
+    tentative = {"cycle": 1, "attempt": 1, "status": "applied", "finished_at": now()}
+    lot = [{"id": 3, "node": "juge", "candidate": None, "outcome": "chosen",
+            "result": {"usage": {"a": 1}, "elu": "A", "summary": "x l'emporte"}} | tentative,
+           {"id": 2, "node": "gen", "candidate": 0, "outcome": "ok",
+            "result": {"usage": {"b": 2, "modele": "x"}}} | tentative,
+           {"id": 1, "node": "gen", "candidate": None, "outcome": "ok",
+            "result": {"usage": {"c": 3.5}}} | tentative]
+    assert views.cost_split(bundle, lot) == {"judgement": {"a": 1}, "candidates": {"b": 2},
+                                             "other": {"c": 3.5}}, "trois parts disjointes"
+    decision = views.decision(999, bundle, lot)
+    assert decision["finalists"] == [{"letter": "A", "candidate": 0}], "un seul candidat, lettre A"
+    assert decision["selected"] == {"letter": "A", "candidate": 0} and decision["verdict"] is None
+    assert (decision["summary"], decision["judge"]["cli"]) == ("x l'emporte", "codex"), decision
+    seul = views.decision(999, bundle, [lot[0] | {"outcome": "sole", "result": {}}, *lot[1:]])
+    assert seul["selected"] == {"letter": "A", "candidate": 0} and seul["judge"] is None, \
+        "un finaliste unique passe sans juge : la lettre A, aucun modèle appelé"
+    aucun = views.decision(999, bundle, [lot[0] | {"outcome": "none", "result": {}}, lot[2]])
+    assert aucun["finalists"] == [] and aucun["selected"] is None, aucun
+    assert pages.split_line(bundle, lot) == ("<p class='meta' id='cout-jugement'>"
+                                             "jugement 1 a · candidats 2 b</p>")
+    noeuds = {n["name"]: n for n in api.graph(bundle, "juge")["nodes"]}
+    assert noeuds["juge"]["finalists_from"] == "gen" and "fanout" not in noeuds["juge"]
+    assert noeuds["gen"]["fanout"] == {"reduce": "keep_n", "repeat": 1, "candidates": [
+        {"variant": {"label": "x"}, "agent": {"cli": "codex"}, "cmd": None}]}
+    assert views.totals(lot) == {"a": 1, "b": 2, "c": 3.5}, "les textes d'usage ne s'additionnent pas"
+    assert api.item(conn, fanout)["item"]["usage_split"] == {
+        "judgement": {}, "candidates": {"input_tokens": 5}, "other": {}}, "l'API porte le partage"
+    print("   partage : jugement, candidats, autres ; le graph nomme fanout et source ✓")
+
+
 def main() -> None:
     db.init_db(drop=True)
     with db.connect() as conn:
