@@ -1,1 +1,4 @@
-validation:428:int
+# Un mutant par ligne : <module>:<ligne>:<colonne>:<opérateur>  # la raison.
+# Sans raison, le runner refuse la ligne. La ligne et la colonne sont celles
+# du source à la révision courante : un module qui bouge invalide l'entrée,
+# et c'est voulu — une équivalence se rejustifie.

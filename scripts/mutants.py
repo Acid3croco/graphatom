@@ -9,22 +9,31 @@ Les outils du marché (mutmut, cosmic-ray) mutent en mémoire sous pytest ;
 les preuves d'ici sont des scripts qui lancent la CLI et des agents en
 sous-processus, et rien ne leur passerait un mutant. Ce runner fait la
 seule chose honnête : il écrit chaque mutant dans une copie du dépôt, joue
-les preuves nommées, et classe — tué quand une preuve tombe, survivant
-quand toutes passent. Les opérateurs sont explicites, et rien d'autre
-n'est muté :
+les preuves nommées, et classe. Les opérateurs sont explicites, et rien
+d'autre n'est muté :
 
     ==  ↔  !=      <  ↔  <=      >  ↔  >=      in ↔ not in      is ↔ is not
     and ↔ or       not x → x     True ↔ False    n → n + 1 (entiers)
-    +  ↔  -        += ↔ -=
+    +  ↔  -        += ↔ -=       chaque maillon d'une comparaison chaînée
 
-Les réglages ne sont pas mutés — arguments nommés d'un appel, décorateurs,
-valeurs par défaut, constantes de module en majuscules : muter `TAIL_LINES
-= 20` ne mesure qu'une preuve tautologique, et le contrat que porte une
-telle constante est muté là où il s'applique, dans sa comparaison.
+Quatre verdicts, jamais confondus :
 
-Un mutant survivant est nommé par sa ligne et son opérateur : c'est la
-preuve qui manque, ou un mutant équivalent à documenter dans
-`scripts/mutants_equivalents.txt` (un par ligne : `<module>:<ligne>:<opérateur>`).
+    killed      une preuve tombe — le mutant est vu
+    survived    toutes passent — une preuve manque, ou le mutant est équivalent
+    timeout     les preuves dépassent trois fois leur durée : à examiner, pas
+                compté tué — une boucle infinie est détectée, une lenteur non
+    equivalent  inscrit, avec sa raison, dans scripts/mutants_equivalents.txt
+
+Un mutant est nommé par son module, sa ligne, sa colonne et son opérateur :
+deux mutants d'une même ligne ne se confondent pas. Une erreur du runner
+lui-même — un worker qui lève — arrête la campagne : un mutant sans
+verdict n'est pas un mutant tué.
+
+Ce qui n'est pas muté, et pourquoi, tient en une liste courte : les
+arguments nommés de pure forme (`sort_keys`, `indent`, `exist_ok`…), dont
+le retournement ne change aucune garantie. Tout le reste l'est — réglages
+de module et valeurs par défaut compris — et ce qui survit se prouve, ou
+s'inscrit avec sa raison.
 """
 
 from __future__ import annotations
@@ -33,7 +42,9 @@ import argparse
 import ast
 import copy
 import json
+import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -43,8 +54,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 EQUIVALENTS = ROOT / "scripts" / "mutants_equivalents.txt"
-EXCLUDED = {".venv", "node_modules", ".next", "data", "__pycache__", ".worktrees",
-            ".coverage-rules", ".git"}
+EXCLUDED_DIRS = {".venv", "node_modules", ".next", "data", "__pycache__", ".worktrees",
+                 ".coverage-rules", ".git"}
+# les arguments nommés de pure forme : retournés, ils changent la mise en
+# page d'un texte ou l'idempotence d'un mkdir, jamais une garantie du rail
+COSMETIC_KEYWORDS = {"sort_keys", "ensure_ascii", "indent", "separators", "flush",
+                     "errors", "exist_ok", "parents", "missing_ok", "frozen"}
+TIMEOUT_FACTOR = 3
+TIMEOUT_FLOOR_S = 30.0
 
 COMPARE = {ast.Eq: ast.NotEq, ast.NotEq: ast.Eq, ast.Lt: ast.LtE, ast.LtE: ast.Lt,
            ast.Gt: ast.GtE, ast.GtE: ast.Gt, ast.In: ast.NotIn, ast.NotIn: ast.In,
@@ -54,56 +71,38 @@ ARITH = {ast.Add: ast.Sub, ast.Sub: ast.Add}
 
 
 class Mutant:
-    def __init__(self, line: int, operator: str, tree: ast.Module):
-        self.line, self.operator, self.tree = line, operator, tree
+    def __init__(self, line: int, col: int, operator: str, tree: ast.Module):
+        self.line, self.col, self.operator, self.tree = line, col, operator, tree
 
     @property
     def name(self) -> str:
-        return f"{self.line}:{self.operator}"
+        return f"{self.line}:{self.col}:{self.operator}"
 
 
-def _settings(tree: ast.Module) -> set[int]:
-    """Les constantes qui sont des réglages, pas de la logique : non mutées.
+# ------------------------------------------------------------------ opérateurs
 
-    Un argument nommé d'un appel (`sort_keys=True`), un décorateur, la
-    valeur par défaut d'un paramètre, la constante d'un réglage de module en
-    majuscules (`TAIL_LINES = 20`) : les muter produit des mutants
-    équivalents ou des preuves tautologiques. Les contrats qu'ils portent —
-    « huit candidats au plus », « trois tentatives » — restent mutés là où
-    ils se décident : dans la comparaison qui les applique.
-    """
+
+def _cosmetic(tree: ast.Module) -> set[int]:
+    """Les nœuds sous un argument nommé de pure forme : non mutés."""
     skip: set[int] = set()
-
-    def mark(node: ast.AST) -> None:
-        skip.update(id(child) for child in ast.walk(node))
-
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             for keyword in node.keywords:
-                mark(keyword.value)
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            for decorator in node.decorator_list:
-                mark(decorator)
-            if not isinstance(node, ast.ClassDef):
-                for default in node.args.defaults + node.args.kw_defaults:
-                    if default is not None:
-                        mark(default)
-    for statement in tree.body:
-        if isinstance(statement, ast.Assign) and all(
-                isinstance(t, ast.Name) and t.id.isupper() for t in statement.targets):
-            mark(statement.value)
+                if keyword.arg in COSMETIC_KEYWORDS:
+                    skip.update(id(child) for child in ast.walk(keyword.value))
     return skip
 
 
 def _sites(tree: ast.Module) -> list[tuple[ast.AST, str]]:
     """Chaque nœud mutable et l'opérateur qui s'y applique, dans l'ordre du source."""
-    settings = _settings(tree)
+    cosmetic = _cosmetic(tree)
     found = []
     for node in ast.walk(tree):
-        if id(node) in settings:
+        if id(node) in cosmetic or not hasattr(node, "lineno"):
             continue
-        if isinstance(node, ast.Compare) and len(node.ops) == 1 and type(node.ops[0]) in COMPARE:
-            found.append((node, f"compare:{type(node.ops[0]).__name__}"))
+        if isinstance(node, ast.Compare):
+            found.extend((node, f"compare:{i}:{type(op).__name__}")
+                         for i, op in enumerate(node.ops) if type(op) in COMPARE)
         elif isinstance(node, ast.BoolOp):
             found.append((node, f"boolop:{type(node.op).__name__}"))
         elif isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
@@ -116,36 +115,25 @@ def _sites(tree: ast.Module) -> list[tuple[ast.AST, str]]:
             found.append((node, f"binop:{type(node.op).__name__}"))
         elif isinstance(node, ast.AugAssign) and type(node.op) in ARITH:
             found.append((node, f"augassign:{type(node.op).__name__}"))
-    return [(node, op) for node, op in found if hasattr(node, "lineno")]
-
-
-def _mutate(node: ast.AST, operator: str) -> None:
-    """Applique l'opérateur au nœud, en place."""
-    if operator.startswith("compare:"):
-        node.ops = [COMPARE[type(node.ops[0])]()]
-    elif operator.startswith("boolop:"):
-        node.op = BOOL[type(node.op)]()
-    elif operator == "bool":
-        node.value = not node.value
-    elif operator == "int":
-        node.value = node.value + 1
-    elif operator.startswith("binop:") or operator.startswith("augassign:"):
-        node.op = ARITH[type(node.op)]()
-
-
-def mutants(source: str) -> list[Mutant]:
-    """Tous les mutants du module, un arbre chacun — `not x → x` compris."""
-    base = ast.parse(source)
-    found = []
-    for index, (site, operator) in enumerate(_sites(base)):
-        tree = copy.deepcopy(base)
-        node = _sites(tree)[index][0]
-        if operator == "not":
-            _replace(tree, node, node.operand)
-        else:
-            _mutate(node, operator)
-        found.append(Mutant(site.lineno, operator, tree))
     return found
+
+
+def _mutate(tree: ast.Module, node: ast.AST, operator: str) -> None:
+    """Applique l'opérateur au nœud, en place dans l'arbre."""
+    kind = operator.split(":")[0]
+    if kind == "compare":
+        index = int(operator.split(":")[1])
+        node.ops[index] = COMPARE[type(node.ops[index])]()
+    elif kind == "boolop":
+        node.op = BOOL[type(node.op)]()
+    elif kind == "not":
+        _replace(tree, node, node.operand)
+    elif kind == "bool":
+        node.value = not node.value
+    elif kind == "int":
+        node.value = node.value + 1
+    else:  # binop, augassign
+        node.op = ARITH[type(node.op)]()
 
 
 def _replace(tree: ast.Module, old: ast.AST, new: ast.AST) -> None:
@@ -161,31 +149,71 @@ def _replace(tree: ast.Module, old: ast.AST, new: ast.AST) -> None:
                         return
 
 
+def mutants(source: str) -> list[Mutant]:
+    """Tous les mutants du module, un arbre chacun."""
+    base = ast.parse(source)
+    found = []
+    for index, (site, operator) in enumerate(_sites(base)):
+        tree = copy.deepcopy(base)
+        node = _sites(tree)[index][0]
+        _mutate(tree, node, operator)
+        found.append(Mutant(site.lineno, site.col_offset, operator, tree))
+    return found
+
+
+# --------------------------------------------------------------- équivalents
+
+
+def equivalents() -> dict[str, str]:
+    """`module:ligne:colonne:opérateur  # raison` — la raison est obligatoire."""
+    known: dict[str, str] = {}
+    if not EQUIVALENTS.exists():
+        return known
+    for raw in EQUIVALENTS.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, _, reason = line.partition("#")
+        if not reason.strip():
+            raise SystemExit(f"équivalent sans raison : {raw}")
+        known[key.strip()] = reason.strip()
+    return known
+
+
 # --------------------------------------------------------------------- course
 
 
 def _copy_repo(destination: Path) -> None:
     """Une copie du dépôt sans son venv : chaque worker a la sienne."""
     shutil.copytree(ROOT, destination, ignore=lambda _d, names: [
-        n for n in names if n in EXCLUDED])
+        n for n in names if n in EXCLUDED_DIRS])
 
 
-def _run_tests(repo: Path, tests: list[str], timeout: float) -> bool:
-    """Vrai si une preuve tombe (mutant tué), faux si toutes passent."""
+def _run_tests(repo: Path, tests: list[str], timeout: float) -> str:
+    """`killed` dès qu'une preuve tombe, `timeout` si elle s'éternise, sinon `survived`.
+
+    Chaque preuve part dans sa propre session : au dépassement, le groupe
+    entier est tué, descendants compris, avant que le worker ne réutilise
+    sa copie du dépôt.
+    """
     for test in tests:
+        proc = subprocess.Popen(["uv", "run", "python", test], cwd=repo,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                start_new_session=True)
         try:
-            done = subprocess.run(["uv", "run", "python", test], cwd=repo,
-                                  capture_output=True, text=True, timeout=timeout)
+            code = proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            return True  # une boucle qui ne finit plus est un mutant tué
-        if done.returncode:
-            return True
-    return False
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()
+            return "timeout"
+        if code:
+            return "killed"
+    return "survived"
 
 
 def _baseline(repo: Path, tests: list[str]) -> float:
     start = time.monotonic()
-    if _run_tests(repo, tests, timeout=1800):
+    if _run_tests(repo, tests, timeout=1800) != "survived":
         raise SystemExit("les preuves tombent déjà sans mutant : rien à mesurer")
     return time.monotonic() - start
 
@@ -196,45 +224,50 @@ def _judge(repo: Path, module: Path, mutant: Mutant, tests: list[str],
     original = target.read_text()
     target.write_text(ast.unparse(mutant.tree) + "\n")
     try:
-        return "killed" if _run_tests(repo, tests, timeout) else "survived"
+        return _run_tests(repo, tests, timeout)
     finally:
         target.write_text(original)
+
+
+MARKS = {"killed": "✓", "survived": "✗", "timeout": "⏱", "equivalent": "="}
 
 
 def campaign(module: Path, tests: list[str], workers: int) -> dict:
     source = (ROOT / module).read_text()
     found = mutants(source)
-    known = set(EQUIVALENTS.read_text().split()) if EQUIVALENTS.exists() else set()
+    known = equivalents()
     scratch = Path(tempfile.mkdtemp(prefix="graphatom-mutants-"))
     repos = [scratch / f"w{i}" for i in range(workers)]
     for repo in repos:
         _copy_repo(repo)
     baseline = _baseline(repos[0], tests)
-    timeout = max(30.0, baseline * 3)
+    timeout = max(TIMEOUT_FLOOR_S, baseline * TIMEOUT_FACTOR)
     print(f"{module} : {len(found)} mutants, preuves en {baseline:.0f} s, "
           f"{workers} worker(s)", flush=True)
-
-    verdicts: dict[str, str] = {}
     lines = source.splitlines()
+    verdicts: dict[str, str] = {}
 
-    def work(job: tuple[int, Mutant]) -> None:
-        index, mutant = job
-        repo = repos[index % workers]
-        key = f"{module.stem}:{mutant.name}"
-        verdict = "equivalent" if key in known else _judge(repo, module, mutant, tests, timeout)
-        verdicts[mutant.name] = verdict
-        mark = {"killed": "✓", "survived": "✗", "equivalent": "="}[verdict]
-        print(f"  {mark} {mutant.name:<24} {lines[mutant.line - 1].strip()[:70]}", flush=True)
+    def work(repo: Path, jobs: list[Mutant]) -> None:
+        for mutant in jobs:
+            key = f"{module.stem}:{mutant.name}"
+            verdict = "equivalent" if key in known else _judge(repo, module, mutant,
+                                                                 tests, timeout)
+            verdicts[mutant.name] = verdict
+            print(f"  {MARKS[verdict]} {mutant.name:<30} "
+                  f"{lines[mutant.line - 1].strip()[:66]}", flush=True)
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        # un worker ne joue qu'un mutant à la fois : les jobs sont rangés par worker
-        for offset in range(workers):
-            pool.submit(lambda o=offset: [work(job) for job in
-                                          list(enumerate(found))[o::workers]])
+        futures = [pool.submit(work, repos[i], found[i::workers]) for i in range(workers)]
+        for future in futures:
+            future.result()  # une erreur du runner remonte : pas de verdict inventé
     shutil.rmtree(scratch, ignore_errors=True)
+    missing = [m.name for m in found if m.name not in verdicts]
+    if missing:
+        raise SystemExit(f"mutants sans verdict : {missing}")
     return {"module": str(module), "tests": tests, "baseline_s": baseline,
             "mutants": len(found), "verdicts": verdicts,
-            "survived": [name for name, v in verdicts.items() if v == "survived"]}
+            "survived": [n for n, v in verdicts.items() if v == "survived"],
+            "timeout": [n for n, v in verdicts.items() if v == "timeout"]}
 
 
 def main() -> None:
@@ -256,10 +289,10 @@ def main() -> None:
     report = campaign(args.module, args.tests, args.workers)
     if args.json:
         args.json.write_text(json.dumps(report, indent=2, ensure_ascii=False))
-    survived = report["survived"]
     print(f"\n{args.module} : {report['mutants']} mutants, "
-          f"{len(survived)} survivant(s)", flush=True)
-    if survived:
+          f"{len(report['survived'])} survivant(s), {len(report['timeout'])} en dépassement",
+          flush=True)
+    if report["survived"] or report["timeout"]:
         sys.exit(1)
 
 

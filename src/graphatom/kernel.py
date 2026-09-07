@@ -255,32 +255,39 @@ def apply(conn: psycopg.Connection, run_id: int, submitted: dict) -> str:
         item, run = _locked(conn, run_id)
         rejected = _rejected(conn, item, run, submitted)
         if rejected is not None:
-            CLAIMED.discard(run_id)  # classé sans avancer : il ne vole plus non plus
-            return rejected
-        bundle = load_bundle(conn, item["revision"])
-        node = bundle["nodes"][run["node"]]
-        outcome = submitted.get("outcome")
-        if outcome not in (node.get("edges") or {}) and outcome not in KERNEL_OUTCOMES:
-            outcome = "invalid_result"
-        submitted = signed(item["id"], {**run, "outcome": outcome}, outcome, submitted)
-        run = {**run, "outcome": outcome, "result": submitted}
-        conn.execute(
-            "UPDATE node_run SET status = 'applied', outcome = %s, result = %s, "
-            "finished_at = %s WHERE id = %s",
-            (outcome, json.dumps(submitted), now(), run_id),
-        )
-        revoques, ranger = _settle(conn, item, bundle, run, outcome, kind="result")
-        # `keep_n` recale les réussites au-delà de la n-ième, et une promotion
-        # impossible faute le gagnant : rendre « applied » mentirait
-        statut = conn.execute(
-            "SELECT status FROM node_run WHERE id = %s", (run_id,)
-        ).fetchone()["status"]
+            statut, revoques, ranger = rejected, [], False
+        else:
+            statut, revoques, ranger = _advance(conn, item, run, submitted)
     # rendu et classé : ce run ne vole plus, il sort de la mémoire du
-    # processus. Ici et pas à l'entrée : un `apply` qui échoue laisse le run
-    # en vol sous ce worker-ci, et le faucheur doit y lire « bail expiré ».
+    # processus. Après la transaction et pas dedans : un commit qui échoue
+    # laisse le run en vol sous ce worker-ci, et le faucheur doit y lire
+    # « bail expiré », pas un redémarrage.
     CLAIMED.discard(run_id)
     reduction.menage(item["id"], revoques, ranger)
     return statut
+
+
+def _advance(conn, item: dict, run: dict, submitted: dict) -> tuple[str, list[int], bool]:
+    """Le résultat accepté : classé, signé, réglé. Rend le statut et le ménage."""
+    bundle = load_bundle(conn, item["revision"])
+    node = bundle["nodes"][run["node"]]
+    outcome = submitted.get("outcome")
+    if outcome not in (node.get("edges") or {}) and outcome not in KERNEL_OUTCOMES:
+        outcome = "invalid_result"
+    submitted = signed(item["id"], {**run, "outcome": outcome}, outcome, submitted)
+    run = {**run, "outcome": outcome, "result": submitted}
+    conn.execute(
+        "UPDATE node_run SET status = 'applied', outcome = %s, result = %s, "
+        "finished_at = %s WHERE id = %s",
+        (outcome, json.dumps(submitted), now(), run["id"]),
+    )
+    revoques, ranger = _settle(conn, item, bundle, run, outcome, kind="result")
+    # `keep_n` recale les réussites au-delà de la n-ième, et une promotion
+    # impossible faute le gagnant : rendre « applied » mentirait
+    statut = conn.execute(
+        "SELECT status FROM node_run WHERE id = %s", (run["id"],)
+    ).fetchone()["status"]
+    return statut, revoques, ranger
 
 
 def apply_item(

@@ -36,7 +36,7 @@ CORE_PY = (
     "codex_routing_test.py", "criteria_test.py", "depends_test.py",
     "failure_trace_test.py", "fanout_config_test.py", "gates_test.py",
     "github_client_test.py", "heartbeat_test.py", "links_test.py", "live_test.py",
-    "orphans_test.py", "passation_test.py", "policy_test.py",
+    "mutants_test.py", "orphans_test.py", "passation_test.py", "policy_test.py",
     "prompt_edges_test.py", "scheduler_loop_test.py", "split_deps_test.py",
     "starved_test.py", "test_harness_test.py", "timeout_test.py",
     "validate_test.py", "validation_edges_test.py", "worktree_test.py",

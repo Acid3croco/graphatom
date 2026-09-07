@@ -71,8 +71,14 @@ def demon(*args: str) -> subprocess.Popen:
 
 
 def arret(proc: subprocess.Popen) -> str:
+    """SIGINT au démon, et sa sortie. Sous coverage et sous charge, l'arrêt
+    prend le temps d'écrire ses données : le budget est large, pas la preuve."""
     os.killpg(os.getpgid(proc.pid), signal.SIGINT)
-    return proc.communicate(timeout=30)[0]
+    try:
+        return proc.communicate(timeout=120)[0]
+    except subprocess.TimeoutExpired:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        raise AssertionError("le démon ne s'arrête pas sur SIGINT en deux minutes")
 
 
 # ------------------------------------------------------------------ preuves

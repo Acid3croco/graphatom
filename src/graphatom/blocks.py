@@ -9,12 +9,12 @@ Les stubs simulent le travail via la config du nœud ; un nœud qui déclare
 
 import json
 
-from . import effects, executors
+from . import effects, executors, workspace
 from .agent import run_agent
 from .arbitrage import arbitrate
 from .bundle import judge_source
 from .context import Context
-from .workspace import DATA_DIR, OUTBOX_NAME, attempt_name
+from .workspace import OUTBOX_NAME, attempt_name
 
 
 def fetch(ctx: Context) -> dict:
@@ -67,11 +67,14 @@ def effect(ctx: Context) -> dict:
     if row["observation"] == "applied":  # déjà fait par une tentative passée
         return {"outcome": "applied", "op_id": row["op_id"]}
 
-    # « interroger la cible par la clé logique » — la cible stub est l'outbox
-    outbox = DATA_DIR / OUTBOX_NAME
+    # « interroger la cible par la clé logique » — la cible stub est l'outbox,
+    # une ligne par effet, la clé entière avant la tabulation : une clé qui
+    # en préfixe une autre n'est pas déjà appliquée
+    outbox = workspace.DATA_DIR / OUTBOX_NAME
     outbox.parent.mkdir(parents=True, exist_ok=True)
     outbox.touch()
-    if logical_key not in outbox.read_text():
+    applied = {line.split("\t", 1)[0] for line in outbox.read_text().splitlines()}
+    if logical_key not in applied:
         ctx.simulate_work()
         with outbox.open("a") as f:
             f.write(f"{logical_key}\t{row['intent']}\n")

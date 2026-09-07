@@ -90,9 +90,14 @@ La statique tient en quelques secondes ; la couverture rejoue toutes les
 preuves Python sous coverage, la CLI et les agents lancés en sous-processus
 compris, et exige 100 %. Les mutants, eux, coûtent des heures et non des
 minutes : `scripts/mutants.py` écrit chaque altération d'un module dans une
-copie du dépôt et la juge par les preuves nommées — un survivant est une
-preuve qui manque, ou un mutant équivalent inscrit dans
-`scripts/mutants_equivalents.txt` avec sa ligne et son opérateur.
+copie du dépôt et la juge par les preuves nommées. Quatre verdicts, jamais
+confondus : `killed` quand une preuve tombe, `survived` quand toutes
+passent, `timeout` quand elles s'éternisent — examiné, pas compté tué —,
+`equivalent` quand le mutant est inscrit avec sa raison dans
+`scripts/mutants_equivalents.txt`, par module, ligne, colonne et opérateur.
+Un survivant est une preuve qui manque. Le runner est lui-même prouvé par
+`tests/mutants_test.py`, et « zéro survivant » se lit toujours avec son
+périmètre : les modules joués et les opérateurs de ce runner.
 
 ```sh
 uv run python scripts/mutants.py src/graphatom/validation.py tests/validate_test.py
