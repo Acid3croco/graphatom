@@ -39,7 +39,7 @@ def provision_postgres(prefix: str = "graphatom-test") -> str:
     atexit.register(subprocess.run, ["docker", "rm", "-f", name],
                     capture_output=True)
     port = None
-    for _ in range(100):
+    for _ in range(300):  # 90 s : un docker chargé démarre lentement, et ce n'est pas une panne
         out = subprocess.run(["docker", "port", name, "5432/tcp"],
                              capture_output=True, text=True)
         if out.returncode == 0 and out.stdout.strip():
@@ -56,7 +56,7 @@ def provision_postgres(prefix: str = "graphatom-test") -> str:
     # pg_isready répond dans le conteneur avant que le serveur n'écoute
     # vraiment côté hôte : l'init de l'image redémarre postgres une fois
     import psycopg
-    for _ in range(100):
+    for _ in range(300):  # 90 s : un docker chargé démarre lentement, et ce n'est pas une panne
         try:
             psycopg.connect(dsn).close()
             return dsn
