@@ -161,15 +161,16 @@ def passation_invalide(path: Path) -> str | None:
 
 
 def _sections_vides(lignes: list[str]) -> str | None:
-    """Chaque section une fois, dans l'ordre, en tête, et jamais vide."""
-    positions = []
-    for section in PASSATION_SECTIONS:
-        trouvees = [i for i, ligne in enumerate(lignes) if ligne.strip() == section]
-        if len(trouvees) != 1:
-            return f"section {section!r} attendue une fois, vue {len(trouvees)}"
-        positions.append(trouvees[0])
-    if positions != sorted(positions) or positions[0] != 0:
-        return "sections de passation absentes, précédées de texte ou dans le désordre"
+    """La première section ouvre le texte, et aucune n'est vide.
+
+    Les trois titres sont déjà uniques et dans l'ordre — `passation_invalide`
+    l'a exigé juste avant — : il ne reste qu'à vérifier que rien ne les
+    précède, et que chacune dit au moins « rien ».
+    """
+    positions = [i for i, ligne in enumerate(lignes)
+                 if ligne.strip() in PASSATION_SECTIONS]
+    if positions[0] != 0:
+        return "sections de passation précédées de texte"
     for i, section in enumerate(PASSATION_SECTIONS):
         fin = positions[i + 1] if i + 1 < len(positions) else len(lignes)
         if not "\n".join(lignes[positions[i] + 1:fin]).strip():

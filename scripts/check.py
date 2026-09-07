@@ -31,26 +31,28 @@ TRAIN_PY = ("train_test.py",)
 
 # Hermétiques : ni service DB partagé, ni Docker, ni LLM réel.
 CORE_PY = (
-    "agent_executor_test.py", "answer_test.py", "api_test.py",
-    "checklist_test.py", "codex_routing_test.py", "criteria_test.py",
-    "depends_test.py", "failure_trace_test.py", "fanout_config_test.py",
+    "agent_edges_test.py", "agent_executor_test.py", "answer_test.py",
+    "api_test.py", "arbitrage_test.py", "checklist_test.py",
+    "codex_routing_test.py", "criteria_test.py", "depends_test.py",
+    "failure_trace_test.py", "fanout_config_test.py", "gates_test.py",
     "github_client_test.py", "heartbeat_test.py", "links_test.py", "live_test.py",
     "orphans_test.py", "passation_test.py", "policy_test.py",
-    "scheduler_loop_test.py", "split_deps_test.py", "starved_test.py",
-    "test_harness_test.py", "timeout_test.py", "validate_test.py",
-    "validation_edges_test.py", "worktree_test.py",
+    "prompt_edges_test.py", "scheduler_loop_test.py", "split_deps_test.py",
+    "starved_test.py", "test_harness_test.py", "timeout_test.py",
+    "validate_test.py", "validation_edges_test.py", "worktree_test.py",
 )
 
 FULL_PY = (
-    "crash_test.py", "cycle_test.py", "db_schema_test.py",
-    "deterministic_retry_test.py", "escalade_timeout_test.py",
+    "activation_test.py", "crash_test.py", "cycle_test.py", "db_schema_test.py",
+    "deterministic_retry_test.py", "effect_test.py", "escalade_timeout_test.py",
     "fanout_course_test.py", "fanout_guards_test.py", "fanout_isolation_test.py",
     "fanout_opencode_test.py", "fanout_promotion_test.py",
     "fanout_reduction_test.py", "github_channel_test.py", "github_tick_test.py",
     "hermetic_test.py", "item_lane_test.py", "judge_test.py",
     "kernel_guards_test.py", "migration_test.py", "passage_test.py",
-    "plafond_test.py", "portes_test.py", "preflight_test.py", "quota_test.py",
-    "reconnect_test.py", "scheduler_dispatch_test.py", "shell_activation_test.py",
+    "plafond_test.py", "portes_test.py", "preflight_test.py",
+    "quota_edges_test.py", "quota_test.py", "reconnect_test.py",
+    "scheduler_dispatch_test.py", "shell_activation_test.py",
     "shell_deploy_test.py", "shell_release_test.py", "shell_worktree_test.py",
     "silence_test.py", "solo_test.py", "verrou_test.py",
 )
