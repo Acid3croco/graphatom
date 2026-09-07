@@ -245,6 +245,10 @@ def preuve_fanout(conn, item_id: int) -> None:
 def preuve_rendus_purs() -> None:
     """6. les rendus purs : durées, tokens, résultat, battement."""
     assert [pages.dur(s) for s in (None, 4.25, 192, 3840)] == ["", "4,2 s", "3 min 12 s", "1 h 04"]
+    assert [pages.dur(s) for s in (60, 3599, 3600, 7200)] == \
+        ["1 min 00 s", "59 min 59 s", "1 h 00", "2 h 00"], "les bornes : la minute et l'heure pleines"
+    assert [pages.ago(s) for s in (59.4, 60, 5400)] == ["59 s", "1 min", "90 min"], \
+        "l'âge du battement : en secondes sous la minute, en minutes pleines au-delà"
     assert pages.tokens({"input_tokens": 1234567, "total_cost_usd": 0.5, "model": "opus",
                          "cached": True, "inconnu_tokens": 2}) == \
         "1 234 567 in · 0.5000 $ rapportés · 2 inconnu_tokens", "textes et booléens ignorés"
