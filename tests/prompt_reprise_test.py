@@ -102,6 +102,23 @@ def en_tete_de_reprise(atelier: Path) -> None:
     print("4. en-tête de reprise : le chemin de l'atelier ; sans atelier : (aucun) ✓")
 
 
+def fichiers_communs() -> None:
+    """5. Seul un candidat de fan-out se voit dire où sont les fichiers communs.
+
+    Son bureau est sous celui de l'item : le prompt nomme le workspace de
+    l'item, criteria.md et validate.md. Un run sans candidat a le même
+    bureau que son item, et le paragraphe n'a rien à lui dire.
+    """
+    seul = contexte(noeud_agent("true", passation=True))
+    assert prompt._commun(seul) == "", prompt._commun(seul)
+    candidat = contexte(noeud_agent("true", passation=True), candidate=0)
+    texte = prompt._commun(candidat)
+    assert "criteria.md, validate.md" in texte, texte
+    assert str(bureau.item_workspace(0).resolve()) in texte, texte
+    assert str(candidat.workspace.resolve()) not in texte, "le bureau du candidat n'est pas le commun"
+    print("5. fichiers communs : nommés au candidat seulement, dans le bureau de l'item ✓")
+
+
 def main() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="graphatom-prompt-reprise-"))
     workdir = data_dir_jetable("graphatom-prompt-reprise-data-")
@@ -112,6 +129,7 @@ def main() -> None:
         _, atelier = atelier_item(depot_git(tmp, "reprise"), AVEC_ATELIER)
         travail_de_l_atelier(atelier)
         en_tete_de_reprise(atelier)
+        fichiers_communs()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         shutil.rmtree(workdir, ignore_errors=True)
