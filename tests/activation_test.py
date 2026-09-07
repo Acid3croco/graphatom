@@ -394,6 +394,8 @@ def sans_cksum(banc: Banc) -> None:
                 return reel(args, **kwargs)
             if reponse is None:  # cksum absent de la machine
                 raise OSError("cksum introuvable")
+            if kwargs.get("check") and reponse["returncode"]:  # comme le vrai
+                raise subprocess.CalledProcessError(reponse["returncode"], args)
             return subprocess.CompletedProcess(args, stderr="", **reponse)
 
         with patche(activation.subprocess, "run", cksum_casse), sortie_capturee() as sortie:

@@ -54,8 +54,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 EQUIVALENTS = ROOT / "scripts" / "mutants_equivalents.txt"
+# `.git` voyage avec la copie : un module qui lit sa propre tête git — le
+# worker qui se déploie — doit la trouver, sinon ses mutants restent invisibles
 EXCLUDED_DIRS = {".venv", "node_modules", ".next", "data", "__pycache__", ".worktrees",
-                 ".coverage-rules", ".git"}
+                 ".coverage-rules"}
 # les arguments nommés de pure forme : retournés, ils changent la mise en
 # page d'un texte ou l'idempotence d'un mkdir, jamais une garantie du rail
 COSMETIC_KEYWORDS = {"sort_keys", "ensure_ascii", "indent", "separators", "flush",
