@@ -187,7 +187,7 @@ def _attempt_slot(conn, item: dict, fanout: int) -> tuple[int, set[int]]:
         "WHERE item_id = %s AND node = %s AND cycle = %s",
         (item["id"], item["state"], item["cycle"]),
     ).fetchall()
-    attempt = max((r["attempt"] for r in rows), default=0) or 1
+    attempt = max((r["attempt"] for r in rows), default=1)
     taken = {r["candidate"] or 0 for r in rows if r["attempt"] == attempt}
     if len(taken) >= (fanout or 1):
         return attempt + 1, set()

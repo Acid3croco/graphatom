@@ -200,7 +200,7 @@ def candidate_work(item_id: int, candidate: int, limit: int) -> str | None:
     vide pour un candidat sans changement.
     """
     root, item = repo(), item_path(item_id)
-    if root is None or item is None:
+    if item is None:  # pas de dépôt : item_path n'existe qu'avec lui
         return None
     branch = _registered(root).get(item)
     if branch is None:
@@ -235,7 +235,7 @@ def discard(item_id: int) -> list[str]:
     tenue par un worktree qui, lui, ne nous appartient pas, survit avec lui.
     """
     root, item = repo(), item_path(item_id)
-    if root is None or item is None:
+    if item is None:  # pas de dépôt : item_path n'existe qu'avec lui
         return []
     registered = _registered(root)
     branch = registered.get(item)
