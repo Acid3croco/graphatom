@@ -1,22 +1,23 @@
 """Une panne identique sans progrès escalade après sa seconde occurrence.
 
+Les tentatives se comptent sur le passage courant : la dernière preuve dit
+ce qui ouvre un passage — la réponse humaine d'escalade, et rien d'autre.
+
 Usage : uv run python tests/deterministic_retry_test.py
 """
 
 import json
 import shutil
 import sys
-import tempfile
 import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import blocks, db, graph, kernel, web  # noqa: E402
-from graphatom import api, pages  # noqa: E402
+from graphatom import api, db, graph, kernel, pages  # noqa: E402
 from graphatom import signature, workspace as bureau  # noqa: E402
 
-from outils import etat  # noqa: E402
+from outils import data_dir_jetable, etat  # noqa: E402
 
 
 def bundle(fanout: bool = False) -> dict:
@@ -45,6 +46,25 @@ def bundle(fanout: bool = False) -> dict:
             "abandon": {"terminal": True},
         },
     }
+
+
+def bundle_relecture() -> dict:
+    """Le même travail, suivi d'un WAIT ordinaire puis d'un JUDGE d'escalade.
+
+    `verif` porte `escalade` parce que son arête `fail` referme la boucle
+    sur `travail` ; `relecture`, lui, n'est qu'une question posée en chemin.
+    """
+    spec = bundle()
+    spec["nodes"]["travail"]["edges"] = {"ok": "relecture"}
+    spec["nodes"]["relecture"] = {
+        "block": "WAIT",
+        "config": {"question": "On continue ?", "options": ["go"],
+                   "owner": "test", "deadline_minutes": 60},
+        "edges": {"go": "verif", "expired": "abandon"},
+    }
+    spec["nodes"]["verif"] = {"block": "JUDGE", "escalade": True, "config": {},
+                              "edges": {"pass": "fini", "fail": "travail"}}
+    return spec
 
 
 def command(run: dict, value: str = "exit 3") -> None:
@@ -99,9 +119,16 @@ def identique(conn, revision: str) -> None:
         "SELECT * FROM node_run WHERE item_id = %s ORDER BY id", (item_id,)
     ).fetchall()
     assert len(runs) == 2, runs
-    message = runs[-1]["result"]["retry"]
+    resultat = runs[-1]["result"]
+    message = resultat["retry"]
     assert message == (f"relance identique supprimée — runs {first['id']} "
                        f"et {second['id']}")
+    # la note s'ajoute au résultat rendu, elle ne le remplace pas : l'issue,
+    # l'erreur, le code de sortie, le journal et la signature comparée restent
+    attendu = {"outcome": "crashed", "error": "ValueError: passation absente",
+               "exit_code": 3, "log_tail": f"texte humain du run {second['id']}"}
+    assert {champ: resultat.get(champ) for champ in attendu} == attendu, resultat
+    assert resultat["_retry_signature"] == runs[0]["result"]["_retry_signature"]
     failure = json.loads(bureau.failure_path(item_id).read_text())
     assert failure["retry"] == message
     assert message in pages.result(runs[-1]["result"]), "trace UI absente"
@@ -216,9 +243,36 @@ def limites(conn, revision: str) -> None:
     print("6. limites : aucun run d'un autre item ou cycle n'est comparé ✓")
 
 
+def situation(conn, item_id: int) -> tuple[str, int]:
+    """Où en est l'item : son nœud, et le passage qu'il compte."""
+    courant = etat(conn, item_id)
+    return courant["state"], courant["cycle"]
+
+
+def passage(conn) -> None:
+    """Seule une réponse d'escalade ouvre un passage.
+
+    Ni la réponse à un WAIT ordinaire, ni l'issue rendue par un nœud
+    d'escalade ne remettent les tentatives à zéro : le compteur de passage
+    ne bouge que sur la réponse humaine d'escalade, et d'un cran.
+    """
+    item_id = item(conn, graph.publish(conn, bundle_relecture()))
+    kernel.apply(conn, kernel.claim(conn, item_id)["id"], {"outcome": "ok"})
+    assert situation(conn, item_id) == ("relecture", 1)
+    kernel.apply_item(conn, item_id, "go", kind="answer")
+    assert situation(conn, item_id) == ("verif", 1), "une réponse ordinaire a ouvert un passage"
+    kernel.apply(conn, kernel.claim(conn, item_id)["id"], {"outcome": "fail"})
+    assert situation(conn, item_id) == ("travail", 1), \
+        "l'issue d'un nœud d'escalade a ouvert un passage"
+    kernel.apply(conn, kernel.claim(conn, item_id)["id"], {"outcome": "timed_out"})
+    assert situation(conn, item_id) == ("escalate", 1)
+    kernel.apply_item(conn, item_id, "retry", kind="answer")
+    assert situation(conn, item_id) == ("travail", 2), "la réponse d'escalade ouvre un passage, un seul"
+    print("7. passage : ouvert par la seule réponse d'escalade, et d'un cran ✓")
+
+
 def main() -> None:
-    workspace = Path(tempfile.mkdtemp(prefix="graphatom-retry-identique-"))
-    bureau.DATA_DIR = workspace
+    workspace = data_dir_jetable("graphatom-retry-identique-")
     db.init_db()
     try:
         with db.connect() as conn:
@@ -230,6 +284,7 @@ def main() -> None:
             reduction(conn, fanout_revision)
             reduction_avec_progres(conn, fanout_revision)
             limites(conn, revision)
+            passage(conn)
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
 

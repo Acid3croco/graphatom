@@ -21,6 +21,11 @@ committent vraiment dans leur atelier :
      sont détruits eux aussi — la promesse tient sur tous les chemins
   7. un atelier hors de `$GRAPHATOM_REPO_DIR/.worktrees/`, ou dont la
      branche n'est pas celle attendue pour ce candidat, survit
+  8. un résultat rendu après la décision est rejeté, et ce rejet ne range
+     rien : sous `keep_n`, où le noyau ne range jamais, les ateliers et les
+     branches des candidats sont encore là quand `apply` rend la main
+  9. l'arbitre d'aval qui tombe en panne se retente sur place, et son
+     règlement n'a rangé aucun atelier : sa relance retrouve les finalistes
 
 L'ordre entre la promotion et le nœud suivant — et la promotion qui rate —
 est éprouvé dans `fanout_promotion_test.py`.
@@ -82,12 +87,18 @@ printf '{"outcome": "ok", "summary": "candidat %s"}' "$k" > outcome.json
 PROMPT = "Tu travailles sur {subject_key}, dans l'atelier de {label}."
 
 
-def bundle(labels: list[str]) -> dict:
-    """Le graph de la course : un ACT en fan-out, un candidat par label."""
+def bundle(labels: list[str], keep: int | None = None) -> dict:
+    """Le graph de la course : un ACT en fan-out, un candidat par label.
+
+    `first_pass` sans `keep` ; `keep_n` à `keep` finalistes avec — et alors
+    un nœud arbitre en aval, celui qui départage et range.
+    """
     variantes = [{"label": nom,
                   "execution": {"cmd": RAPIDE if nom == "rapide" else LENT}}
                  for nom in labels]
-    return bundle_epreuve(f"fanout-worktree-{'-'.join(labels)}", {
+    nom = f"fanout-worktree-{'-'.join(labels)}"
+    fanout: dict = {"variants": variantes, "reduce": "first_pass"}
+    nodes = {
         "travail": {
             "block": "ACT",
             "config": {
@@ -95,11 +106,20 @@ def bundle(labels: list[str]) -> dict:
                               "timeout_s": 120, "silence_s": 120},
                 "agent": {"prompt": PROMPT, "cli": "codex"},
                 "lease_s": 300,  # le faucheur n'a rien à faire ici
-                "fanout": {"variants": variantes, "reduce": "first_pass"},
+                "fanout": fanout,
             },
             "edges": {"ok": "fini"},
         },
-    })
+    }
+    if keep is not None:
+        fanout |= {"reduce": "keep_n", "n": keep}
+        nom += f"-keep{keep}"
+        nodes["travail"]["edges"] = {"ok": "arbitre"}
+        nodes["arbitre"] = {
+            "block": "JUDGE", "config": {"finalists_from": "travail"},
+            "edges": {"sole": "fini", "chosen": "fini", "none": "abandon"},
+        }
+    return bundle_epreuve(nom, nodes)
 
 
 # ------------------------------------------------------------------ outillage
@@ -116,9 +136,10 @@ def inscrits(repo: Path) -> dict[Path, str]:
     return table
 
 
-def nouvel_item(conn, repo: Path, labels: list[str]) -> tuple[int, str, Path]:
+def nouvel_item(conn, repo: Path, labels: list[str],
+                keep: int | None = None) -> tuple[int, str, Path]:
     """Un item de la course d'agents, sa branche, son atelier."""
-    item_id = admettre(conn, bundle(labels), "fanout-worktree")
+    item_id = admettre(conn, bundle(labels, keep), "fanout-worktree")
     branche, item_wt = atelier_item(repo, item_id)
     return item_id, branche, item_wt
 
@@ -335,6 +356,57 @@ def leurres(conn, repo: Path) -> None:
           f"celui hors de .worktrees/ survivent, branches comprises ✓")
 
 
+def resultat_tardif(conn, repo: Path) -> None:
+    """8. rendu après la décision : rejeté, et le rejet ne range aucun atelier.
+
+    Sous `keep_n`, le noyau ne range jamais — c'est l'arbitre d'aval qui le
+    fait. Les ateliers doivent donc être encore là après le rejet du
+    troisième candidat : un rejet qui rangerait détruirait le travail des
+    finalistes avant que le juge ne l'ait lu.
+    """
+    item_id, branche, item_wt = nouvel_item(conn, repo, ["lent", "lent", "lent"], keep=2)
+    runs = reserver_tout(conn, item_id)
+    ateliers = ateliers_de(item_wt, 3)
+    for k, chemin in ateliers.items():
+        assert worktree.open_run(item_id, k) == chemin, k
+    for run in runs[:2]:
+        assert kernel.apply(conn, run["id"], {"outcome": "ok"}) == "applied"
+    assert etat(conn, item_id)["state"] == "arbitre", "deux finalistes tranchent"
+    assert runs_de(conn, item_id)[2]["status"] == "superseded", "le troisième est révoqué"
+    assert kernel.apply(conn, runs[2]["id"], {"outcome": "ok"}) == "superseded"
+    ateliers_intacts(repo, ateliers, branche, "le rejet du candidat tardif a rangé")
+    print(f"8. item {item_id} : le résultat tardif de c2 est rejeté, et les 3 ateliers "
+          "et leurs branches sont encore là ✓")
+    arbitre_en_panne(conn, repo, item_id, branche, ateliers)
+
+
+def ateliers_intacts(repo: Path, ateliers: dict[int, Path], branche: str,
+                     faute: str) -> None:
+    """Chaque atelier de candidat est encore là, enregistré sur sa branche."""
+    table = inscrits(repo)
+    for k, chemin in ateliers.items():
+        assert chemin.is_dir() and table.get(chemin) == f"{branche}-c{k}", \
+            f"{faute} l'atelier c{k} : {table}"
+
+
+def arbitre_en_panne(conn, repo: Path, item_id: int, branche: str,
+                     ateliers: dict[int, Path]) -> None:
+    """9. l'arbitre qui tombe en panne ne range rien : sa relance retrouve les finalistes.
+
+    Un run sans candidat qui se règle ne range jamais les ateliers — c'est
+    le bloc arbitre qui range, après avoir promu son élu. Un `crashed` de
+    l'arbitre se retente sur place, et le travail à départager doit y être.
+    """
+    juge = kernel.claim(conn, item_id)
+    assert (juge["node"], juge["candidate"]) == ("arbitre", None), juge
+    assert kernel.apply(conn, juge["id"], {"outcome": "crashed"}) == "applied"
+    assert etat(conn, item_id)["state"] == "arbitre", "crashed se retente sur place"
+    ateliers_intacts(repo, ateliers, branche, "la panne de l'arbitre a rangé")
+    assert kernel.claim(conn, item_id)["attempt"] == 2
+    print(f"9. item {item_id} : l'arbitre en panne se retente, et les 3 ateliers "
+          "sont encore là pour sa relance ✓")
+
+
 def main() -> None:
     db.init_db()  # idempotent : ne détruit rien, rattrape juste le schéma
     workdir = data_dir_jetable("graphatom-fanout-wt-")
@@ -345,6 +417,7 @@ def main() -> None:
             course(conn, workdir, repo)
             echeance(conn, workdir, repo)
             leurres(conn, repo)
+            resultat_tardif(conn, repo)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
         shutil.rmtree(tmp, ignore_errors=True)

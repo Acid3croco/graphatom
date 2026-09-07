@@ -20,6 +20,11 @@ Sur un Postgres jetable, noyau seul, aucun processus :
   9. la transaction d'`apply` qui n'aboutit pas laisse le run en vol — en
      base ET dans `CLAIMED`, pour que le faucheur y lise un bail expiré, pas
      un redémarrage ; le vrai `apply` le classe ensuite
+ 10. la barrière est celle du lot : la première réservation d'une tentative
+     la pousse d'un cran, la seconde non, et les deux candidats portent
+     celle de l'item ; la tentative suivante la pousse d'un cran encore
+ 11. la première réservation d'un nœud est la tentative 1 ; après une panne
+     relançable, la suivante est la tentative 2
 
 Usage : uv run python tests/kernel_guards_test.py
 """
@@ -32,7 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from outils import (bundle_epreuve, data_dir_jetable, etat,  # noqa: E402
-                    evenements, provision_postgres, runs_de)
+                    evenements, fanout_stub, provision_postgres, runs_de)
 
 # une base à ce test, jamais celle que GRAPHATOM_DSN désigne
 os.environ["GRAPHATOM_DSN"] = provision_postgres("graphatom-noyau")
@@ -46,6 +51,10 @@ from bords_outils import patche  # noqa: E402
 
 BUNDLE = bundle_epreuve("noyau-gardes", {
     "travail": {"block": "ACT", "config": {}, "edges": {"ok": "fini"}},
+})
+FANOUT = bundle_epreuve("noyau-gardes-fanout", {
+    "travail": {"block": "ACT", "config": {"fanout": fanout_stub(2)},
+                "edges": {"ok": "fini"}},
 })
 
 
@@ -195,6 +204,28 @@ def transitions_sans_run(conn, fini: int) -> None:
     print("8. apply_item refuse une transaction déjà ouverte ✓")
 
 
+def barriere_du_lot(conn) -> None:
+    """10 et 11. la barrière et la tentative sont celles du lot entier."""
+    item_id = admettre(conn, graph.publish(conn, FANOUT), sujet())
+    socle = etat(conn, item_id)["fence"]
+    c0 = kernel.claim(conn, item_id)
+    assert (c0["attempt"], c0["fence"]) == (1, socle + 1), c0
+    assert etat(conn, item_id)["fence"] == socle + 1, "la première réservation pousse d'un cran"
+    c1 = kernel.claim(conn, item_id)
+    assert (c1["attempt"], c1["fence"]) == (1, socle + 1), c1
+    assert etat(conn, item_id)["fence"] == socle + 1, "le second candidat a poussé la barrière"
+    assert kernel.claim(conn, item_id) is None, "un troisième candidat"
+    for run in (c0, c1):
+        kernel.apply(conn, run["id"], {"outcome": "crashed"})
+    assert etat(conn, item_id)["state"] == "travail", "crashed se retente sur place"
+    suivant = kernel.claim(conn, item_id)
+    assert (suivant["attempt"], suivant["fence"]) == (2, socle + 2), suivant
+    assert etat(conn, item_id)["fence"] == socle + 2
+    print("10. barrière du lot : poussée d'un cran à la première réservation, partagée "
+          "par le second candidat, d'un cran encore à la tentative suivante ✓")
+    print("11. tentative 1 à la première réservation, 2 après la panne relançable ✓")
+
+
 def main() -> None:
     data_dir_jetable("graphatom-noyau-")
     db.init_db()
@@ -211,6 +242,7 @@ def main() -> None:
         print("6. version dépassée : stale, même contrat ✓")
         transitions_sans_run(conn, fini)
         transaction_avortee(conn, rev)
+        barriere_du_lot(conn)
     print("\nkernel_guards : OK")
 
 
