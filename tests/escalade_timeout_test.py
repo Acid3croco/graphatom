@@ -40,6 +40,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, github_sync as gs, graph, kernel  # noqa: E402
+from graphatom import github_client, github_questions  # noqa: E402
 from graphatom import context, failure, process, reaper, routing, workspace  # noqa: E402
 from graphatom.policy import MAX_ATTEMPTS  # noqa: E402
 
@@ -340,10 +341,10 @@ def faucheur(conn, revision: str) -> None:
 
 def questions_d_escalade(conn, timeout_id: int, starved_id: int) -> None:
     """7 et 9. Chaque question dit la cause qui a armé son escalade."""
-    gh = gs.GitHub(REPO, "jeton")  # aucun appel sortant : on ne construit que le corps
-    questions = {q["item_id"]: q for q in gs._gh_questions(conn, gh)}
+    gh = github_client.GitHub(REPO, "jeton")  # aucun appel sortant : on ne construit que le corps
+    questions = {q["item_id"]: q for q in github_questions.gh_questions(conn, gh)}
     q = questions[timeout_id]
-    corps = gs._question_body(conn, q, "http://127.0.0.1:9")
+    corps = github_questions.question_body(conn, q, "http://127.0.0.1:9")
 
     assert "timeout" in corps.lower(), corps
     assert f"`timeout_s` de {BUDGET_S} s" in corps, corps
@@ -352,8 +353,8 @@ def questions_d_escalade(conn, timeout_id: int, starved_id: int) -> None:
           "du journal dans le commentaire ✓")
 
     q = questions[starved_id]
-    corps = gs._question_body(conn, q, "http://127.0.0.1:9")
-    assert gs.STARVED_TITLE in corps, corps
+    corps = github_questions.question_body(conn, q, "http://127.0.0.1:9")
+    assert github_questions.STARVED_TITLE in corps, corps
     assert PROVIDER in corps, corps
     assert STARVED_REASON in corps, corps
     print(f"9. question {q['id']} : fournisseur {PROVIDER} et raison exacte dans "

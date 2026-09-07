@@ -27,6 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks  # noqa: E402
+from graphatom import github_questions  # noqa: E402
 from graphatom import context, workspace as bureau  # noqa: E402
 from graphatom import github_sync as gs  # noqa: E402
 
@@ -101,7 +102,7 @@ def question_body() -> str:
         "deadline": dt.datetime(2026, 8, 8, 9, 30),
     }
     gh = FakeGitHub()
-    gs._publish_questions(FakeConn(question), gh)
+    github_questions.publish_questions(FakeConn(question), gh)
     assert len(gh.posted) == 1, gh.posted
     return gh.posted[0][1]
 
@@ -206,8 +207,8 @@ def main() -> None:
         body = question_body()
         assert "> - [x] 39. critère — preuve" in body, body
         assert "40. critère" not in body, body
-        assert f"… {100 - gs.CHECKLIST_LINES} lignes de plus" in body, body
-        print(f"4. citation bornée à {gs.CHECKLIST_LINES} lignes, le reste compté ✓")
+        assert f"… {100 - github_questions.CHECKLIST_LINES} lignes de plus" in body, body
+        print(f"4. citation bornée à {github_questions.CHECKLIST_LINES} lignes, le reste compté ✓")
 
         # Ce cas est hermétique : aucun atelier réel ne doit être ouvert.
         repo = os.environ.pop("GRAPHATOM_REPO_DIR", None)

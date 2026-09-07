@@ -25,6 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import github_sync as gs  # noqa: E402
+from graphatom import github_questions  # noqa: E402
 
 ITEM_ID = 56
 NUMBER = 87
@@ -126,7 +127,7 @@ def sync(humains: list[dict], q: dict | None = None,
     q = q or question()
     gh, conn = FakeGitHub(humains), FakeConn(q)
     for _ in range(tours):
-        gs._collect_answers(conn, gh, ALLOWED)
+        github_questions.collect_answers(conn, gh, ALLOWED)
     return gh, conn, q
 
 

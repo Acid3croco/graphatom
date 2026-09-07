@@ -21,6 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, github_sync as gs  # noqa: E402
+from graphatom import github_admission, github_client, github_questions, github_sync as sync  # noqa: E402
 from graphatom import workspace as bureau  # noqa: E402
 
 
@@ -129,16 +130,16 @@ def deps(body, number=1, states=None, gh=None, said=None):
     gh = gh or FakeGitHub([], states or {})
     issue = {"number": number, "body": body}
     said = set() if said is None else said
-    return gh, gs._pending_deps(gh, issue, "code-task", {}, said)
+    return gh, github_admission.pending_deps(gh, issue, "code-task", {}, said)
 
 
 def main() -> None:
     # 1. grammaire fermée : la ligne au mot, le reste du corps n'existe pas
-    assert gs._depends_on("Depends-on: #29") == ["#29"]
-    assert gs._depends_on("- [ ] #29\ndepends-on: #30\nvoir #31") == []
-    assert gs._depends_on(None) == [] and gs._depends_on("") == []
-    assert gs._retry_of("Retry-of: #29") == ["#29"]
-    assert gs._retry_of("- [ ] #29\nretry-of: #30\nvoir #31") == []
+    assert github_admission.depends_on("Depends-on: #29") == ["#29"]
+    assert github_admission.depends_on("- [ ] #29\ndepends-on: #30\nvoir #31") == []
+    assert github_admission.depends_on(None) == [] and github_admission.depends_on("") == []
+    assert github_admission.retry_of("Retry-of: #29") == ["#29"]
+    assert github_admission.retry_of("- [ ] #29\nretry-of: #30\nvoir #31") == []
     gh, waiting = deps("bla\nDepends-on: #29\n- [ ] #30\nDepends-on: #31\nfin",
                        states={29: "open", 31: "closed"})
     assert waiting == [29] and gh.posted == [], (waiting, gh.posted)
@@ -163,8 +164,8 @@ def main() -> None:
     print("2. dépendance invalide : ignorée, dite une fois ✓")
 
     # les doublures prennent la place du kernel et du graph dans le canal
-    gs.graph, gs.kernel = FakeGraph(), FakeKernel()
-    kernel = gs.kernel
+    github_admission.graph, github_admission.kernel = FakeGraph(), FakeKernel()
+    kernel = github_admission.kernel
     issues = [{"number": 41, "body": "Depends-on: #29", "labels": [],
                "title": "Le titre de #41"},
               {"number": 42, "body": "aucune dépendance", "labels": [],
@@ -173,7 +174,7 @@ def main() -> None:
     conn, said = FakeConn(), set()
 
     # 3. tick 1 : #41 attend, #42 part — un commentaire, un label
-    blocked, queued = gs._admit_labeled(conn, gh, "rev", said)
+    blocked, queued = github_admission.admit_labeled(conn, gh, "rev", said)
     assert blocked == {41} and queued == set(), (blocked, queued)
     assert kernel.admitted == ["gh:o/r#42"], kernel.admitted
     assert "en attente de #29" in gh.posted[0][1], gh.posted
@@ -182,26 +183,26 @@ def main() -> None:
     assert kernel.titles == ["Le titre de #42"], kernel.titles
     assert conn.updated == [("code-task", "gh:o/r#41", "Le titre de #41"),
                             ("code-task", "gh:o/r#42", "Le titre de #42")], conn.updated
-    gs._paint_states(conn, gh, blocked, queued, stalled=False)
-    assert gh.labels == [("+", 41, gs.BLOCKED)], gh.labels
+    sync.paint_states(conn, gh, blocked, queued, stalled=False)
+    assert gh.labels == [("+", 41, github_client.BLOCKED)], gh.labels
     print("3. dépendance ouverte : pas d'item, `rail:blocked`, un commentaire ✓")
 
     # 4. tick 2 : rien de neuf, rien de dit
     conn.known.add("gh:o/r#42")
-    issues[0]["labels"] = [{"name": gs.BLOCKED}]
+    issues[0]["labels"] = [{"name": github_client.BLOCKED}]
     gh.labels.clear()
-    assert gs._admit_labeled(conn, gh, "rev", said) == ({41}, set())
+    assert github_admission.admit_labeled(conn, gh, "rev", said) == ({41}, set())
     assert len(gh.posted) == 1 and kernel.admitted == ["gh:o/r#42"], gh.posted
-    gs._paint_states(conn, gh, {41}, set(), stalled=False)
+    sync.paint_states(conn, gh, {41}, set(), stalled=False)
     assert gh.labels == [], gh.labels
 
     # 4. tick 3 : la dépendance ferme → admission normale, le label s'en va
     gh.states[29] = "closed"
-    blocked, queued = gs._admit_labeled(conn, gh, "rev", said)
+    blocked, queued = github_admission.admit_labeled(conn, gh, "rev", said)
     assert blocked == queued == set(), (blocked, queued)
     assert kernel.admitted == ["gh:o/r#42", "gh:o/r#41"], kernel.admitted
-    gs._paint_states(conn, gh, blocked, queued, stalled=False)
-    assert gh.labels == [("-", 41, gs.BLOCKED)], gh.labels
+    sync.paint_states(conn, gh, blocked, queued, stalled=False)
+    assert gh.labels == [("-", 41, github_client.BLOCKED)], gh.labels
     print("4. dépendance fermée : admission au tick suivant, label retiré ✓")
 
     # 5. reprise valide : dernier item terminal, trois noms fermés, accusé lisible
@@ -214,8 +215,8 @@ def main() -> None:
     (old / "criteria.md").write_text("critères de #40\n")
     (old / "validate.md").write_text("validation de #40\n")
     (old / "hors-scope.md").write_text("ne doit pas suivre\n")
-    gs.kernel = FakeKernel()
-    kernel = gs.kernel
+    github_admission.kernel = FakeKernel()
+    kernel = github_admission.kernel
     conn = FakeConn({"gh:o/r#40": 7})
     gh = FakeGitHub(
         [{"number": 50, "body": "Contexte\nRetry-of: #40", "labels": [],
@@ -223,7 +224,7 @@ def main() -> None:
         {40: "closed"},
     )
     retries: dict[int, tuple[int, int]] = {}
-    assert gs._admit_labeled(conn, gh, "rev", set(), retries) == (set(), set())
+    assert github_admission.admit_labeled(conn, gh, "rev", set(), retries) == (set(), set())
     assert kernel.admitted == ["gh:o/r#50"], kernel.admitted
     assert retries == {1: (40, 7)}, retries
     new = bureau.item_workspace(1)
@@ -231,7 +232,7 @@ def main() -> None:
     assert (new / "criteria.md").read_text() == "critères de #40\n"
     assert (new / "validate.md").read_text() == "validation de #40\n"
     assert not (new / "hors-scope.md").exists()
-    ack = gs._ack_body(
+    ack = sync.ack_body(
         {"id": 1, "graph": "code-task", "generation": 1}, retries[1])
     assert "reprise de #40 (item 7)" in ack, ack
 
@@ -239,15 +240,15 @@ def main() -> None:
     # un redémarrage où la table temporaire `retries` n'existe plus.
     item = {"id": 1, "graph": "code-task", "generation": 1, "version": 1,
             "subject_key": "gh:o/r#50"}
-    event = {"item_version": 1, "at": gs.dt.datetime(2026, 1, 1, 12, 0),
+    event = {"item_version": 1, "at": github_questions.dt.datetime(2026, 1, 1, 12, 0),
              "kind": "admitted", "from_state": None, "to_state": "ingest",
              "outcome": None}
-    marker = f"<!-- graphatom:{gs._ack_key(item)} -->"
+    marker = f"<!-- graphatom:{sync.ack_key(item)} -->"
     gh.post_comment(50, f"{marker}\n{ack}")
     paint_conn = FakeConn(items=[item], events=[event])
-    gs._paint_trajectories(paint_conn, gh, {})
+    sync.paint_trajectories(paint_conn, gh, {})
     assert "reprise de #40 (item 7)" in gh.posted[-1][1], gh.posted[-1]
-    gs._paint_trajectories(paint_conn, gh, {})
+    sync.paint_trajectories(paint_conn, gh, {})
     assert "reprise de #40 (item 7)" in gh.posted[-1][1], gh.posted[-1]
     print("5. reprise valide : pièces existantes copiées, filiation dans l'accusé ✓")
 
@@ -259,16 +260,16 @@ def main() -> None:
         ("Retry-of: #40\nRetry-of: #41", {40: "closed", 41: "closed"}, {},
          "une seule ligne"),
     ):
-        gs.kernel = FakeKernel()
+        github_admission.kernel = FakeKernel()
         gh = FakeGitHub(
             [{"number": 60, "body": body, "labels": [], "title": "invalide"}],
             states,
         )
         retries = {}
-        assert gs._admit_labeled(
+        assert github_admission.admit_labeled(
             FakeConn(terminals), gh, "rev", set(), retries
         ) == (set(), set())
-        assert gs.kernel.admitted == ["gh:o/r#60"], (body, gs.kernel.admitted)
+        assert github_admission.kernel.admitted == ["gh:o/r#60"], (body, github_admission.kernel.admitted)
         assert retries == {} and len(gh.posted) == 1, (body, retries, gh.posted)
         assert word in gh.posted[0][1], (body, gh.posted)
         assert "graphatom:code-task-retry-invalid" in gh.posted[0][1]

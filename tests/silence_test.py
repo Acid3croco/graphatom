@@ -38,6 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, github_sync as gs, graph, kernel  # noqa: E402
+from graphatom import github_client, github_questions  # noqa: E402
 from graphatom import agent, context, prompt, routing, workspace as bureau  # noqa: E402
 from graphatom.policy import MAX_ATTEMPTS  # noqa: E402
 
@@ -388,20 +389,20 @@ def prompt_de_reprise(workdir: Path, worktree: Path) -> None:
 
 def questions_d_escalade(conn, pendu: int, deborde: int) -> None:
     """6. le commentaire dit laquelle des deux morts a escaladé."""
-    gh = gs.GitHub(REPO, "jeton")  # aucun appel sortant : on ne construit que le corps
+    gh = github_client.GitHub(REPO, "jeton")  # aucun appel sortant : on ne construit que le corps
     corps = {}
-    for q in gs._gh_questions(conn, gh):
+    for q in github_questions.gh_questions(conn, gh):
         if q["item_id"] in (pendu, deborde):
-            corps[q["item_id"]] = gs._question_body(conn, q, "http://127.0.0.1:9")
+            corps[q["item_id"]] = github_questions.question_body(conn, q, "http://127.0.0.1:9")
     assert set(corps) == {pendu, deborde}, sorted(corps)
 
-    assert gs.HUNG_TITLE in corps[pendu], corps[pendu]
-    assert gs.TIMEOUT_TITLE not in corps[pendu], corps[pendu]
+    assert github_questions.HUNG_TITLE in corps[pendu], corps[pendu]
+    assert github_questions.TIMEOUT_TITLE not in corps[pendu], corps[pendu]
     assert "sans avoir écrit un octet" in corps[pendu], corps[pendu]
     assert f"{MAX_ATTEMPTS} tentatives" in corps[pendu], corps[pendu]
 
-    assert gs.TIMEOUT_TITLE in corps[deborde], corps[deborde]
-    assert gs.HUNG_TITLE not in corps[deborde], corps[deborde]
+    assert github_questions.TIMEOUT_TITLE in corps[deborde], corps[deborde]
+    assert github_questions.HUNG_TITLE not in corps[deborde], corps[deborde]
     assert f"`timeout_s` de {BUDGET_S:.0f} s" in corps[deborde], corps[deborde]
     assert LIGNE in corps[deborde], corps[deborde]
     print("6. deux questions, deux messages : pendaison sans progrès d'un côté, "

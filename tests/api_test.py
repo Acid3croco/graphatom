@@ -32,6 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, quota, scheduler, web  # noqa: E402
+from graphatom import api, views  # noqa: E402
 from graphatom import agent, workspace as bureau  # noqa: E402
 
 T0 = dt.datetime(2026, 8, 7, 10, 0, tzinfo=dt.timezone.utc)
@@ -187,7 +188,7 @@ def main() -> None:
         (workspace / "release.json").write_text(json.dumps({"pr_url": PR_URL}))
 
         # 1. la liste : les clés du contrat, et les deux liens
-        items = web._api_items(conn_of(14))
+        items = api.items(conn_of(14))
         assert len(items) == 1, items
         item = items[0]
         for key in ("id", "subject_key", "title", "state", "status", "issue_url",
@@ -217,22 +218,22 @@ def main() -> None:
             ],
         )
         totals = {entry["id"]: entry["total_cost_usd"]
-                  for entry in web._api_items(costs)}
+                  for entry in api.items(costs)}
         assert totals == {14: 0.0168, 15: 0}, totals
         print("   coûts : tous les runs, usages absents ignorés, items séparés ✓")
 
         # un sujet d'un autre canal n'a ni issue ni PR inventées
-        plain = web._api_items(conn_of(99, "pipeline-x:oom", terminal=False))[0]
+        plain = api.items(conn_of(99, "pipeline-x:oom", terminal=False))[0]
         assert plain["issue_url"] is None and plain["pr_url"] is None, plain
         assert plain["status"] == "active" and plain["state"] == "decide", plain
         print("2. autre canal, item actif : aucun lien inventé, status actif ✓")
 
         # 2. l'item entier : les sept clés de la page, et l'item inconnu
-        payload = web._api_item(conn_of(14), 14)
+        payload = api.item(conn_of(14), 14)
         for key in ("item", "graph", "journal", "runs", "questions", "criteria",
                     "files"):
             assert key in payload, key
-        assert web._api_item(FakeConn(work_item=[]), 999999) is None
+        assert api.item(FakeConn(work_item=[]), 999999) is None
         print("3. /api/item/14 : les sept clés, et l'inconnu rend None ✓")
 
         # 3. de quoi redessiner sans la base, et de quoi chiffrer le cycle
@@ -256,7 +257,7 @@ def main() -> None:
         # le fan-out d'un nœud, un candidat par entrée : sans lui, le client
         # ne saurait pas nommer les candidats qu'il déplie
         assert all("fanout" not in n for n in graph["nodes"]), graph["nodes"]
-        fanout = web._api_fanout(BUNDLE, FANOUT_NODE)
+        fanout = api.fanout(BUNDLE, FANOUT_NODE)
         assert fanout["reduce"] == "first_pass" and fanout["repeat"] == 2, fanout
         # variantes × répétition : chaque variante deux fois, dans l'ordre
         labels = [c["variant"]["label"] for c in fanout["candidates"]]
@@ -266,7 +267,7 @@ def main() -> None:
         assert agents[0] == {"cli": "claude", "model": "opus", "effort": "high"}, agents
         assert agents[3] == {"cli": "claude", "model": "haiku", "effort": "high"}, agents
         assert all(c["cmd"] is None for c in fanout["candidates"]), fanout
-        assert web._api_fanout(BUNDLE, {"block": "ACT", "config": {}}) is None
+        assert api.fanout(BUNDLE, {"block": "ACT", "config": {}}) is None
         print("   fanout projeté : 4 agents structurés effectifs ✓")
 
         # les fichiers du workspace, avec l'URL qui les sert
@@ -306,7 +307,7 @@ def main() -> None:
         item115 = bureau.item_workspace(115)
         item115.mkdir()
         (item115 / "verdict.md").write_text("comparaison complète\n")
-        decision = web._decision(115, decision_bundle, chosen_runs)
+        decision = views.decision(115, decision_bundle, chosen_runs)
         assert decision["finalists"] == [
             {"letter": "A", "candidate": 0},
             {"letter": "B", "candidate": 1},
@@ -318,12 +319,12 @@ def main() -> None:
             "cli": "codex", "model": "sol", "effort": "high",
         }, decision
 
-        sole = web._decision(116, decision_bundle, [chosen_runs[2],
+        sole = views.decision(116, decision_bundle, [chosen_runs[2],
             chosen_runs[3] | {"outcome": "sole", "result": {
                 "summary": "finaliste unique — traversé sans appel de modèle"}}])
         assert sole["selected"] == {"letter": "A", "candidate": 0}, sole
         assert sole["judge"] is None, sole
-        none = web._decision(117, decision_bundle, [
+        none = views.decision(117, decision_bundle, [
             chosen_runs[2] | {"status": "superseded"},
             chosen_runs[3] | {"outcome": "none", "result": {
                 "summary": "aucun finaliste — retour en amont sans jugement"}},
@@ -332,7 +333,7 @@ def main() -> None:
         print("   décision : B → c1, finaliste unique et aucun finaliste ✓")
 
         # 4. les questions ouvertes, avec le jeton de POST /answer
-        answers = web._api_questions(open_conn(14), token="jeton-secret")
+        answers = api.questions(open_conn(14), token="jeton-secret")
         assert answers["token"] == "jeton-secret", answers
         q = answers["questions"][0]
         assert q["question_id"] == 5 and q["item_id"] == 14, q
@@ -342,20 +343,20 @@ def main() -> None:
         print("6. /api/questions : le jeton sort du HTML, les options avec ✓")
 
         # 5. le battement, et tout le reste sérialisable tel quel
-        beat = web._api_heartbeat(None, None)
+        beat = api.beats(None, None)
         assert set(beat) == {"rail", "github-sync"}, beat
         assert beat["rail"] == {"at": None, "ago_s": None, "stale": True,
                                 "sha": None, "started_at": None}, beat
-        old = web._api_heartbeat(T0, T0)
+        old = api.beats(T0, T0)
         assert old["rail"]["stale"] is True, "un vieux battement est à l'arrêt"
         assert old["github-sync"]["stale"] is True, "et celui du canal aussi"
-        body = json.dumps(payload, default=web._jsonable, ensure_ascii=False)
+        body = json.dumps(payload, default=api.jsonable, ensure_ascii=False)
         assert T0.isoformat() in body, "les horodatages sortent en ISO 8601"
         assert json.loads(body)["item"]["id"] == 14
         print("7. /api/heartbeat, et le payload sérialisable en ISO 8601 ✓")
 
         # la charge du rail : les runs en vol, et les plafonds qui les bornent
-        charge = web._api_load(CountConn(
+        charge = api.load(CountConn(
             4, builds=1, solo_running=1, solo_waiting=2))
         assert charge == {"running": 4, "max_runs": scheduler.MAX_RUNS,
                            "max_runs_per_item": scheduler.MAX_RUNS_PER_ITEM,
@@ -379,7 +380,7 @@ def main() -> None:
             {"id": "rev-vieille", "name": "code-task",
              "published_at": T0 - dt.timedelta(days=1), "items": 7},
         ]
-        graphs = web._api_graphs(FakeConn(graph_revision=published))
+        graphs = api.graphs(FakeConn(graph_revision=published))
         # la fonction ne retrie rien : l'ordre est celui de la requête — par
         # nom, puis date décroissante, donc la plus récente en tête
         assert [g["id"] for g in graphs] == ["rev-neuve", "rev-vieille"], graphs
@@ -390,12 +391,12 @@ def main() -> None:
         # le bundle d'une révision, tel qu'il a été publié — rien de résumé
         revision = FakeConn(graph_revision=[{"id": "rev-neuve", "bundle": BUNDLE,
                                              "published_at": T0, "items": 2}])
-        one = web._api_graph_revision(revision, "rev-neuve")
+        one = api.graph_revision(revision, "rev-neuve")
         assert one["revision"] == "rev-neuve" and one["items"] == 2, one
         assert one["nodes"] == BUNDLE["nodes"], one
         assert one["nodes"]["decide"]["config"]["agent"]["prompt"] == "le prompt entier"
         assert one["entry"] == "ingest" and one["on_kernel"], one
-        assert web._api_graph_revision(FakeConn(graph_revision=[]), "inconnue") is None
+        assert api.graph_revision(FakeConn(graph_revision=[]), "inconnue") is None
         print("9. /api/graph/<rév> : le bundle entier, l'inconnue rend None ✓")
 
         # la trace d'un run vient de son identité en base, jamais d'un chemin
@@ -405,13 +406,13 @@ def main() -> None:
         (workspace / "codex.jsonl").write_text('{"type":"start"}\n')
         bureau.attempt_log(workspace, run).write_text("début\n")
         bureau.attempt_command(workspace, run).write_text('{"kind":"model"}\n')
-        first = web._api_run_trace(traces, 14, 31)
+        first = api.run_trace(traces, 14, 31)
         assert first["events"]["type"] == "codex", first
         assert first["events"]["state"] == "available", first
         assert first["log"]["type"] == "log" and first["command"]["type"] == "command"
         with (workspace / "codex.jsonl").open("a") as stream:
             stream.write('{"type":"done"}\n')
-        second = web._api_run_trace(traces, 14, 31, first["cursor"])
+        second = api.run_trace(traces, 14, 31, first["cursor"])
         assert second["events"]["content"] == '{"type":"done"}\n', second
         assert second["log"]["content"] == second["command"]["content"] == "", second
 
@@ -421,15 +422,15 @@ def main() -> None:
         (candidate_workspace / "opencode-events.jsonl").write_text('{"type":"text"}\n')
         agent.archive(candidate_workspace, bureau.attempt_name(candidate))
         bureau.attempt_command(candidate_workspace, candidate).write_text("")
-        terminal = web._api_run_trace(
+        terminal = api.run_trace(
             FakeConn(work_item=[{"id": 14}], node_run=[candidate]), 14, 32)
         assert terminal["events"]["type"] == "opencode", terminal
         assert terminal["command"]["state"] == "empty", terminal
         assert terminal["log"]["state"] == "missing", terminal
-        assert web._api_run_trace(FakeConn(work_item=[]), 14, 31) is None
-        assert web._api_run_trace(FakeConn(work_item=[{"id": 14}], node_run=[]), 14, 999) is None
+        assert api.run_trace(FakeConn(work_item=[]), 14, 31) is None
+        assert api.run_trace(FakeConn(work_item=[{"id": 14}], node_run=[]), 14, 999) is None
         other = run | {"item_id": 15}
-        assert web._api_run_trace(
+        assert api.run_trace(
             FakeConn(work_item=[{"id": 14}], node_run=[other]), 14, 31) is None
         print("10. /api/item/<item>/run/<run>/trace : identité, sources et curseur ✓")
 

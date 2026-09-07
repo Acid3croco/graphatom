@@ -25,6 +25,7 @@ from psycopg.conninfo import make_conninfo
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import db, graph, kernel, quota, web  # noqa: E402
+from graphatom import api  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTANCE = os.environ.get("GRAPHATOM_AGENT_DSN") or db.DSN
@@ -117,7 +118,7 @@ def plafond_global(conn) -> None:
         maximum = max(maximum, actuelle)
         assert maximum <= 2, maximum
         if actuelle == 2:
-            vue = web._api_load(conn)
+            vue = api.load(conn)
             assert vue["builds"] == 2, vue
             assert vue["max_builds"] == quota.MAX_BUILDS, vue
         time.sleep(0.05)

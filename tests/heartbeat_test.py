@@ -25,6 +25,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import github_sync as gs  # noqa: E402
+from graphatom import github_client, github_sync  # noqa: E402
+from graphatom import api, pages  # noqa: E402
 from graphatom import heartbeat, web  # noqa: E402
 from graphatom.policy import now  # noqa: E402
 
@@ -79,7 +81,7 @@ class FakeGitHub:
         self.labels.append(("-", number, name))
 
 
-class RecordingGitHub(gs.GitHub):
+class RecordingGitHub(github_client.GitHub):
     """Le vrai client, sans réseau : on regarde ce qu'il aurait envoyé."""
 
     def __init__(self):
@@ -122,23 +124,23 @@ def main() -> None:
     print("2. vivant à 3 s, à l'arrêt à 2 min, à l'arrêt sans battement ✓")
 
     # 3. la route : un objet par batteur, trois champs chacun
-    payload = web._api_heartbeat(fresh, old)
+    payload = api.beats(fresh, old)
     assert set(payload) == {heartbeat.RAIL, heartbeat.GITHUB_SYNC}, payload
     rail, sync = payload[heartbeat.RAIL], payload[heartbeat.GITHUB_SYNC]
     assert rail["at"] == fresh and round(rail["ago_s"]) == 3 and not rail["stale"], rail
     assert sync["at"] == old and sync["stale"] is True, sync
     jamais_battu = {"at": None, "ago_s": None, "stale": True}
-    assert web._api_heartbeat(None, None)[heartbeat.GITHUB_SYNC] == jamais_battu
+    assert api.beats(None, None)[heartbeat.GITHUB_SYNC] == jamais_battu
     print("3. /api/heartbeat : les deux battements, horodatage, âge, périmé ✓")
 
     # 4. l'en-tête commun du frontend
-    assert web._ago(3) == "3 s" and web._ago(200) == "3 min"
-    vivant = web._beat(fresh)
+    assert pages.ago(3) == "3 s" and pages.ago(200) == "3 min"
+    vivant = pages.beat(fresh)
     assert "class='beat'" in vivant and "rail vivant il y a 3 s" in vivant, vivant
-    arret = web._beat(old)
+    arret = pages.beat(old)
     assert "class='stalled'" in arret and "les états affichés sont figés" in arret, arret
     assert f"rail à l'arrêt depuis {old:%H:%M}" in arret, arret
-    jamais = web._beat(None)
+    jamais = pages.beat(None)
     assert "class='stalled'" in jamais and "jamais tamponné" in jamais, jamais
     print("4. en-tête : rail vivant, ou bandeau — les états sont figés ✓")
 
@@ -148,39 +150,39 @@ def main() -> None:
               {"number": 8, "labels": []}]   # #8 : admission différée, pas d'item
 
     gh = FakeGitHub(issues)
-    gs._paint_states(FakeConn(items=items), gh, blocked={8}, queued=set(),
+    github_sync.paint_states(FakeConn(items=items), gh, blocked={8}, queued=set(),
                      stalled=True)
-    assert gh.labels == [("+", 7, gs.STALLED), ("+", 8, gs.BLOCKED)], gh.labels
+    assert gh.labels == [("+", 7, github_client.STALLED), ("+", 8, github_client.BLOCKED)], gh.labels
 
     gh = FakeGitHub(issues)   # le worker ne bat toujours pas : rien à repeindre
-    issues[0]["labels"].append({"name": gs.STALLED})
-    issues[1]["labels"].append({"name": gs.BLOCKED})
-    gs._paint_states(FakeConn(items=items), gh, blocked={8}, queued=set(),
+    issues[0]["labels"].append({"name": github_client.STALLED})
+    issues[1]["labels"].append({"name": github_client.BLOCKED})
+    github_sync.paint_states(FakeConn(items=items), gh, blocked={8}, queued=set(),
                      stalled=True)
     assert gh.labels == [], gh.labels
 
     gh = FakeGitHub(issues)   # le battement revient : seul `rail:stalled` part
-    gs._paint_states(FakeConn(items=items), gh, blocked={8}, queued=set(),
+    github_sync.paint_states(FakeConn(items=items), gh, blocked={8}, queued=set(),
                      stalled=False)
-    assert gh.labels == [("-", 7, gs.STALLED)], gh.labels
+    assert gh.labels == [("-", 7, github_client.STALLED)], gh.labels
     print("5. `rail:stalled` posé à côté de l'état, retiré au retour du battement ✓")
 
     # Deux processus de sync peuvent voir la voie libre. Le perdant reçoit
     # « voie occupée » après l'admission du gagnant et classe brièvement le
     # même numéro en file. La vérité active de la base doit gagner.
-    issues = [{"number": 7, "labels": [{"name": gs.QUEUED}]}]
+    issues = [{"number": 7, "labels": [{"name": github_client.QUEUED}]}]
     gh = FakeGitHub(issues)
-    gs._paint_states(FakeConn(items=items), gh, blocked=set(), queued={7},
+    github_sync.paint_states(FakeConn(items=items), gh, blocked=set(), queued={7},
                      stalled=False)
     assert gh.labels == [("+", 7, "rail:implement"),
-                         ("-", 7, gs.QUEUED)], gh.labels
+                         ("-", 7, github_client.QUEUED)], gh.labels
     print("6. course de deux syncs : l'état actif gagne sur `rail:queued` ✓")
 
     # le rouge de l'alarme : la seule exception à la couleur unie des labels
     gh = RecordingGitHub()
-    gh.create_label(gs.STALLED)
+    gh.create_label(github_client.STALLED)
     gh.create_label("rail:implement")
-    assert [body["color"] for _, _, body in gh.calls] == [gs.STALLED_COLOR, gs.RAIL_COLOR]
+    assert [body["color"] for _, _, body in gh.calls] == [github_client.STALLED_COLOR, github_client.RAIL_COLOR]
 
     print("\nbattement : OK — le silence de chaque processus se voit")
 

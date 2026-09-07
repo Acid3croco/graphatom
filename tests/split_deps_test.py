@@ -27,6 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import github_sync as gs  # noqa: E402
+from graphatom import github_admission  # noqa: E402
 
 ADMIS = "<!-- graphatom:code-task-g1-admitted -->\nPrise en charge par le rail."
 
@@ -140,16 +141,16 @@ def main() -> None:
     corps = ("Ce que fait cette fille.\n\n## Critères de succès\n\n"
              "1. voir #10 — preuve : `Depends-on: #10` reste de la prose ici\n\n"
              "Lineage-budget: 2\nDepends-on: #10\n")
-    assert gs._reparent(corps, 10, 13) == corps.replace(
-        "\nDepends-on: #10\n", "\nDepends-on: #13\n"), gs._reparent(corps, 10, 13)
-    assert gs._reparent("Depends-on: #100", 10, 13) == "Depends-on: #100"
-    assert gs._reparent("Depends-on: #10\nDepends-on: #9", 10, 13) == \
+    assert github_admission.reparent(corps, 10, 13) == corps.replace(
+        "\nDepends-on: #10\n", "\nDepends-on: #13\n"), github_admission.reparent(corps, 10, 13)
+    assert github_admission.reparent("Depends-on: #100", 10, 13) == "Depends-on: #100"
+    assert github_admission.reparent("Depends-on: #10\nDepends-on: #9", 10, 13) == \
         "Depends-on: #13\nDepends-on: #9"
-    assert gs._reparent("aucune ligne", 10, 13) == "aucune ligne"
+    assert github_admission.reparent("aucune ligne", 10, 13) == "aucune ligne"
     print("1. seule la ligne `Depends-on: #<mère>` est réécrite ✓")
 
     # les doublures prennent la place du kernel et du graph dans le canal
-    gs.graph, gs.kernel = FakeGraph(), FakeKernel()
+    github_admission.graph, github_admission.kernel = FakeGraph(), FakeKernel()
 
     # 2. la mère #10, découpée en #11 → #12 → #13, et ses dépendants
     issues = [issue(10, "La primitive.\n\n## Découpée en\n\n- [ ] #11\n- [ ] #12\n- [ ] #13\n"),
@@ -162,14 +163,14 @@ def main() -> None:
     gh = FakeGitHub(issues)
     gh.posted.append((22, ADMIS))       # #22 est déjà pris en charge par le rail
     conn = FakeConn({"gh:o/r#10", "gh:o/r#22"})
-    kernel, said = gs.kernel, set()
+    kernel, said = github_admission.kernel, set()
 
     # 3. le tick joué au moment de la fermeture : aucun dépendant admis
     pendant: list[str] = []
-    gh.on_close = lambda: (gs._admit_labeled(conn, gh, "rev", said),
+    gh.on_close = lambda: (github_admission.admit_labeled(conn, gh, "rev", said),
                            pendant.extend(kernel.admitted))
 
-    gs.split_close(gh, 10, [11, 12, 13])
+    github_admission.split_close(gh, 10, [11, 12, 13])
 
     assert gh._issue(20)["body"] == "Le premier dépendant.\n\nDepends-on: #13\n", \
         gh._issue(20)["body"]
@@ -190,7 +191,7 @@ def main() -> None:
         gh.journal
     assert "gh:o/r#20" not in pendant and "gh:o/r#21" not in pendant, pendant
     # et le tick d'après : les deux attendent maintenant #13, toujours ouverte
-    gs._admit_labeled(conn, gh, "rev", said)
+    github_admission.admit_labeled(conn, gh, "rev", said)
     assert "gh:o/r#20" not in kernel.admitted, kernel.admitted
     assert "gh:o/r#21" not in kernel.admitted, kernel.admitted
     assert "gh:o/r#11" in kernel.admitted, kernel.admitted   # la fille, elle, part
@@ -200,7 +201,7 @@ def main() -> None:
     # 4. une mère sans dépendant : la découpe d'aujourd'hui, rien de plus
     issues = [issue(30, "Seule au monde.\n"), issue(31, "Sa fille.\n")]
     gh = FakeGitHub(issues)
-    gs.split_close(gh, 30, [31])
+    github_admission.split_close(gh, 30, [31])
     assert gh.journal == ["comment#30", "close#30"], gh.journal
     assert len(gh.posted) == 1 and "#31" in gh.posted[0][1], gh.posted
     assert gh._issue(30)["state"] == "closed"
@@ -212,7 +213,7 @@ def main() -> None:
               issue(43, "Dépendant impossible.\n\nDepends-on: #40\n")]
     gh = FakeGitHub(issues, casse={43})
     try:
-        gs.split_close(gh, 40, [41])
+        github_admission.split_close(gh, 40, [41])
         raise AssertionError("la découpe aurait dû s'arrêter")
     except SystemExit as exc:
         assert "#43" in str(exc), exc

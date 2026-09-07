@@ -18,11 +18,12 @@ from pathlib import Path
 
 import psycopg
 
+from .gates import DEPLOYED_SERVICES, deployed_service_shas
 from .policy import now
 from .workspace import item_workspace
-from .gates import DEPLOYED_SERVICES, deployed_service_shas
 
 WORKER_STARTED_AT = dt.datetime.now(dt.timezone.utc)
+SERVICE = "graphatom-worker.service"
 
 
 def _worker_sha() -> str:
@@ -77,6 +78,99 @@ def _report(item_id: int, node: str, *lines: str) -> None:
               flush=True)
 
 
+def _note(conn, request: dict, previous: dict, state: dict, *lines: str) -> None:
+    """Un état nouveau est écrit en base et dans le rapport ; un état déjà
+    connu ne l'est pas — un tick ne redit pas ce que le précédent a dit."""
+    if previous != state:
+        _state(conn, request, state)
+        _report(request["item_id"], request["node"], *lines)
+
+
+def _checkout(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=False,
+    ).stdout.strip()
+
+
+def _lock_key(repo: Path) -> int | None:
+    """Une clé d'advisory lock stable par dépôt — `cksum` de son chemin."""
+    checksum = subprocess.run(
+        ["cksum"], input=str(repo), capture_output=True, text=True, check=False,
+    )
+    try:
+        return int(checksum.stdout.split()[0]) if checksum.returncode == 0 else None
+    except (IndexError, ValueError):
+        return None
+
+
+def _too_soon(previous: dict) -> bool:
+    """Une demande déjà tentée il y a moins de `GRAPHATOM_ACTIVATION_RETRY_S`."""
+    attempted = previous.get("attempted_at")
+    if not attempted:
+        return False
+    try:
+        age = (now() - dt.datetime.fromisoformat(attempted)).total_seconds()
+    except (TypeError, ValueError):
+        age = float("inf")
+    return age < float(os.environ.get("GRAPHATOM_ACTIVATION_RETRY_S", "5"))
+
+
+def _restart(conn, request: dict, state: dict) -> None:
+    """Demande le redémarrage à systemd ; un refus est noté, pas caché."""
+    try:
+        restarted = subprocess.run(
+            [os.environ.get("GRAPHATOM_SYSTEMCTL", "systemctl"), "--user", "restart",
+             SERVICE], check=False,
+        )
+    except OSError as exc:
+        restarted = subprocess.CompletedProcess([], 127)
+        state["error"] = str(exc)
+    if restarted.returncode:
+        state["status"] = "error"
+        state.setdefault("error", f"systemctl code {restarted.returncode}")
+        _state(conn, request, state)
+        _report(request["item_id"], request["node"],
+                f"activation du worker échouée - {state['error']}")
+
+
+def _activate(conn, request: dict, previous: dict, wanted: str, repo: Path) -> bool:
+    """Sous le verrou : vérifie les services, note la demande, redémarre.
+
+    Rend True tant que la demande reste en attente d'un redémarrage.
+    """
+    current = _request(conn)
+    if current is None or current["id"] != request["id"]:
+        return True
+    if _checkout(repo) != wanted:
+        return False
+    if _too_soon(previous):
+        return True
+    services = deployed_service_shas(repo)
+    wrong = [name for name in DEPLOYED_SERVICES if services[name] != wanted]
+    if wrong:
+        state = {"status": "error", "worker_sha": WORKER_SHA, "wanted_sha": wanted,
+                 "service_shas": services,
+                 "error": "services discordants : " + ", ".join(wrong)}
+        _note(conn, request, previous, state, *(
+            f"{name} porte finalement {services[name] or 'aucun SHA'} - voulu {wanted}"
+            for name in DEPLOYED_SERVICES
+        ), f"activation en attente - {state['error']}")
+        return False
+    _report(request["item_id"], request["node"], *(
+        f"{name} porte finalement {services[name]} - voulu {wanted}"
+        for name in DEPLOYED_SERVICES
+    ))
+    state = {"status": "pending", "worker_sha": WORKER_SHA,
+             "wanted_sha": wanted, "attempted_at": now().isoformat()}
+    _state(conn, request, state)
+    _report(request["item_id"], request["node"],
+            f"worker porte {WORKER_SHA} - voulu {wanted}",
+            "résultat appliqué - activation du worker demandée")
+    _restart(conn, request, state)
+    return True
+
+
 def reconcile(conn: psycopg.Connection) -> bool:
     """Réconcilie la dernière demande durable et dit si elle reste en attente."""
     request = _request(conn)
@@ -85,109 +179,32 @@ def reconcile(conn: psycopg.Connection) -> bool:
     wanted = request["result"]["deploy_sha"]
     previous = request["result"].get("worker_activation") or {}
     if wanted == WORKER_SHA:
-        state = {"status": "active", "worker_sha": WORKER_SHA}
-        if previous != state:
-            _state(conn, request, state)
-            _report(request["item_id"], request["node"],
-                    f"worker actif sur le SHA voulu {wanted}")
+        _note(conn, request, previous, {"status": "active", "worker_sha": WORKER_SHA},
+              f"worker actif sur le SHA voulu {wanted}")
         return False
 
     repo = Path(os.environ.get("GRAPHATOM_REPO_DIR", Path(__file__).resolve().parents[2]))
-    checkout = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "HEAD"],
-        capture_output=True, text=True, check=False,
-    ).stdout.strip()
+    checkout = _checkout(repo)
     if checkout != wanted:
-        state = {"status": "error", "worker_sha": WORKER_SHA,
-                 "wanted_sha": wanted,
+        state = {"status": "error", "worker_sha": WORKER_SHA, "wanted_sha": wanted,
                  "error": f"checkout {checkout or 'inconnu'} différent"}
-        if previous != state:
-            _state(conn, request, state)
-            _report(request["item_id"], request["node"],
-                    f"worker porte {WORKER_SHA} - voulu {wanted}",
-                    f"activation en attente - {state['error']}")
+        _note(conn, request, previous, state,
+              f"worker porte {WORKER_SHA} - voulu {wanted}",
+              f"activation en attente - {state['error']}")
         return False  # verify_deploy doit router cette discordance
 
-    checksum = subprocess.run(
-        ["cksum"], input=str(repo), capture_output=True, text=True, check=False,
-    )
-    try:
-        lock = int(checksum.stdout.split()[0]) if checksum.returncode == 0 else None
-    except (IndexError, ValueError):
-        lock = None
+    lock = _lock_key(repo)
     if lock is None:
-        state = {"status": "error", "worker_sha": WORKER_SHA,
-                 "wanted_sha": wanted, "error": "cksum indisponible"}
-        if previous != state:
-            _state(conn, request, state)
-            _report(request["item_id"], request["node"],
-                    "activation du worker échouée - cksum indisponible")
+        _note(conn, request, previous,
+              {"status": "error", "worker_sha": WORKER_SHA, "wanted_sha": wanted,
+               "error": "cksum indisponible"},
+              "activation du worker échouée - cksum indisponible")
         print("activation du worker échouée - cksum indisponible", flush=True)
         return True
     if not conn.execute(
             "SELECT pg_try_advisory_lock(%s) AS pris", (lock,)).fetchone()["pris"]:
         return True
     try:
-        current = _request(conn)
-        if current is None or current["id"] != request["id"]:
-            return True
-        current_checkout = subprocess.run(
-            ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=False,
-        ).stdout.strip()
-        if current_checkout != wanted:
-            return False
-
-        attempted = previous.get("attempted_at")
-        if attempted:
-            try:
-                age = (now() - dt.datetime.fromisoformat(attempted)).total_seconds()
-            except (TypeError, ValueError):
-                age = float("inf")
-            retry_s = float(os.environ.get("GRAPHATOM_ACTIVATION_RETRY_S", "5"))
-            if age < retry_s:
-                return True
-
-        services = deployed_service_shas(repo)
-        wrong = [name for name in DEPLOYED_SERVICES if services[name] != wanted]
-        if wrong:
-            state = {"status": "error", "worker_sha": WORKER_SHA,
-                     "wanted_sha": wanted,
-                     "service_shas": services,
-                     "error": "services discordants : " + ", ".join(wrong)}
-            if previous != state:
-                _state(conn, request, state)
-                _report(request["item_id"], request["node"], *(
-                    f"{name} porte finalement {services[name] or 'aucun SHA'} - voulu {wanted}"
-                    for name in DEPLOYED_SERVICES
-                ), f"activation en attente - {state['error']}")
-            return False
-
-        _report(request["item_id"], request["node"], *(
-            f"{name} porte finalement {services[name]} - voulu {wanted}"
-            for name in DEPLOYED_SERVICES
-        ))
-
-        state = {"status": "pending", "worker_sha": WORKER_SHA,
-                 "wanted_sha": wanted, "attempted_at": now().isoformat()}
-        _state(conn, request, state)
-        _report(request["item_id"], request["node"],
-                f"worker porte {WORKER_SHA} - voulu {wanted}",
-                "résultat appliqué - activation du worker demandée")
-        try:
-            restarted = subprocess.run(
-                [os.environ.get("GRAPHATOM_SYSTEMCTL", "systemctl"), "--user", "restart",
-                 "graphatom-worker.service"], check=False,
-            )
-        except OSError as exc:
-            restarted = subprocess.CompletedProcess([], 127)
-            state["error"] = str(exc)
-        if restarted.returncode:
-            state["status"] = "error"
-            state.setdefault("error", f"systemctl code {restarted.returncode}")
-            _state(conn, request, state)
-            _report(request["item_id"], request["node"],
-                    f"activation du worker échouée - {state['error']}")
-        return True
+        return _activate(conn, request, previous, wanted, repo)
     finally:
         conn.execute("SELECT pg_advisory_unlock(%s)", (lock,))

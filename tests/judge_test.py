@@ -40,6 +40,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, graph, kernel, scheduler, worktree  # noqa: E402
+from graphatom import views  # noqa: E402
 from graphatom import workspace as bureau  # noqa: E402
 
 from outils import attendre, etat, git  # noqa: E402
@@ -256,8 +257,8 @@ def sole(conn, workdir: Path, repo: Path) -> None:
     assert not traces, f"le court-circuit a lancé un agent : {traces}"
     assert "usage" not in (run["result"] or {}), run["result"]
     from graphatom import web
-    assert web._totals([run]) == {}, web._totals([run])
-    assert web._totals(runs_de(conn, item_id, "juge")) == {}, "le nœud juge coûte zéro"
+    assert views.totals([run]) == {}, views.totals([run])
+    assert views.totals(runs_de(conn, item_id, "juge")) == {}, "le nœud juge coûte zéro"
     print(f"1. item {item_id} : un finaliste → issue « sole », aucune trace d'agent "
           f"({', '.join(p.name for p in sorted(workspace.iterdir()))}), coût nul ✓")
 

@@ -47,6 +47,7 @@ from psycopg.pq import TransactionStatus
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, graph, kernel, scheduler, web  # noqa: E402
+from graphatom import pages, views  # noqa: E402
 from graphatom import policy, process, reduction, workspace as bureau  # noqa: E402
 
 from outils import attendre, etat  # noqa: E402
@@ -348,15 +349,15 @@ def course(conn, workdir: Path) -> int:
     for k in range(4):
         assert usages[k] == {"input_tokens": JETONS_BASE + k, "total_cost_usd": 0.25}, \
             f"candidat {k} : son usage doit être en base — {usages[k]}"
-    total = web._totals(list(finaux.values()))
+    total = views.totals(list(finaux.values()))
     attendu = sum(JETONS_BASE + k for k in range(4))
     assert total["input_tokens"] == attendu, (total, attendu)
-    par_noeud = web._totals([r for r in finaux.values() if r["node"] == "travail"])
+    par_noeud = views.totals([r for r in finaux.values() if r["node"] == "travail"])
     assert par_noeud == total, "le nœud en fan-out porte tout le prix de l'étape"
     # la table des runs distingue les candidats : sans leur numéro, K lignes
     # identiques — un run sans fan-out, lui, s'affiche comme avant
-    assert web._candidate(gagnant) == f" · <small>c{gagnant['candidate']}</small>"
-    assert web._candidate({"candidate": None}) == ""
+    assert pages.candidate(gagnant) == f" · <small>c{gagnant['candidate']}</small>"
+    assert pages.candidate({"candidate": None}) == ""
     assert total["total_cost_usd"] == 1.0, total
     assert total["input_tokens"] > max(u["input_tokens"] for u in usages.values()), \
         "le total doit être la somme des K, pas celui du gagnant"

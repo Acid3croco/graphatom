@@ -27,6 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, web  # noqa: E402
+from graphatom import pages  # noqa: E402
 from graphatom import workspace as bureau  # noqa: E402
 
 ISSUE_URL = "https://github.com/Acid3croco/graphatom/issues/27"
@@ -70,13 +71,13 @@ def question_page(title: str | None = None) -> str:
         "deadline": dt.datetime(2026, 8, 8, 9, 30), "text": "On garde ?",
         "options": ["merger", "abandonner"],
     }
-    return web._questions_page([question], by="web", token="t", flash=None,
-                               beat=dt.datetime.now(dt.timezone.utc))
+    return pages.questions_page([question], by="web", token="t", flash=None,
+                               beat_at=dt.datetime.now(dt.timezone.utc))
 
 
 def main() -> None:
     # 1. le sujet GitHub est un lien, href complet
-    assert web._subject("gh:Acid3croco/graphatom#27") == (
+    assert pages.subject("gh:Acid3croco/graphatom#27") == (
         f"<a href='{ISSUE_URL}'>gh:Acid3croco/graphatom#27</a>")
     assert f"href='{ISSUE_URL}'" in question_page()
     print(f"1. sujet gh → {ISSUE_URL} ✓")
@@ -84,8 +85,8 @@ def main() -> None:
     # 2. ce qui n'est pas un sujet GitHub reste du texte brut
     for plain in ("pipeline-x:oom", "gh:Acid3croco/graphatom#abc",
                   "gh:graphatom#27", "voir gh:a/b#1 plus tard"):
-        assert web._subject(plain) == plain, plain
-    assert web._subject("<b>&") == "&lt;b&gt;&amp;"
+        assert pages.subject(plain) == plain, plain
+    assert pages.subject("<b>&") == "&lt;b&gt;&amp;"
     print("2. sujet quelconque : texte brut, échappé ✓")
 
     # 3. la PR vient de release.json, écrit par le nœud release
@@ -98,22 +99,22 @@ def main() -> None:
         bureau.DATA_DIR = Path(tmp)  # le seul répertoire de données, celui des blocs
         workspace = bureau.item_workspace(14)
         workspace.mkdir()
-        assert web._pr(14) == ""  # pas de release : rien à dire
+        assert pages.pr(14) == ""  # pas de release : rien à dire
 
         release = {"pr_number": 31, "pr_url": PR_URL, "merge_sha": "a1b2c3d4e5f6"}
         (workspace / "release.json").write_text(json.dumps(release))
-        assert web._pr(14) == f" · <a href='{PR_URL}'>PR #31</a> (mergée a1b2c3d)", web._pr(14)
+        assert pages.pr(14) == f" · <a href='{PR_URL}'>PR #31</a> (mergée a1b2c3d)", pages.pr(14)
 
         (workspace / "release.json").write_text(json.dumps({"pr_number": 31}))
-        assert web._pr(14) == ""  # une release sans URL n'invente pas de lien
+        assert pages.pr(14) == ""  # une release sans URL n'invente pas de lien
 
         (workspace / "release.json").write_text("{pas du json")
-        assert "illisible" in web._pr(14)  # le dire, sans emporter la page
+        assert "illisible" in pages.pr(14)  # le dire, sans emporter la page
     print(f"3. release.json → {PR_URL} ✓")
 
     # 4. la table des items, dans le DOM rendu : le numéro vers GitHub, le
     #    titre vers la page de l'item
-    page = web._items_page(
+    page = pages.items_page(
         FakeConn(
             [item_row(14, "gh:Acid3croco/graphatom#27", TITRE),
              item_row(9, "pipeline-x:oom", None)],
@@ -123,7 +124,7 @@ def main() -> None:
         dt.datetime.now(dt.timezone.utc))
     assert "<th>issue</th><th>titre</th>" in page, page
     assert f"<a href='{ISSUE_URL}'>#27</a>" in page, page
-    assert f"<a href='/item/14'>{web._e(TITRE)}</a>" in page, page
+    assert f"<a href='/item/14'>{pages.e(TITRE)}</a>" in page, page
     assert TITRE not in page, "le titre est échappé, jamais rendu tel quel"
     # le sujet d'un autre canal : deux cellules vides, et la ligne tient
     assert "<td></td><td></td>" in page, page
@@ -135,7 +136,7 @@ def main() -> None:
 
     # 5. la question dit de quoi il s'agit — le titre, pas seulement le numéro
     page = question_page(TITRE)
-    assert f"« {web._e(TITRE)} »" in page, page
+    assert f"« {pages.e(TITRE)} »" in page, page
     assert "item 14" in page and TITRE not in page, page
     assert "« " not in question_page(), "sans titre, la question n'invente rien"
     print("5. question : le titre de l'item à côté de son numéro ✓")

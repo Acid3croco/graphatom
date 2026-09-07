@@ -26,6 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks  # noqa: E402
+from graphatom import github_questions  # noqa: E402
 from graphatom import workspace as bureau  # noqa: E402
 from graphatom import github_sync as gs  # noqa: E402
 
@@ -117,7 +118,7 @@ def question_body(gh: FakeGitHub | None = None) -> str:
         "deadline": dt.datetime(2026, 8, 8, 9, 30),
     }
     gh = gh or FakeGitHub()
-    gs._publish_questions(FakeConn([ITEM], question), gh)
+    github_questions.publish_questions(FakeConn([ITEM], question), gh)
     assert len(gh.posted) == 1, gh.posted
     return gh.posted[0][1]
 
@@ -152,11 +153,11 @@ def main() -> None:
         nue = question_body()
         assert "criteria.md" not in nue, nue
         gh = FakeGitHub()
-        gs._publish_criteria(FakeConn([ITEM]), gh)
+        github_questions.publish_criteria(FakeConn([ITEM]), gh)
         assert gh.posted == [], gh.posted
         workspace.mkdir()
         (workspace / "criteria.md").write_text("")
-        gs._publish_criteria(FakeConn([ITEM]), gh)
+        github_questions.publish_criteria(FakeConn([ITEM]), gh)
         assert gh.posted == [], "un criteria.md vide ne dit rien"
         assert question_body() == nue, "et la question reste mot pour mot la même"
         print("3. sans criteria.md : aucun commentaire, question inchangée ✓")
@@ -164,7 +165,7 @@ def main() -> None:
         # 4. les critères figés partent sur l'issue, sous leur clé
         (workspace / "criteria.md").write_text(CRITERIA)
         gh, conn = FakeGitHub(), FakeConn([ITEM])
-        gs._publish_criteria(conn, gh)
+        github_questions.publish_criteria(conn, gh)
         assert len(gh.posted) == 1, gh.posted
         number, body = gh.posted[0]
         assert number == 87, number
@@ -176,11 +177,11 @@ def main() -> None:
         print("4. les critères de `scope` publiés sur l'issue, clé graph+génération ✓")
 
         # 5. deux ticks, un seul commentaire — par l'effet, puis par le marqueur
-        gs._publish_criteria(conn, gh)
+        github_questions.publish_criteria(conn, gh)
         assert len(gh.posted) == 1, gh.posted
         oublieuse = FakeConn([ITEM], amnesique=True)
-        gs._publish_criteria(oublieuse, gh)
-        gs._publish_criteria(oublieuse, gh)
+        github_questions.publish_criteria(oublieuse, gh)
+        github_questions.publish_criteria(oublieuse, gh)
         assert len(gh.posted) == 1, gh.posted
         print("5. deux ticks, un seul commentaire de critères ✓")
 
@@ -194,10 +195,10 @@ def main() -> None:
         # un fichier long est cité borné, et le dit
         long = "\n".join(f"{n}. critère — preuve" for n in range(200))
         (workspace / "criteria.md").write_text(long)
-        gs._publish_criteria(FakeConn([ITEM]), gh := FakeGitHub())
+        github_questions.publish_criteria(FakeConn([ITEM]), gh := FakeGitHub())
         body = gh.posted[0][1]
-        assert f"> {gs.CRITERIA_LINES - 1}. critère — preuve" in body, body
-        assert f"… {200 - gs.CRITERIA_LINES} lignes de plus" in body, body
+        assert f"> {github_questions.CRITERIA_LINES - 1}. critère — preuve" in body, body
+        assert f"… {200 - github_questions.CRITERIA_LINES} lignes de plus" in body, body
 
     print("\ncritères : OK — le rail dit sa lecture avant d'écrire une ligne")
 

@@ -8,50 +8,41 @@ from pathlib import Path
 from . import channel, db, graph, kernel, quota, scheduler, web
 
 
-def main() -> None:
+def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="graphatom")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sp = sub.add_parser("init-db", help="créer les tables")
     sp.add_argument("--drop", action="store_true")
-
     sub.add_parser("drop-agent-db",
                    help="dropper la base jetable de l'item — le cleanup du graph l'appelle")
-
     sp = sub.add_parser("publish", help="valider et publier un bundle JSON")
     sp.add_argument("bundle", type=Path)
-
     sp = sub.add_parser("admit", help="admettre une occurrence")
     sp.add_argument("revision")
     sp.add_argument("subject_key")
-
     sub.add_parser("run", help="ordonnanceur, boucle infinie")
     sub.add_parser("tick", help="un seul tick d'ordonnanceur")
     sub.add_parser("items", help="lister les items")
     sub.add_parser("questions", help="questions ouvertes")
-
     sp = sub.add_parser("journal", help="trajectoire d'un item")
     sp.add_argument("item_id", type=int)
-
     sp = sub.add_parser("answer", help="répondre à une question")
     sp.add_argument("question_id", type=int)
     sp.add_argument("option")
     sp.add_argument("--by", default="jack")
-
     sp = sub.add_parser("serve", help="canal humain : web local sur les questions")
     sp.add_argument("--port", type=int, default=8848)
     sp.add_argument("--host", default="127.0.0.1")
     sp.add_argument("--by", default="jack")
     sp.add_argument("--notify-cmd", default=None,
                     help="commande shell lancée à chaque question ouverte (JSON sur stdin)")
-
     sp = sub.add_parser(
         "github-sync",
         help="canal github : issues labellisées, /answer, labels d'état, rapports")
     sp.add_argument("--repo", required=True, help="owner/repo")
     sp.add_argument("--graph", required=True, help="bundle JSON publié au démarrage")
     sp.add_argument("--poll", type=float, default=15.0)
-
     sp = sub.add_parser(
         "split-close",
         help="fin de découpe : reporter les dépendances de la mère sur la "
@@ -61,101 +52,130 @@ def main() -> None:
     sp.add_argument("--children", type=int, nargs="+", required=True,
                     help="les filles dans l'ordre de la chaîne — la dernière "
                          "reprend les dépendances de la mère")
-
-    sp = sub.add_parser(
-        "build-quota",
-        help="exécuter une commande lourde sous le quota global")
+    sp = sub.add_parser("build-quota", help="exécuter une commande lourde sous le quota global")
     sp.add_argument("command", nargs=argparse.REMAINDER)
+    return p
 
-    args = p.parse_args()
 
-    if args.cmd == "init-db":
-        try:
-            changes = db.init_db(drop=args.drop)
-        except RuntimeError as err:
-            # migration bloquée par un verrou : échouer vite en nommant le
-            # bloqueur, plutôt que de faire s'empiler les lectures derrière
-            sys.exit(str(err))
-        print("base initialisée")
-        # le journal du déploiement dit ce que la migration a changé : sans
-        # cette ligne, un worker qui se reconnecte sur un plan périmé au même
-        # moment n'a aucune cause visible
-        if changes:
-            print(f"migration : la forme des tables a changé — "
-                  f"{len(changes)} colonne(s)")
-            for change in changes:
-                print(f"  {change}")
-        else:
-            print("migration : aucun changement de forme")
-        return
-    if args.cmd == "drop-agent-db":
-        # avant toute connexion : on ne drop pas une base qu'on tient ouverte
-        try:
-            print(f"base jetable droppée : {db.drop_agent_db()}")
-        except ValueError as err:
-            sys.exit(str(err))
-        return
-    if args.cmd == "run":
-        scheduler.run_forever()
-        return
-    if args.cmd == "serve":
-        web.serve(port=args.port, by=args.by, notify_cmd=args.notify_cmd, host=args.host)
-        return
-    if args.cmd == "github-sync":
-        from . import github_sync
-        github_sync.sync_forever(args.repo, args.graph, poll_s=args.poll)
-        return
-    if args.cmd == "split-close":
-        # la découpe n'a rien à dire à la base : elle n'écrit que sur GitHub,
-        # et le nœud `scope` qui l'appelle n'a qu'une base jetable
-        from . import github_sync
-        github_sync.split_close(github_sync.from_env(args.repo),
-                                args.mother, args.children)
-        return
-    if args.cmd == "build-quota":
-        command = args.command[1:] if args.command[:1] == ["--"] else args.command
-        if not command:
-            p.error("build-quota demande une commande après --")
-        raise SystemExit(quota.run(command))
+# --------------------------------------------------------- sans connexion
 
+
+def _init_db(args: argparse.Namespace) -> None:
+    try:
+        changes = db.init_db(drop=args.drop)
+    except RuntimeError as err:
+        # migration bloquée par un verrou : échouer vite en nommant le
+        # bloqueur, plutôt que de faire s'empiler les lectures derrière
+        sys.exit(str(err))
+    print("base initialisée")
+    # le journal du déploiement dit ce que la migration a changé : sans
+    # cette ligne, un worker qui se reconnecte sur un plan périmé au même
+    # moment n'a aucune cause visible
+    if not changes:
+        print("migration : aucun changement de forme")
+        return
+    print(f"migration : la forme des tables a changé — {len(changes)} colonne(s)")
+    for change in changes:
+        print(f"  {change}")
+
+
+def _drop_agent_db(_args: argparse.Namespace) -> None:
+    # avant toute connexion : on ne drop pas une base qu'on tient ouverte
+    try:
+        print(f"base jetable droppée : {db.drop_agent_db()}")
+    except ValueError as err:
+        sys.exit(str(err))
+
+
+def _github_sync(args: argparse.Namespace) -> None:
+    from . import github_sync
+    github_sync.sync_forever(args.repo, args.graph, poll_s=args.poll)
+
+
+def _split_close(args: argparse.Namespace) -> None:
+    # la découpe n'a rien à dire à la base : elle n'écrit que sur GitHub,
+    # et le nœud `scope` qui l'appelle n'a qu'une base jetable
+    from . import github_admission, github_client
+    github_admission.split_close(github_client.from_env(args.repo),
+                                 args.mother, args.children)
+
+
+def _build_quota(args: argparse.Namespace) -> None:
+    command = args.command[1:] if args.command[:1] == ["--"] else args.command
+    if not command:
+        _parser().error("build-quota demande une commande après --")
+    raise SystemExit(quota.run(command))
+
+
+# ---------------------------------------------------------- avec connexion
+
+
+def _items(conn, _args: argparse.Namespace) -> None:
+    for r in conn.execute(
+        "SELECT w.id, s.subject_key, w.generation, w.state, w.version, "
+        "w.escalations, w.terminal_at FROM work_item w "
+        "JOIN subject s ON s.id = w.subject_id ORDER BY w.id"
+    ):
+        fin = r["terminal_at"].strftime("%H:%M:%S") if r["terminal_at"] else "actif"
+        print(f"#{r['id']} {r['subject_key']} g{r['generation']} "
+              f"état={r['state']} v{r['version']} esc={r['escalations']} {fin}")
+
+
+def _questions(conn, _args: argparse.Namespace) -> None:
+    for r in conn.execute("SELECT * FROM question WHERE state = 'open' ORDER BY id"):
+        print(f"[{r['id']}] item {r['item_id']} → {r['owner']} "
+              f"(avant {r['deadline']:%H:%M})\n    {r['text']}\n"
+              f"    options : {', '.join(r['options'])}")
+
+
+def _journal(conn, args: argparse.Namespace) -> None:
+    for r in conn.execute(
+        "SELECT * FROM event WHERE item_id = %s ORDER BY item_version",
+        (args.item_id,),
+    ):
+        arrow = f"{r['from_state']} → " if r["from_state"] else ""
+        out = f" [{r['outcome']}]" if r["outcome"] else ""
+        print(f"v{r['item_version']:>2} {r['at']:%H:%M:%S} {r['kind']:<9} "
+              f"{arrow}{r['to_state']}{out}")
+
+
+def _answer(conn, args: argparse.Namespace) -> None:
+    err = channel.record_answer(conn, args.question_id, args.option, args.by)
+    if err:
+        sys.exit(err)
+    print("réponse enregistrée — le waiter routera au prochain tick")
+
+
+STANDALONE = {
+    "init-db": _init_db,
+    "drop-agent-db": _drop_agent_db,
+    "run": lambda _args: scheduler.run_forever(),
+    "serve": lambda args: web.serve(port=args.port, by=args.by,
+                                    notify_cmd=args.notify_cmd, host=args.host),
+    "github-sync": _github_sync,
+    "split-close": _split_close,
+    "build-quota": _build_quota,
+}
+
+CONNECTED = {
+    "publish": lambda conn, args: print(
+        graph.publish(conn, json.loads(args.bundle.read_text()))),
+    "admit": lambda conn, args: print(kernel.admit(conn, args.revision, args.subject_key)),
+    "tick": lambda conn, _args: print(scheduler.tick(conn)),
+    "items": _items,
+    "questions": _questions,
+    "journal": _journal,
+    "answer": _answer,
+}
+
+
+def main() -> None:
+    args = _parser().parse_args()
+    if args.cmd in STANDALONE:
+        STANDALONE[args.cmd](args)
+        return
     with db.connect() as conn:
-        if args.cmd == "publish":
-            rev = graph.publish(conn, json.loads(args.bundle.read_text()))
-            print(rev)
-        elif args.cmd == "admit":
-            print(kernel.admit(conn, args.revision, args.subject_key))
-        elif args.cmd == "tick":
-            print(scheduler.tick(conn))
-        elif args.cmd == "items":
-            for r in conn.execute(
-                "SELECT w.id, s.subject_key, w.generation, w.state, w.version, "
-                "w.escalations, w.terminal_at FROM work_item w "
-                "JOIN subject s ON s.id = w.subject_id ORDER BY w.id"
-            ):
-                fin = r["terminal_at"].strftime("%H:%M:%S") if r["terminal_at"] else "actif"
-                print(f"#{r['id']} {r['subject_key']} g{r['generation']} "
-                      f"état={r['state']} v{r['version']} esc={r['escalations']} {fin}")
-        elif args.cmd == "questions":
-            for r in conn.execute(
-                "SELECT * FROM question WHERE state = 'open' ORDER BY id"
-            ):
-                print(f"[{r['id']}] item {r['item_id']} → {r['owner']} "
-                      f"(avant {r['deadline']:%H:%M})\n    {r['text']}\n"
-                      f"    options : {', '.join(r['options'])}")
-        elif args.cmd == "journal":
-            for r in conn.execute(
-                "SELECT * FROM event WHERE item_id = %s ORDER BY item_version",
-                (args.item_id,),
-            ):
-                arrow = f"{r['from_state']} → " if r["from_state"] else ""
-                out = f" [{r['outcome']}]" if r["outcome"] else ""
-                print(f"v{r['item_version']:>2} {r['at']:%H:%M:%S} {r['kind']:<9} "
-                      f"{arrow}{r['to_state']}{out}")
-        elif args.cmd == "answer":
-            err = channel.record_answer(conn, args.question_id, args.option, args.by)
-            if err:
-                sys.exit(err)
-            print("réponse enregistrée — le waiter routera au prochain tick")
+        CONNECTED[args.cmd](conn, args)
 
 
 if __name__ == "__main__":

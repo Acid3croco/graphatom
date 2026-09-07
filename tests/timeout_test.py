@@ -25,8 +25,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import github_sync as gs  # noqa: E402
+from graphatom import github_client, github_sync  # noqa: E402
 
-SOURCE = Path(__file__).resolve().parents[1] / "src" / "graphatom" / "github_sync.py"
+SOURCE = Path(__file__).resolve().parents[1] / "src" / "graphatom" / "github_client.py"
 CALLS = ("urlopen", "urlretrieve", "HTTPConnection", "create_connection")
 COURT = 2.0   # le timeout de l'appel chronométré : la constante, en plus court
 MARGE = 5.0   # ce qu'on tolère au-dessus : de l'ordonnancement, pas un gel
@@ -83,12 +84,12 @@ def main() -> None:
     assert outgoing, f"aucun appel sortant trouvé dans {SOURCE.name}"
     for line in outgoing:
         assert "timeout=TIMEOUT_S" in line, line
-    print(f"1. {len(outgoing)} appel sortant, borné par TIMEOUT_S = {gs.TIMEOUT_S} s ✓")
+    print(f"1. {len(outgoing)} appel sortant, borné par TIMEOUT_S = {github_client.TIMEOUT_S} s ✓")
 
     # 2. l'attente suit la constante : raccourcie, l'appel rend la main d'autant
-    gs.API = f"http://127.0.0.1:{mute_server()}"
-    gh = gs.GitHub("o/r", "jeton")
-    reel, gs.TIMEOUT_S = gs.TIMEOUT_S, COURT
+    github_client.API = f"http://127.0.0.1:{mute_server()}"
+    gh = github_client.GitHub("o/r", "jeton")
+    reel, github_client.TIMEOUT_S = github_client.TIMEOUT_S, COURT
     start = time.monotonic()
     try:
         gh.labeled_issues()
@@ -96,7 +97,7 @@ def main() -> None:
     except (urllib.error.URLError, OSError) as exc:
         erreur = exc
     attente = time.monotonic() - start
-    gs.TIMEOUT_S = reel
+    github_client.TIMEOUT_S = reel
     assert COURT <= attente < COURT + MARGE, attente
     print(f"2. timeout à {COURT} s : appel rendu en {attente:.1f} s — {erreur} ✓")
 
@@ -104,10 +105,10 @@ def main() -> None:
     sortie = io.StringIO()
     start = time.monotonic()
     with contextlib.redirect_stdout(sortie):
-        gs.tick(FakeConn(), gh, "révision", {"Acid3croco"}, {}, set())
+        github_sync.tick(FakeConn(), gh, "révision", {"Acid3croco"}, {}, set())
     duree = time.monotonic() - start
     ligne = sortie.getvalue().strip()
-    assert gs.TIMEOUT_S - 1 <= duree < 60, duree
+    assert github_client.TIMEOUT_S - 1 <= duree < 60, duree
     print(f"3. tick rendu en {duree:.1f} s, jamais gelé (< 60 s) ✓")
 
     assert ligne.startswith("github injoignable : "), ligne

@@ -5,7 +5,7 @@ Scénario, sans base ni ordonnanceur — la validation est pure :
   1. les bundles d'`examples/` se valident tous
   2. un bundle avec une clé `on_kernel` parasite visant un nœud fantôme
      est refusé, avec un message qui nomme la clé
-  3. `web._layers()` ne lève pas de KeyError sur un bundle validé
+  3. `svg.layers()` ne lève pas de KeyError sur un bundle validé
   4. la file : l'arête réflexive d'un nœud `file` est la seule boucle
      tolérée hors escalade — le drapeau sans arête est refusé, la boucle
      longue qui passe par la file aussi
@@ -23,6 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import graph, web  # noqa: E402
+from graphatom import svg  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -60,7 +61,7 @@ def main() -> None:
 
     # 3. le placement du graph tient sur tout bundle validé
     for name, bundle in bundles.items():
-        layers = web._layers(bundle)
+        layers = svg.layers(bundle)
         assert sorted(n for layer in layers for n in layer) == sorted(bundle["nodes"]), name
     print("3. _layers() couvre exactement les nœuds déclarés ✓")
 

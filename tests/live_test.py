@@ -26,6 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import heartbeat, web  # noqa: E402
+from graphatom import pages  # noqa: E402
 from graphatom.policy import now  # noqa: E402
 
 FRESH = now() - dt.timedelta(seconds=3)
@@ -65,12 +66,12 @@ def question(version: int) -> dict:
 
 
 def questions_page(questions: list[dict], beat=FRESH) -> str:
-    return web._questions_page(questions, by="web", token="t", flash=None, beat=beat)
+    return pages.questions_page(questions, by="web", token="t", flash=None, beat_at=beat)
 
 
 def marker(page: str) -> str:
     """Le marqueur tel qu'un client le lit : le content de la meta."""
-    tag = f"<meta name='{web.MARKER}' content='"
+    tag = f"<meta name='{pages.MARKER}' content='"
     start = page.index(tag) + len(tag)
     return page[start:page.index("'", start)]
 
@@ -78,20 +79,20 @@ def marker(page: str) -> str:
 def main() -> None:
     # 1. le marqueur, le conteneur, le script — et le repli sans JavaScript
     page = questions_page([question(12)])
-    assert f"<meta name='{web.MARKER}' content='" in page, page[:400]
+    assert f"<meta name='{pages.MARKER}' content='" in page, page[:400]
     assert "<main id='live'>" in page and "</main>" in page, page[:400]
     assert "<script>" in page and "DOMParser" in page, page[-800:]
-    assert f"<noscript>{web.REFRESH}</noscript>" in page, page[:400]
-    assert page.count(web.REFRESH) == 1, "le rechargement complet vit dans le noscript"
+    assert f"<noscript>{pages.REFRESH}</noscript>" in page, page[:400]
+    assert page.count(pages.REFRESH) == 1, "le rechargement complet vit dans le noscript"
     print("1. meta marqueur + conteneur #live + script, refresh en noscript ✓")
 
     # 2. le marqueur porte la version affichée — la plus haute quand il y en a
     assert marker(questions_page([question(12)])) == "v12-live"
     assert marker(questions_page([question(4), question(9)])) == "v9-live"
     assert marker(questions_page([])) == "v0-live", "aucune question : rien à suivre"
-    items = web._items_page(FakeConn([item_row(2, 7), item_row(1, 30)]), FRESH)
+    items = pages.items_page(FakeConn([item_row(2, 7), item_row(1, 30)]), FRESH)
     assert marker(items) == "v30-live", marker(items)
-    assert marker(web._items_page(FakeConn([]), FRESH)) == "v0-live"
+    assert marker(pages.items_page(FakeConn([]), FRESH)) == "v0-live"
     print("2. version de l'item, ou la plus haute des items listés ✓")
 
     # 3. la stabilité : deux rendus identiques, un seul marqueur — le client
@@ -110,10 +111,10 @@ def main() -> None:
     # 4. ce que le script promet, ligne à ligne
     for promesse in ("document.hidden", "live.contains(document.activeElement)",
                      "live.innerHTML", "cache: 'no-store'", "5000"):
-        assert promesse in web.LIVE, promesse
-    assert "WebSocket" not in web.LIVE and "EventSource" not in web.LIVE
-    assert "location.reload" not in web.LIVE, "on remplace le conteneur, pas la page"
-    assert web.LIVE.count("\n") < 25, "quinze lignes de JS, pas une bibliothèque"
+        assert promesse in pages.LIVE, promesse
+    assert "WebSocket" not in pages.LIVE and "EventSource" not in pages.LIVE
+    assert "location.reload" not in pages.LIVE, "on remplace le conteneur, pas la page"
+    assert pages.LIVE.count("\n") < 25, "quinze lignes de JS, pas une bibliothèque"
     print("4. onglet caché et focus respectés, conteneur remplacé, aucun canal ✓")
 
     print("\nrafraîchissement : OK — la page se suit sans se recharger")

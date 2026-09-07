@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, channel, db, graph, github_sync, kernel, scheduler  # noqa: E402
-from graphatom import workspace  # noqa: E402
+from graphatom import github_admission, github_client, workspace  # noqa: E402
 
 INSTANCE = os.environ.get("GRAPHATOM_AGENT_DSN") or db.DSN
 os.environ["GRAPHATOM_AGENT_DSN"] = INSTANCE
@@ -120,12 +120,12 @@ def main() -> None:
             revision = graph.publish(conn, bundle())
             gh = FakeGitHub()
 
-            blocked, queued = github_sync._admit_labeled(conn, gh, revision, set())
+            blocked, queued = github_admission.admit_labeled(conn, gh, revision, set())
             first = item_for(conn, 1)
             assert first and item_for(conn, 2) is None
             assert blocked == set() and queued == {2}, (blocked, queued)
-            github_sync._paint_states(conn, gh, blocked, queued, stalled=False)
-            assert ("+", 2, github_sync.QUEUED) in gh.labels, gh.labels
+            github_sync.paint_states(conn, gh, blocked, queued, stalled=False)
+            assert ("+", 2, github_client.QUEUED) in gh.labels, gh.labels
             print("1. #1 admise ; #2 `rail:queued`, sans item ni deadline ✓")
 
             scheduler.tick(conn)
@@ -142,7 +142,7 @@ def main() -> None:
                 (first["id"],),
             ).fetchone()
             assert current["state"] == "review" and question["node"] == "review"
-            blocked, queued = github_sync._admit_labeled(conn, gh, revision, set())
+            blocked, queued = github_admission.admit_labeled(conn, gh, revision, set())
             assert queued == {2} and item_for(conn, 2) is None
             print("3. #1 en review humaine ; #2 reste hors de la base ✓")
 
@@ -151,11 +151,11 @@ def main() -> None:
             ) is None
             scheduler.tick(conn)
             assert item_for(conn, 1)["terminal_at"] is not None
-            blocked, queued = github_sync._admit_labeled(conn, gh, revision, set())
+            blocked, queued = github_admission.admit_labeled(conn, gh, revision, set())
             second = item_for(conn, 2)
             assert second and blocked == queued == set(), (blocked, queued)
-            github_sync._paint_states(conn, gh, blocked, queued, stalled=False)
-            assert ("-", 2, github_sync.QUEUED) in gh.labels, gh.labels
+            github_sync.paint_states(conn, gh, blocked, queued, stalled=False)
+            assert ("-", 2, github_client.QUEUED) in gh.labels, gh.labels
 
             scheduler.tick(conn)
             second_runs = runs(conn, second["id"])

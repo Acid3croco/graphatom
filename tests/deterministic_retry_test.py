@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, graph, kernel, web  # noqa: E402
+from graphatom import api, pages  # noqa: E402
 from graphatom import signature, workspace as bureau  # noqa: E402
 
 from outils import etat  # noqa: E402
@@ -103,8 +104,8 @@ def identique(conn, revision: str) -> None:
                        f"et {second['id']}")
     failure = json.loads(bureau.failure_path(item_id).read_text())
     assert failure["retry"] == message
-    assert message in web._result(runs[-1]["result"]), "trace UI absente"
-    assert web._api_item(conn, item_id)["runs"][-1]["result"]["retry"] == message
+    assert message in pages.result(runs[-1]["result"]), "trace UI absente"
+    assert api.item(conn, item_id)["runs"][-1]["result"]["retry"] == message
     print("1. deux erreurs identiques : escalade sans troisième run, trace API/UI ✓")
 
 
