@@ -10,7 +10,10 @@ Ce test est sans base. Il joue deux commandes de nœud par le vrai bloc ACT :
 5. le nouvel échec remplace le précédent ;
 6. un item neuf et une réussite ne portent aucune trace d'échec ;
 7. pour `starved`, un fournisseur qui n'est pas une chaîne et une raison
-   blanche sont tus ; un fournisseur et une raison valides sont gardés.
+   blanche sont tus ; un fournisseur et une raison valides sont gardés ;
+8. le rapport d'une tentative n'est jamais le prompt archivé ni `prompt.md`,
+   même les plus récents : c'est le dernier autre Markdown écrit depuis le
+   prompt — celui daté du même instant compris, celui d'avant exclu.
 
 Usage : uv run python tests/failure_trace_test.py
 """
@@ -211,6 +214,32 @@ def panne_sans_forme() -> None:
           "et raison valides gardés ✓")
 
 
+def dater(chemin: Path, instant_ns: int) -> None:
+    """Écrit le fichier — son nom pour contenu — et le date à l'instant donné."""
+    chemin.write_text(chemin.name)
+    os.utime(chemin, ns=(instant_ns, instant_ns))
+
+
+def rapport_de_tentative(workdir: Path) -> None:
+    """6. Ni le prompt archivé ni `prompt.md` ne sont un rapport, même les plus
+    récents ; le dernier autre Markdown depuis le prompt l'est, au même instant
+    compris ; un Markdown d'avant le prompt ne l'est pas."""
+    run = {"node": "implement", "cycle": 1, "attempt": 1}
+    espace = workdir / "rapports"
+    espace.mkdir()
+    archive = espace / f"prompt-{workspace.attempt_name(run)}.md"
+    depart = 1_700_000_000 * 10**9
+    for nom, decalage in ((archive.name, 0), ("vieux.md", -1), ("rapport.md", 0),
+                          (workspace.PROMPT_NAME, 2)):
+        dater(espace / nom, depart + decalage)
+    rapport = failure._attempt_report(espace, run)
+    assert rapport == {"name": "rapport.md", "content": "rapport.md"}, rapport
+    dater(archive, depart + 3)  # le prompt archivé devient le plus récent
+    assert failure._attempt_report(espace, run) is None, "le prompt pris pour un rapport"
+    print("6. prompt.md le plus récent : le rapport reste rapport.md, daté du même "
+          "instant que le prompt archivé ; prompt archivé le plus récent : aucun ✓")
+
+
 def main() -> None:
     workdir = Path(tempfile.mkdtemp(prefix="graphatom-failure-trace-"))
     workspace.DATA_DIR = workdir
@@ -221,6 +250,7 @@ def main() -> None:
     shell_sans_issue(path)
     regle_et_reussite()
     panne_sans_forme()
+    rapport_de_tentative(workdir)
 
 
 if __name__ == "__main__":

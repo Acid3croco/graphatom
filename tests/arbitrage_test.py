@@ -17,6 +17,8 @@ n'a rien à faire, sauf quand le test lui oppose un empêchement :
   7. un juge qui ne rend pas `chosen` — crash — est rendu tel quel
   8. les blocs délèguent : JUDGE et CHECK avec exécution jouent l'agent, le
      CHECK muet rend son `stub_outcome` ou `pass`
+  9. les lettres aux bornes : A élit le premier finaliste, la lettre qui
+     suit le dernier ne nomme personne, et une minuscule vaut sa majuscule
 
 Usage : uv run python tests/arbitrage_test.py
 """
@@ -155,6 +157,22 @@ def juge_en_panne() -> None:
     print("7. juge crashé : son autopsie, aucun verdict ✓")
 
 
+def lettres_aux_bornes() -> None:
+    """9. A : le premier finaliste ; C, au-delà du dernier : personne ; b : le second."""
+    purge()
+    _, premier = elu("A", attempt=6)
+    assert premier["outcome"] == "chosen" and premier["elu"] == "A", premier
+    assert "son workspace : c2" in verdict(), verdict()
+    purge()
+    hors_liste = arbitrage.LETTRES[2]  # deux finalistes : la troisième lettre ne nomme personne
+    _, hors = elu(hors_liste, attempt=7)
+    assert hors["outcome"] == "invalid_result", hors
+    _, second = elu("b", attempt=8)
+    assert second["elu"] == "B" and "son workspace : c5" in verdict(), verdict()
+    print(f"9. A élit le premier (c2) ; {hors_liste}, au-delà du dernier : "
+          "invalid_result ; b minuscule élit le second (c5) ✓")
+
+
 def delegations() -> None:
     """8. JUDGE et CHECK avec exécution jouent l'agent ; le CHECK muet, son stub."""
     execute = commande(issue("pass"))
@@ -179,6 +197,7 @@ def main() -> None:
         lettre_illisible()
         choisi_sans_promotion()
         juge_en_panne()
+        lettres_aux_bornes()
         delegations()
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
