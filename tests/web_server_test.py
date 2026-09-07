@@ -27,6 +27,8 @@ Sur un Postgres jetable et le vrai serveur, dans un fil :
  10. N réponses valides et contraires, au même instant, sur la même question :
      une seule est prise, les autres refusées « déjà réglée », la base porte
      une ligne `answered` et une seule réponse
+ 11. un client qui garde sa connexion ouverte ne retient pas l'arrêt
+ 12. un POST sans Content-Length est refusé en 400 sans attendre de corps
 
 Usage : uv run python tests/web_server_test.py
 """
@@ -391,7 +393,9 @@ def preuve_notify_serve(conn, item_2: int, qid_2: int) -> None:
     ids = [n["question_id"] for n in notifiees()]
     assert question_de(conn, item_2)["id"] == qid_2 and len(ids) == 2, ids
     assert len(ids) == len(set(ids)), f"chaque question dite une fois : {ids}"
-    print("   serve --notify-cmd : chaque question ouverte dite, une seule fois ✓")
+    fils = [t for t in threading.enumerate() if t.name == "notify"]
+    assert fils and all(t.daemon for t in fils), "la boucle de notification est un fil démon"
+    print("   serve --notify-cmd : chaque question ouverte dite, une seule fois, en démon ✓")
 
 
 TRACES = {"events": "codex-travail-1-1.jsonl", "log": "agent-travail-1-1.log",
@@ -433,6 +437,20 @@ def preuve_client_qui_traine() -> None:
     print("11. un client qui traîne ne retient pas l'arrêt : fils démons, arrêt immédiat ✓")
 
 
+def preuve_sans_longueur(base: str) -> None:
+    """12. Un POST sans Content-Length : rien à lire, refus immédiat en 400.
+
+    Sans en-tête, la longueur vaut zéro : le serveur ne tente pas de lire un
+    corps qui ne viendra jamais — un client muet ne bloque pas un fil.
+    """
+    host, port = base.split("/")[2].split(":")
+    with socket.create_connection((host, int(port)), timeout=5) as muet:
+        muet.sendall(b"POST /answer HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        premiere = muet.recv(64).split(b"\r\n", 1)[0]
+    assert b" 400 " in premiere, premiere
+    print("12. POST sans Content-Length : 400 tout de suite, aucun corps attendu ✓")
+
+
 def main() -> None:
     db.init_db(drop=True)
     web.NOTIFY_POLL_S = 0.05
@@ -452,6 +470,7 @@ def main() -> None:
         preuve_notify_serve(conn, item_2, qid_2)
         preuve_formulaire(conn, base, token, qid_2, item_2)
         preuve_client_qui_traine()
+        preuve_sans_longueur(base)
         preuve_api(conn, base, [item_1, item_2], rev)
         run = run_de(conn, item_1, "travail")
         atelier = traces_du_run(item_1, run)

@@ -168,13 +168,13 @@ def notify_loop(cmd: str, base_url: str) -> None:
 # ---------------------------------------------------------------------- serve
 
 
-def serve(port: int = 8848, by: str = "web", notify_cmd: str | None = None,
-          host: str = "127.0.0.1") -> None:
+def serve(port: int, by: str, notify_cmd: str | None, host: str) -> None:
+    """Le canal humain : le serveur au premier plan, la notification en démon."""
     token = secrets.token_hex(16)
     base_url = f"http://127.0.0.1:{port}/"
     if notify_cmd:
         threading.Thread(target=notify_loop, args=(notify_cmd, base_url),
-                         daemon=True).start()
+                         name="notify", daemon=True).start()
     print(f"canal humain sur {base_url} (réponses signées « {by} »)", flush=True)
     build_server(host, port, token, by).serve_forever()
 

@@ -132,7 +132,7 @@ def get_json(base: str, path: str) -> tuple[int, object]:
 def serveur(by: str, notify_cmd: str | None = None) -> str:
     """`web.serve` dans un fil démon sur un port libre ; rend l'URL de base."""
     port = port_libre()
-    threading.Thread(target=web.serve, args=(port, by, notify_cmd),
+    threading.Thread(target=web.serve, args=(port, by, notify_cmd, "127.0.0.1"),
                      daemon=True).start()
     base = f"http://127.0.0.1:{port}/"
     limite = time.monotonic() + 20
