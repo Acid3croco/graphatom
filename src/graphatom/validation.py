@@ -134,17 +134,16 @@ def _validate_executions(bundle: dict) -> None:
     """Valide le contrat explicite qui choisit agent ou commande.
 
     Dès qu'un nœud adopte `execution`, aucune clé historique ne peut
-    reprendre la priorité en silence.
+    reprendre la priorité en silence. La CLI, elle, est déjà tenue par
+    `_validate_agents` : un agent sans CLI structurée n'arrive pas ici.
     """
-    defaults = bundle.get("agent") or {}
     for place, spec, config in _places(bundle):
         execution = config.get("execution")
         if execution is not None:
-            _validate_execution(place, spec, config, execution, defaults)
+            _validate_execution(place, spec, config, execution)
 
 
-def _validate_execution(place: str, spec: dict, config: dict, execution,
-                        defaults: dict) -> None:
+def _validate_execution(place: str, spec: dict, config: dict, execution) -> None:
     if spec.get("terminal"):
         raise GraphError(f"{place} : un terminal ne peut pas avoir execution")
     if spec.get("block") not in EXECUTABLE_BLOCKS:
@@ -170,7 +169,7 @@ def _validate_execution(place: str, spec: dict, config: dict, execution,
     if kind == "command":
         _validate_command(place, execution, local)
     else:
-        _validate_agent_execution(place, execution, local, defaults)
+        _validate_agent_execution(place, execution, local)
 
 
 def _validate_command(place: str, execution: dict, local) -> None:
@@ -182,15 +181,11 @@ def _validate_command(place: str, execution: dict, local) -> None:
         )
 
 
-def _validate_agent_execution(place: str, execution: dict, local,
-                              defaults: dict) -> None:
+def _validate_agent_execution(place: str, execution: dict, local) -> None:
     if local is None:
         raise GraphError(f"{place} : execution agent sans config.agent")
-    prompt = local.get("prompt") if isinstance(local, dict) else None
-    if not _text(prompt):
+    if not _text(local.get("prompt")):
         raise GraphError(f"{place} : execution agent sans prompt")
-    if not {**defaults, **local}.get("cli"):
-        raise GraphError(f"{place} : execution agent sans CLI")
     if "cmd" in execution and not _text(execution["cmd"]):
         raise GraphError(f"{place} : execution agent avec cmd invalide")
 
