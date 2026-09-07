@@ -273,6 +273,28 @@ def promotion_impossible(conn, repo: Path) -> None:
         git(repo, "branch", "-D", branche)
 
 
+def course_perdue(conn, repo: Path) -> None:
+    """11. Une course que personne n'a gagnée ne promeut rien.
+
+    Deux candidats ont commité, tous deux rendent `crashed` : l'issue du
+    nœud est une issue du noyau, la branche de l'item ne bouge pas d'un
+    commit, le nœud se rejoue sur place, et les ateliers sont rangés.
+    """
+    item_id, branche, atelier = item_sur(conn, repo)
+    tete = git(repo, "rev-parse", branche)
+    runs, commits = commiter(conn, item_id)
+    assert all(commit != tete for commit in commits.values())
+    noeud = etat(conn, item_id)["state"]
+    for run in runs:
+        kernel.apply(conn, run["id"], {"outcome": "crashed"})
+    assert git(repo, "rev-parse", branche) == tete, "un perdant a été promu"
+    assert etat(conn, item_id)["state"] == noeud, "une panne se rejoue sur place"
+    assert not any(worktree.candidate_path(item_id, k).is_dir() for k in commits), \
+        "les ateliers d'une course perdue sont rangés"
+    print("11. course perdue : aucune promotion, la branche de l'item ne bouge pas, "
+          "le nœud se rejoue, les ateliers sont rangés ✓")
+
+
 def main() -> None:
     db.init_db()  # idempotent : ne détruit rien, rattrape juste le schéma
     workdir = data_dir_jetable("graphatom-fanout-promo-")
@@ -283,6 +305,7 @@ def main() -> None:
             ordre(conn, repo)
             cent_reductions(conn, repo)
             promotion_impossible(conn, repo)
+            course_perdue(conn, repo)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
         shutil.rmtree(tmp, ignore_errors=True)
