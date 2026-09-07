@@ -52,7 +52,7 @@ FULL_PY = (
     "fanout_reduction_test.py", "github_channel_test.py", "github_tick_test.py",
     "hermetic_test.py", "item_lane_test.py", "judge_test.py",
     "kernel_guards_test.py", "migration_test.py", "passage_test.py",
-    "plafond_test.py", "portes_test.py", "preflight_test.py",
+    "plafond_test.py", "policy_contracts_test.py", "portes_test.py", "preflight_test.py",
     "quota_edges_test.py", "quota_test.py", "reconnect_test.py",
     "scheduler_dispatch_test.py", "shell_activation_test.py",
     "shell_deploy_test.py", "shell_release_test.py", "shell_worktree_test.py",

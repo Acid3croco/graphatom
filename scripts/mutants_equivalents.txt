@@ -3,3 +3,14 @@
 # du source à la révision courante : un module qui bouge invalide l'entrée,
 # et c'est voulu — une équivalence se rejustifie.
 validation:423:19:int  # couleur « fini » du parcours : toute valeur autre que 1 (« en cours ») joue le même rôle, la valeur n'est jamais relue
+failure:18:13:int  # TAIL_LINES est un réglage de citation : combien de lignes du journal on cite, aucune garantie n'en dépend
+failure:19:13:int  # TAIL_CHARS, idem : la borne en caractères de la queue citée
+failure:20:15:int  # REPORT_CHARS, idem : la borne du compte rendu cité dans la trace
+failure:47:44:bool  # `progress` n'est lu que sous timeout=True, et tout appel sous timeout le passe explicitement : la valeur par défaut n'est jamais lue
+signature:20:18:int  # SIGNATURE_FILES est un réglage : la borne stricte est prouvée sur le symbole, sa valeur est un choix de coût
+signature:21:20:int  # SIGNATURE_ENTRIES, idem : borne du parcours, prouvée stricte sur le symbole
+signature:22:18:int  # SIGNATURE_BYTES, idem : borne par fichier, prouvée stricte sur le symbole
+signature:22:23:int  # SIGNATURE_BYTES, idem (second facteur du produit 64 * 1024)
+signature:23:16:int  # GIT_TIMEOUT_S : le délai d'un git de prompt, un réglage de patience sans contrat
+gates:28:16:int  # GIT_TIMEOUT_S : délai du rev-parse local, réglage de patience
+gates:29:25:int  # DEPLOY_PROBE_TIMEOUT_S : délai des sondes gh et docker, réglage de patience
