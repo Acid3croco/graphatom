@@ -17,6 +17,7 @@ Usage : uv run python tests/agent_progress_test.py
 
 import os
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -25,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 for variable in ("GRAPHATOM_REPO_DIR", "GRAPHATOM_AGENT_DSN", "GRAPHATOM_WORKTREE"):
     os.environ.pop(variable, None)
 
-from graphatom import agent, executors  # noqa: E402
+from graphatom import agent, context, executors  # noqa: E402
 
 from bords_outils import SUJET, commande, contexte  # noqa: E402
 from outils import data_dir_jetable  # noqa: E402
@@ -83,11 +84,32 @@ def progres() -> None:
           "un fichier touché sans octet : progrès ✓")
 
 
+def stub_instantane(workdir: Path) -> None:
+    """4. Un stub sans `duration_s` ne dort pas : la simulation vaut zéro par défaut.
+
+    Un nœud de stub qui déclare une durée l'attend ; sans elle, le bloc rend
+    la main tout de suite — les preuves du noyau en jouent des centaines.
+    """
+    run = {"id": 1, "node": "travail", "cycle": 1, "attempt": 1, "candidate": None}
+    sans = context.Context(None, run, {"id": 1}, {"block": "ACT"}, {})
+    debut = time.monotonic()
+    sans.simulate_work()
+    assert time.monotonic() - debut < 0.5, "le stub sans durée doit rendre la main aussitôt"
+    avec = context.Context(None, run, {"id": 1},
+                           {"block": "ACT", "config": {"duration_s": 0.3}}, {})
+    debut = time.monotonic()
+    avec.simulate_work()
+    assert time.monotonic() - debut >= 0.3, "duration_s déclaré est bien attendu"
+    assert (workdir / "item-1").is_dir(), "le contexte ouvre le bureau de l'item"
+    print("4. stub sans duration_s : instantané ; avec : la durée déclarée ✓")
+
+
 def main() -> None:
     workdir = data_dir_jetable("graphatom-agent-progress-")
     univers(workdir)
     machinerie(workdir)
     progres()
+    stub_instantane(workdir)
     print("\nprogrès et univers de l'agent : OK")
 
 
