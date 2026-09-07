@@ -65,3 +65,4 @@ github_sync:262:65:int  # longueur d'affichage de la révision dans la ligne de 
 quota:142:15:compare:0:Is  # place de la pause dans la boucle d'attente d'une place d'item : dormir après la prise au lieu de pendant l'attente rend le même verdict
 quota:158:15:compare:0:Is  # idem pour la boucle des places globales
 quota:137:15:compare:0:GtE  # instant du renouvellement du bail dans la boucle d'item : >= et > se rejoignent
+reaper:37:20:boolop:And  # le balayage d'avant les verrous n'a pas d'autorité : élargir les suspects ne classe rien de plus, _doomed re-décide sous les verrous avec la même conjonction

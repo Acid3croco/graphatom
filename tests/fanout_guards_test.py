@@ -21,6 +21,9 @@ champ `error` — le calcul réel a son propre test, `deterministic_retry` :
   8. avant son bail, un run n'est fauché que s'il est étranger ET que son
      agent est certainement mort : étranger mais vivant, étranger sans
      trace, ou mort mais réservé ici — il vole encore, jusqu'à son bail
+  9. la certitude se refait sous le verrou : une trace disparue entre le
+     balayage et le verrou laisse le run étranger en vol — plus rien ne dit
+     que son agent est mort
 
 Usage : uv run python tests/fanout_guards_test.py
 """
@@ -44,6 +47,8 @@ from graphatom import db, kernel, process, reaper  # noqa: E402
 from graphatom import workspace as bureau  # noqa: E402
 from graphatom.bundle import GraphError  # noqa: E402
 from graphatom.policy import CLAIMED  # noqa: E402
+
+from bords_outils import patche  # noqa: E402
 
 BAIL_S = 600  # loin : seul le test fait expirer un bail
 
@@ -253,6 +258,28 @@ def faux_orphelins(conn) -> None:
           "avant le bail ; le bail échu fauche ✓")
 
 
+def trace_perimee(conn) -> None:
+    """9. étranger et mort au balayage, sans trace sous le verrou : laissé en vol."""
+    run = volant(conn, "fanout-gardes")
+    CLAIMED.discard(run["id"])
+    agent = tracer_agent(run["item_id"], run)
+    agent.kill()
+    agent.wait()
+    trace = bureau.run_workspace(run["item_id"], run) / bureau.PGID_FILE
+    vrai = kernel._locked
+
+    def atelier_range(conn_faucheur, run_id: int):
+        trace.unlink()  # le workspace rangé entre le balayage et le verrou
+        return vrai(conn_faucheur, run_id)
+
+    with patche(kernel, "_locked", atelier_range):
+        assert reaper.reap(conn) == 0, "fauché sur une certitude périmée"
+    assert not trace.exists(), "le verrou n'a pas été pris : la trace est restée"
+    assert process.agent_state(run["item_id"], run["id"]) == process.AGENT_UNKNOWN
+    assert runs_de(conn, run["item_id"])[0]["status"] == "running"
+    print("9. trace disparue entre le balayage et le verrou : le run étranger vole encore ✓")
+
+
 def signature_lisible(_item_id: int, run: dict, _outcome: str) -> str | None:
     """La signature d'un échec, ici : son erreur — None quand il est muet."""
     return (run.get("result") or {}).get("error")
@@ -272,6 +299,7 @@ def main() -> None:
             reduction_corrompue(conn)
             candidat_muet_repete(conn)
             faux_orphelins(conn)
+            trace_perimee(conn)
     finally:
         kernel.retry_signature = signature_reelle
     print("\nfanout_guards : OK")
