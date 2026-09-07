@@ -8,7 +8,9 @@ Ce test est sans base. Il joue deux commandes de nœud par le vrai bloc ACT :
 4. les échecs se relisent dans le même `failure.json`, avec le nœud,
    l'issue, la queue du journal et le compte rendu bornés ;
 5. le nouvel échec remplace le précédent ;
-6. un item neuf et une réussite ne portent aucune trace d'échec.
+6. un item neuf et une réussite ne portent aucune trace d'échec ;
+7. pour `starved`, un fournisseur qui n'est pas une chaîne et une raison
+   blanche sont tus ; un fournisseur et une raison valides sont gardés.
 
 Usage : uv run python tests/failure_trace_test.py
 """
@@ -193,6 +195,22 @@ def regle_et_reussite() -> None:
     print("4. règle explicite vérifiée ; item neuf et réussite sans trace inventée ✓")
 
 
+def panne_sans_forme() -> None:
+    """5. Pour `starved`, un fournisseur non chaîne ou une raison blanche sont tus."""
+    run = {"node": "codex", "cycle": 1, "attempt": 3,
+           "result": {"provider": 5, "reason": "  "}}
+    trace = json.loads(failure.write_failure_trace(ITEM_ID + 2, run, "starved")
+                       .read_text())
+    assert trace["outcome"] == "starved", trace
+    assert "provider" not in trace and "reason" not in trace, trace
+    run["result"] = {"provider": "codex", "reason": "quota"}
+    trace = json.loads(failure.write_failure_trace(ITEM_ID + 2, run, "starved")
+                       .read_text())
+    assert (trace["provider"], trace["reason"]) == ("codex", "quota"), trace
+    print("5. starved : fournisseur non chaîne et raison blanche tus ; fournisseur "
+          "et raison valides gardés ✓")
+
+
 def main() -> None:
     workdir = Path(tempfile.mkdtemp(prefix="graphatom-failure-trace-"))
     workspace.DATA_DIR = workdir
@@ -202,6 +220,7 @@ def main() -> None:
     panne_fournisseur(path)
     shell_sans_issue(path)
     regle_et_reussite()
+    panne_sans_forme()
 
 
 if __name__ == "__main__":

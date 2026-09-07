@@ -19,3 +19,12 @@ process:192:10:compare:0:Lt  # idem, la même attente bornée dans revoke_orphan
 prompt:31:12:int  # GIT_CHARS : la borne de l'état git cité, réglage de taille ; la coupe stricte est prouvée sur le symbole
 prompt:32:16:int  # GIT_TIMEOUT_S : délai d'un git de prompt, réglage de patience
 prompt:37:18:int  # PASSATION_CHARS : la borne d'une passation, mesurée sur les prompts rendus ; la coupe stricte est prouvée sur le symbole
+agent:48:18:int  # AGENT_SILENCE_S : le silence toléré par défaut, un réglage de patience
+agent:149:37:binop:Add  # cadence de la première sonde du chien de garde : sonder plus tôt ne change aucun verdict
+agent:164:11:compare:0:GtE  # instant de sonde : >= et > sont indistinguables sur une horloge monotone
+agent:165:25:binop:Add  # cadence des sondes suivantes : sonder à chaque tour rend le même verdict, plus cher
+agent:172:11:compare:0:GtE  # instant du couperet total : idem, l'instant exact n'est pas observable
+agent:148:67:int  # diviseur de la cadence de sonde : un quart ou un cinquième du silence, même verdict
+agent:169:17:compare:0:GtE  # instant du couperet de silence : idem
+arbitrage:18:19:int  # JUDGE_WORK_CHARS : la borne du diff cité au juge, un réglage de taille
+arbitrage:82:55:int  # la sentinelle -1 devenue -2 reste négative : « aucune lettre » se lit pareil

@@ -21,8 +21,20 @@ modules poussés là où un test nominal ne va jamais :
      rendent la tentative incomparable
   9. un fichier supprimé du worktree signe « absent », et change la signature
  10. trop de fichiers, trop d'entrées, un workspace disparu : incomparable
- 11. un atelier qui n'est pas un dépôt git, ou un échec structuré trop lourd :
-     incomparable ; sans atelier du tout, la signature existe
+ 11. un atelier qui n'est pas un dépôt git, ou sans le moindre commit, ou un
+     échec structuré trop lourd : incomparable ; sans atelier, la signature existe
+ 12. les bornes sont strictes : un fichier durable ou un échec structuré
+     d'exactement SIGNATURE_BYTES est signé, un octet de plus non
+ 13. exactement SIGNATURE_FILES fichiers durables parmi SIGNATURE_ENTRIES
+     entrées : signé ; une entrée de plus, même ignorée, non
+ 14. `codex-notes.txt` et `opencode-events-x.txt` sont du travail durable qui
+     compte ; `codex-x.jsonl` est une trace qui ne compte pas
+ 15. une passation d'exactement PASSATION_CHARS passe ; un caractère de plus
+     est trop long
+ 16. `_borne` et `_git_state` gardent un texte à la borne, coupent un cran
+     au-delà
+ 17. `fill` laisse `{label}` et `{strategy}` littéraux sans variante, les
+     remplace avec ; le contrat cite les issues du nœud, triées
 
 Usage : uv run python tests/prompt_edges_test.py
 """
@@ -48,6 +60,7 @@ from outils import atelier_item, data_dir_jetable, depot_git, git  # noqa: E402
 PASSATION = "## Fait\nTout.\n\n## Appris\nRien.\n\n## Pas fait\nRien.\n"
 PRECEDENT = {"id": 5, "node": "amont", "cycle": 1, "attempt": 1,
              "candidate": None, "outcome": "done"}
+TRONQUE = "\n… (tronqué)"  # la marque d'un texte coupé à sa borne
 SANS_ATELIER = 40  # un item sans worktree : rien à reprendre côté git
 AVEC_ATELIER = 41  # l'item dont le dépôt jetable porte l'atelier
 
@@ -250,8 +263,8 @@ def workspace_borne(tmp: Path) -> None:
 
 
 def atelier_borne(repo: Path) -> None:
-    """11. atelier sans git, échec structuré trop lourd : incomparable ; sans
-    atelier, la signature existe."""
+    """11. atelier sans git ou sans commit, échec structuré trop lourd :
+    incomparable ; sans atelier, la signature existe."""
     run = {"node": NOEUD, "cycle": 1, "attempt": 1,
            "result": {"error": "x" * (signature.SIGNATURE_BYTES + 1)}}
     commande_de(SANS_ATELIER, run)
@@ -259,14 +272,124 @@ def atelier_borne(repo: Path) -> None:
     run["result"] = {"error": "léger"}
     assert signature.retry_signature(SANS_ATELIER, run, "crashed") is not None
     faux = repo / ".worktrees" / f"rail-item-{SANS_ATELIER}"
-    faux.mkdir(parents=True)
-    (faux / ".git").write_text("gitdir: /nulle/part\n")  # un renvoi cassé : git échoue
-    try:
-        assert signature.retry_signature(SANS_ATELIER, run, "crashed") is None, "git"
-    finally:
-        shutil.rmtree(faux)
-    print("11. échec structuré trop lourd ou atelier sans git : incomparable ; "
-          "sans atelier : signée ✓")
+    # un renvoi cassé : git échoue ; un dépôt sans commit : ls-files répond,
+    # rev-parse HEAD non — la tête manque, et l'atelier reste incomparable
+    for casse in (lambda: (faux / ".git").write_text("gitdir: /nulle/part\n"),
+                  lambda: git(faux, "init", "-q")):
+        faux.mkdir(parents=True)
+        casse()
+        try:
+            assert signature.retry_signature(SANS_ATELIER, run, "crashed") is None, "git"
+        finally:
+            shutil.rmtree(faux)
+    print("11. échec structuré trop lourd, atelier sans git ou sans commit : "
+          "incomparable ; sans atelier : signée ✓")
+
+
+def bornes_strictes() -> None:
+    """12. à SIGNATURE_BYTES, un fichier durable ou un échec structuré est signé ;
+    un octet de plus, non."""
+    run = {"node": NOEUD, "cycle": 1, "attempt": 1}
+    commande_de(61, run)
+    lourd = bureau.item_workspace(61) / "lourd.bin"
+    lourd.write_bytes(b"\0" * signature.SIGNATURE_BYTES)
+    assert signature.retry_signature(61, run, "crashed") is not None, "fichier"
+    lourd.write_bytes(b"\0" * (signature.SIGNATURE_BYTES + 1))
+    assert signature.retry_signature(61, run, "crashed") is None, "fichier + 1"
+    lourd.unlink()
+    cadre = len(json.dumps({"error": "", "outcome": "crashed"}, sort_keys=True,
+                           ensure_ascii=False).encode())
+    run["result"] = {"error": "e" * (signature.SIGNATURE_BYTES - cadre),
+                     "outcome": "crashed"}
+    assert signature.retry_signature(61, run, "crashed") is not None, "structuré"
+    run["result"]["error"] += "e"
+    assert signature.retry_signature(61, run, "crashed") is None, "structuré + 1"
+    print("12. fichier durable et échec structuré à SIGNATURE_BYTES : signés ; "
+          "un octet de plus : incomparables ✓")
+
+
+def parcours_exact() -> None:
+    """13. SIGNATURE_FILES durables parmi SIGNATURE_ENTRIES entrées : signé ;
+    une entrée de plus, même ignorée : rien."""
+    run = {"node": NOEUD, "cycle": 1, "attempt": 1}
+    espace = bureau.item_workspace(62)
+    commande_de(62, run)  # une entrée du parcours, jamais un fichier durable
+    for i in range(signature.SIGNATURE_FILES):
+        (espace / f"durable-{i}.txt").write_text("travail")
+    for i in range(signature.SIGNATURE_ENTRIES - signature.SIGNATURE_FILES - 1):
+        (espace / f"agent-vieux-{i}.log").write_text("")  # ignoré, mais parcouru
+    assert len(list(espace.iterdir())) == signature.SIGNATURE_ENTRIES
+    assert signature.retry_signature(62, run, "crashed") is not None, "à la borne"
+    (espace / "agent-de-trop.log").write_text("")
+    assert signature.retry_signature(62, run, "crashed") is None, "une entrée de plus"
+    print("13. 100 fichiers durables parmi 256 entrées : signé ; une entrée ignorée "
+          "de plus : incomparable ✓")
+
+
+def traces_ou_travail() -> None:
+    """14. ce qui ressemble à une trace sans en être une compte comme travail."""
+    run = {"node": NOEUD, "cycle": 1, "attempt": 1}
+    espace = bureau.item_workspace(63)
+    commande_de(63, run)
+    for nom, durable in (("codex-notes.txt", True), ("opencode-events-x.txt", True),
+                         ("codex-x.jsonl", False)):
+        (espace / nom).write_text("version 1")
+        avant = signature.retry_signature(63, run, "crashed")
+        (espace / nom).write_text("version 2")
+        apres = signature.retry_signature(63, run, "crashed")
+        assert avant is not None and (avant != apres) is durable, nom
+    print("14. codex-notes.txt et opencode-events-x.txt changent la signature ; "
+          "codex-x.jsonl, vraie trace, non ✓")
+
+
+def passation_a_la_borne(workdir: Path) -> None:
+    """15. exactement PASSATION_CHARS caractères passent ; un de plus est trop long."""
+    fichier = workdir / "passation-borne.md"
+    tete = PASSATION.rstrip()
+    fichier.write_text(tete + "r" * (prompt.PASSATION_CHARS - len(tete)))
+    assert prompt.passation_invalide(fichier) is None
+    fichier.write_text(tete + "r" * (prompt.PASSATION_CHARS - len(tete) + 1))
+    assert "trop longue" in prompt.passation_invalide(fichier)
+    print("15. passation à PASSATION_CHARS : valide ; un caractère de plus : trop "
+          "longue ✓")
+
+
+def etat_git_de(statut: str) -> str:
+    """L'état git rendu quand `git status` répond `statut` et rien d'autre ne répond."""
+    with patche(prompt, "_git", lambda _tree, *args: (0, statut)
+                if args[0] == "status" else (1, "")):
+        return prompt._git_state(Path("/nulle/part"))
+
+
+def coupes_exactes(workdir: Path) -> None:
+    """16. `_borne` et `_git_state` gardent la borne, coupent un cran au-delà."""
+    fichier = workdir / "borne.md"
+    fichier.write_text("b" * 30)
+    assert prompt._borne(fichier, 30) == "b" * 30
+    fichier.write_text("b" * 31)
+    assert prompt._borne(fichier, 30) == "b" * 30 + TRONQUE
+    cadre = len(etat_git_de("s")) - 1
+    exact = etat_git_de("s" * (prompt.GIT_CHARS - cadre))
+    assert len(exact) == prompt.GIT_CHARS and TRONQUE not in exact, len(exact)
+    coupe = etat_git_de("s" * (prompt.GIT_CHARS - cadre + 1))
+    assert coupe.endswith(TRONQUE) and len(coupe) == prompt.GIT_CHARS + len(TRONQUE)
+    print("16. _borne et _git_state : texte à la borne intact, coupé et marqué un "
+          "cran au-delà ✓")
+
+
+def variantes() -> None:
+    """17. sans variante, les jetons restent littéraux ; le contrat trie les issues."""
+    gabarit = "{subject_key} par {label} : {strategy}"
+    nu = contexte(noeud_agent("true"))
+    assert prompt.fill(nu, gabarit, SUJET) == f"{SUJET} par {{label}} : {{strategy}}"
+    variante = contexte(noeud_agent("true", label="opus", strategy="raisonne"))
+    assert prompt.fill(variante, gabarit, SUJET) == f"{SUJET} par opus : raisonne"
+    noeud = noeud_agent("true")
+    noeud["edges"] = {"ok": "fini", "fail": "fini"}
+    ctx = contexte(noeud)
+    assert "<une valeur parmi ['fail', 'ok']>" in prompt.build(ctx, ctx.workspace, SUJET)
+    print("17. {label} et {strategy} littéraux sans variante, remplacés avec ; "
+          "issues triées dans le contrat ✓")
 
 
 def main() -> None:
@@ -286,6 +409,12 @@ def main() -> None:
         fichier_supprime(repo / ".worktrees" / f"rail-item-{AVEC_ATELIER}")
         workspace_borne(tmp)
         atelier_borne(repo)
+        bornes_strictes()
+        parcours_exact()
+        traces_ou_travail()
+        passation_a_la_borne(workdir)
+        coupes_exactes(workdir)
+        variantes()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         shutil.rmtree(workdir, ignore_errors=True)

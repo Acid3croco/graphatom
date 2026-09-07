@@ -20,6 +20,8 @@ appels.
      rendent tous une sortie vide
   8. `deployed_service_shas` sans conteneur : chaque service vide, et aucun
      `inspect` ; un `gh` absent ne casse pas la sonde
+  9. un checkout ou un worker sans SHA est dit « inconnu » ; une demande
+     durable absente met « inconnu » de l'autre côté du « différent de »
 
 Usage : uv run python tests/gates_test.py
 """
@@ -193,6 +195,22 @@ def sans_conteneur(journal: Path, repo: Path) -> None:
           "toléré ✓")
 
 
+def inconnus(tmp: Path, repo: Path, checkout: str) -> None:
+    """9. chaque SHA absent est dit « inconnu », de son côté du « différent de »."""
+    hors_git = tmp / "hors-git"
+    hors_git.mkdir()
+    os.environ["GATES_SHA"] = ""
+    attendu = "b" * 40
+    rendu = gates.verify_deploy_error(conn_de(attendu, None), 0, hors_git)
+    assert f"checkout inconnu différent de {attendu}" in rendu, rendu
+    assert f"worker inconnu différent de {attendu}" in rendu, rendu
+    rendu = gates.verify_deploy_error(conn_de(None, "c" * 40), 0, repo)
+    assert f"checkout {checkout} différent de inconnu" in rendu, rendu
+    assert f"worker {'c' * 40} différent de inconnu" in rendu, rendu
+    print("9. checkout ou worker sans SHA : « inconnu différent de <sha> » ; demande "
+          "durable absente : « différent de inconnu » ✓")
+
+
 def main() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="graphatom-gates-"))
     workdir = data_dir_jetable("graphatom-gates-data-")
@@ -214,6 +232,7 @@ def main() -> None:
         lecture_du_verdict(tmp)
         sorties_vides(tmp)
         sans_conteneur(journal, repo)
+        inconnus(tmp, repo, checkout)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         shutil.rmtree(workdir, ignore_errors=True)

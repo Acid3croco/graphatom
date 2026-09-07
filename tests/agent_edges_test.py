@@ -19,12 +19,19 @@ résolution des commandes, poussés là où un test nominal ne va jamais :
   9. une panne de fournisseur sans fournisseur ni raison ne vaut rien
  10. `kill_group` : un chef déjà parti n'est pas une erreur ; un groupe qui
      ignore SIGTERM tombe au SIGKILL après la grâce
- 11. `revoke_residual_group` tue au SIGKILL ce qui survit à la grâce
+ 11. `revoke_residual_group` tue au SIGKILL ce qui survit à la grâce — sa
+     sonde de vie, le signal 0, ne tue rien
  12. `agent_state` : un `/proc` illisible, un boot_id absent ou vide sont
      indécidables ; le même boot et la même naissance disent vivant
  13. `revoke_orphan` refuse une trace qui nomme le groupe du faucheur lui-même
  14. les adaptateurs : ni modèle ni effort absents dans la commande, l'effort
      sans variable n'est pas émis, une CLI inconnue est refusée
+ 15. `revoke_orphan` sur un vrai orphelin : un chef docile part au SIGTERM
+     sans attendre ; un chef têtu tient toute la grâce et tombe au SIGKILL
+ 16. une trace sans forme — identité chaîne ou nulle, pgid 0, absente — est
+     indécidable, jamais une erreur ; pgid 1 sous une autre identité : mort
+ 17. un vrai enfant, au nom piégé par proc(5), se lit vivant sur le vrai
+     `/proc`, mort une fois récolté ; un homonyme au même pid n'est pas fauché
 
 Usage : uv run python tests/agent_edges_test.py
 """
@@ -32,8 +39,10 @@ Usage : uv run python tests/agent_edges_test.py
 import json
 import os
 import signal
+import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -52,6 +61,7 @@ from outils import data_dir_jetable, groupe_vivant  # noqa: E402
 
 MARQUEUR = agent.WAIT_FILE
 TETU = "trap '' TERM; echo pret > {temoin}; sleep 30"  # un groupe qui ignore SIGTERM
+HUP_PAR_DEFAUT = lambda: signal.signal(signal.SIGHUP, signal.SIG_DFL)  # noqa: E731
 STAT = "4242 (agent) " + " ".join(["S"] + ["0"] * 18 + ["7"])  # naissance : 7
 
 
@@ -198,10 +208,15 @@ def panne_vide(workdir: Path) -> None:
 
 
 def groupe_tetu(workdir: Path, nom: str) -> subprocess.Popen:
-    """Un groupe dont le chef et son descendant ignorent SIGTERM, une fois armés."""
+    """Un groupe dont le chef et son descendant ignorent SIGTERM, une fois armés.
+
+    SIGHUP, lui, garde son action par défaut — même sous un lanceur qui
+    l'ignore : une sonde de vie qui enverrait autre chose que le signal 0
+    doit se voir.
+    """
     temoin = workdir / f"tetu-{nom}.txt"
     proc = subprocess.Popen(["sh", "-c", TETU.format(temoin=temoin)],
-                            start_new_session=True)
+                            start_new_session=True, preexec_fn=HUP_PAR_DEFAUT)
     assert attend(temoin.exists), "le piège TERM n'est jamais armé"
     return proc
 
@@ -226,17 +241,19 @@ def revocation_du_groupe(workdir: Path) -> None:
 
 
 def residus(workdir: Path) -> None:
-    """11. ce qui survit à la grâce du groupe résiduel tombe au SIGKILL."""
+    """11. ce qui survit à la grâce du groupe résiduel tombe au SIGKILL — pas
+    à la sonde de vie, qui n'est que le signal 0."""
     tetu = groupe_tetu(workdir, "residu")
     depart = time.monotonic()
     with patche(process, "GRACE_S", 0.5):
         process.revoke_residual_group(tetu.pid)
     duree = time.monotonic() - depart
     tetu.wait()
-    assert tetu.returncode == -signal.SIGKILL, tetu.returncode
+    assert tetu.returncode == -signal.SIGKILL, tetu.returncode  # jamais -SIGHUP
     assert duree >= 0.5, duree
     assert attend(lambda: not groupe_vivant(tetu.pid)), "un descendant survit"
-    print(f"11. groupe résiduel têtu : SIGKILL après {duree:.1f} s ✓")
+    print(f"11. groupe résiduel têtu : SIGKILL après {duree:.1f} s, la sonde "
+          "de vie n'a rien tué ✓")
 
 
 def faux_proc(workdir: Path, stat: str | None, boot: str | None) -> Path:
@@ -291,6 +308,78 @@ def faucheur_intouchable() -> None:
     print("13. trace aberrante sur notre propre pgid : refusée, effacée ✓")
 
 
+def trace_de(proc: subprocess.Popen) -> Path:
+    """La trace de pgid du run 1, écrite comme le bloc l'écrit pour son agent."""
+    chemin = bureau.item_workspace(0) / bureau.PGID_FILE
+    process.write_pgid(chemin, proc, "sleep", 1)
+    return chemin
+
+
+def revocation_orpheline(proc: subprocess.Popen) -> float:
+    """Révoque `proc` en orphelin — un autre fil le récolte, comme init le
+    ferait d'un vrai orphelin — et rend la durée de la révocation."""
+    trace_de(proc)
+    recolte = threading.Thread(target=proc.wait, daemon=True)  # une chute n'attend pas
+    recolte.start()
+    depart = time.monotonic()
+    assert process.revoke_orphan(0, 1) == proc.pid, "l'orphelin n'a pas été révoqué"
+    duree = time.monotonic() - depart
+    recolte.join()
+    return duree
+
+
+def orphelin_revoque(workdir: Path) -> None:
+    """15. chef docile : SIGTERM, tout de suite ; chef têtu : toute la grâce, puis SIGKILL."""
+    with patche(process, "GRACE_S", 1.5):
+        docile = subprocess.Popen(["sleep", "30"], start_new_session=True)
+        duree_docile = revocation_orpheline(docile)
+        assert duree_docile < process.GRACE_S - 0.5, duree_docile
+        assert docile.returncode == -signal.SIGTERM, docile.returncode
+        tetu = groupe_tetu(workdir, "orphelin")
+        duree_tetu = revocation_orpheline(tetu)
+        assert duree_tetu >= process.GRACE_S - 0.5, duree_tetu
+        assert tetu.returncode == -signal.SIGKILL, tetu.returncode
+    print(f"15. orphelin docile : SIGTERM en {duree_docile:.1f} s ; têtu : SIGKILL "
+          f"après {duree_tetu:.1f} s de grâce ✓")
+
+
+def traces_sans_forme() -> None:
+    """16. identité chaîne ou nulle, pgid 0, trace absente : unknown ; pgid 1 : dead."""
+    trace = bureau.item_workspace(0) / bureau.PGID_FILE
+    moi = process.identity(os.getpid())  # même boot qu'init, autre naissance
+    cas = [("boot-a", 4242, process.AGENT_UNKNOWN), (None, 4242, process.AGENT_UNKNOWN),
+           (moi, 0, process.AGENT_UNKNOWN), (moi, 1, process.AGENT_DEAD)]
+    for identite, pgid, attendu in cas:
+        trace.write_text(json.dumps({"run": 1, "pgid": pgid, "cmd": "x",
+                                     "identity": identite}))
+        assert process.agent_state(0, 1) == attendu, (identite, pgid, attendu)
+    trace.unlink()
+    assert process.agent_state(0, 1) == process.AGENT_UNKNOWN, "trace absente"
+    print("16. identité chaîne ou nulle, pgid 0, trace absente : unknown ; pgid 1 "
+          "sous une autre identité : dead ✓")
+
+
+def agent_reel(workdir: Path) -> None:
+    """17. un vrai enfant se lit vivant, puis mort ; un homonyme n'est pas fauché."""
+    # proc(5) : le nom du processus peut contenir « ) » — la naissance se lit
+    # après la dernière parenthèse fermante, jamais après la première
+    veille = workdir / "veille) dort"
+    shutil.copy(shutil.which("sleep"), veille)
+    enfant = subprocess.Popen([str(veille), "30"], start_new_session=True)
+    trace = trace_de(enfant)
+    assert process.agent_state(0, 1) == process.AGENT_ALIVE
+    homonyme = json.loads(trace.read_text())  # le même pid, né un top plus tard
+    homonyme["identity"]["starttime"] += 1
+    trace.write_text(json.dumps(homonyme))
+    assert process.revoke_orphan(0, 1) is None and enfant.poll() is None
+    trace_de(enfant)
+    enfant.kill()
+    enfant.wait()
+    assert process.agent_state(0, 1) == process.AGENT_DEAD
+    print("17. enfant réel au nom piégé : alive sur le vrai /proc, dead une fois "
+          "récolté ; un homonyme au même pid n'est pas fauché ✓")
+
+
 def adaptateurs() -> None:
     """14. la commande ne porte que ce qui est déclaré ; une CLI inconnue est refusée."""
     claude = executors.ADAPTERS["claude"]
@@ -330,6 +419,9 @@ def main() -> None:
     etat_de_l_agent(workdir)
     faucheur_intouchable()
     adaptateurs()
+    orphelin_revoque(workdir)
+    traces_sans_forme()
+    agent_reel(workdir)
     print("\nbords de l'agent : OK")
 
 

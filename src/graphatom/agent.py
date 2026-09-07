@@ -38,7 +38,7 @@ from pathlib import Path
 from . import db, executors, gates, prompt
 from .context import Context
 from .failure import autopsy, is_failure_outcome
-from .policy import agent_timeout_s
+from .policy import LEASE_SECONDS, agent_timeout_s
 from .process import kill_group, revoke_residual_group, write_pgid
 from .quota import WAIT_FILE
 from .workspace import (EVENT_NAMES, OUTCOME_NAME, PGID_FILE, PROMPT_NAME,
@@ -188,7 +188,7 @@ def _environment(ctx: Context, workspace: Path, subject: str,
                         "GRAPHATOM_SUBJECT_KEY": subject,
                         "GRAPHATOM_ITEM_ID": str(ctx.item["id"]),
                         "GRAPHATOM_RUN_ID": str(ctx.run["id"]),
-                        "GRAPHATOM_LEASE_S": str(ctx.config.get("lease_s", 30)),
+                        "GRAPHATOM_LEASE_S": str(ctx.config.get("lease_s", LEASE_SECONDS)),
                         "GRAPHATOM_HEARTBEAT_DSN": db.DSN,
                         # Copiée avant que la base jetable de l'item remplace
                         # GRAPHATOM_DSN : toutes les places vivent ici.
