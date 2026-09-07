@@ -110,9 +110,14 @@ def filiation_fermee(gh: Greffier, i1: int, i2: int) -> None:
     item = {"id": i2, "graph": GRAPH, "generation": 2}
     assert gs._ack_retry(item, gh.corps(7)[1]) == (5, i1)
     entete = gs.ack_body(item).splitlines()[0].removesuffix(".")
+    # l'accusé d'un autre item au numéro aussi long : même longueur d'en-tête
+    assert len(str(i1)) == len(str(i2)), (i1, i2)
+    voisin = gs.ack_body({"id": i1, "graph": GRAPH, "generation": 2}, (5, i1))
     for prose in (f"On parle de la reprise de #5 (item {i1}).",  # pas l'en-tête
+                  voisin.splitlines()[0],                         # pas cet item
                   f"{entete}, reprise de #cinq (item {i1}).",    # pas un numéro
                   f"{entete}, reprise de #5 (item {i1})",        # pas fermée
+                  f"{entete}, reprise de #5 (item {i1}))",       # mal fermée
                   f"{entete}, reprise de #5.",                    # sans item
                   gs.ack_body(item)):                             # sans reprise
         assert gs._ack_retry(item, prose) is None, prose

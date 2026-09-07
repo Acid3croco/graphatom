@@ -13,6 +13,8 @@ Scénario — un Postgres jetable, le vrai noyau, GitHub tenu par un greffier :
   5. le post-mortem d'un couperet : rien quand le run qui a armé la question
      n'existe plus ou quand c'est une réponse humaine qui l'a armée ; sinon
      chaque mort a son en-tête, et la queue du journal suit
+  6. la citation d'une pièce est bornée juste : `CRITERIA_LINES` lignes se
+     citent entières, sans queue ; une de plus, et la queue en compte une
 
 Usage : uv run python tests/github_channel_test.py
 """
@@ -33,7 +35,7 @@ os.environ["GRAPHATOM_DSN"] = provision_postgres("graphatom-canal")
 
 from graphatom import db, github_admission, github_questions, graph, kernel  # noqa: E402
 from graphatom import workspace  # noqa: E402
-from graphatom.github_speech import ADMITTED, marker  # noqa: E402
+from graphatom.github_speech import ADMITTED, cite, marker  # noqa: E402
 
 GRAPH = "gh-canal"
 BUNDLE = bundle_epreuve(GRAPH, {
@@ -177,6 +179,23 @@ def post_mortem(conn, rev: str) -> None:
     print("5. post-mortem : muet sans run ni couperet, un en-tête par mort ✓")
 
 
+def citation_bornee() -> None:
+    """6. `limit` lignes : citées entières, sans queue ; une de plus : la queue le dit."""
+    limite, piece = github_questions.CRITERIA_LINES, "criteria.md"
+    atelier = workspace.item_workspace(404)
+    atelier.mkdir(parents=True)
+    lignes = [f"- critère {n}" for n in range(1, limite + 2)]
+    (atelier / piece).write_text("\n".join(lignes[:limite]) + "\n")
+    entiere = cite(404, piece, limite, "Critères", "http://w")
+    assert entiere.count("\n> - critère ") == limite, entiere
+    assert "lignes de plus" not in entiere, "une pièce de `limit` lignes n'a pas de queue"
+    (atelier / piece).write_text("\n".join(lignes) + "\n")
+    coupee = cite(404, piece, limite, "Critères", "http://w")
+    assert coupee.count("\n> - critère ") == limite, coupee
+    assert f"> - critère {limite}\n> *(… 1 lignes de plus)*\n" in coupee, coupee
+    print(f"6. citation : {limite} lignes entières sans queue, {limite + 1} → une de plus ✓")
+
+
 def main() -> None:
     data_dir_jetable("graphatom-canal-")
     db.init_db(drop=True)
@@ -187,6 +206,7 @@ def main() -> None:
         reprise_sans_pieces(conn, rev, gh)
         decoupe_selective()
         post_mortem(conn, rev)
+    citation_bornee()
     print("\ncanal github : OK — le refus se dit, la course se classe, la découpe trie")
 
 

@@ -3,8 +3,9 @@
 Scénario, sans base ni réseau — GitHub et le kernel sont des doublures :
 
   1. la grammaire est fermée : une ligne `Depends-on: #N`, rien d'autre lu
-  2. une déclaration invalide — illisible, soi-même, issue inexistante —
-     est ignorée, mais dite une fois
+  2. une déclaration invalide — illisible, sans dièse ou dièse seul,
+     soi-même, issue inexistante — est ignorée, mais dite une fois, et la
+     plainte de soi-même est mot à mot
   3. une dépendance ouverte diffère l'admission — aucun item, un commentaire
      à clé logique, le label `rail:blocked` ; le titre de l'issue part avec
      l'admission, et se range sur le sujet à chaque tick
@@ -154,13 +155,18 @@ def preuve_grammaire() -> None:
 
 def preuve_invalide() -> None:
     """2. les déclarations invalides : ignorées, dites une fois."""
-    for body, said_word in (("Depends-on: #1", "elle-même"),
+    for body, said_word in (("Depends-on: #1", "une issue ne dépend pas d'elle-même"),
                             ("Depends-on: #99", "n'existe pas"),
                             ("Depends-on: bientôt", "attendu")):
         gh, waiting = deps(body, number=1, states={1: "open"})
         assert waiting == [] and said_word in gh.posted[0][1], (body, gh.posted)
     gh, waiting = deps("Depends-on: bientôt\nDepends-on: #29", states={29: "open"})
     assert waiting == [29] and len(gh.posted) == 1, (waiting, gh.posted)
+    # sans dièse, ou le dièse seul : ni une attente, ni une exception — dites une fois
+    gh, waiting = deps("Depends-on: 12\nDepends-on: #", states={12: "open", 2: "open"})
+    assert waiting == [] and len(gh.posted) == 1, (waiting, gh.posted)
+    assert "Dépendances ignorées" in gh.posted[0][1], gh.posted
+    assert "`Depends-on: 12`" in gh.posted[0][1] and "`Depends-on: #`" in gh.posted[0][1]
     said, gh = set(), FakeGitHub([], {})
     for _ in range(3):
         deps("Depends-on: #99", gh=gh, said=said)
@@ -267,13 +273,16 @@ def preuve_reprise_valide(workspace: Path) -> None:
 
 
 def preuve_reprise_invalide() -> None:
-    """6. cible absente, sans terminal ou soi-même : commentaire et admission normale."""
+    """6. cible absente, sans terminal, soi-même ou illisible : commentaire et admission normale."""
     for body, states, terminals, word in (
         ("Retry-of: #99", {}, {}, "n'existe pas"),
         ("Retry-of: #40", {40: "closed"}, {}, "aucun item terminal"),
-        ("Retry-of: #60", {60: "open"}, {}, "elle-même"),
+        ("Retry-of: #60", {60: "open"}, {}, "une issue ne reprend pas elle-même"),
         ("Retry-of: #40\nRetry-of: #41", {40: "closed", 41: "closed"}, {},
          "une seule ligne"),
+        ("Retry-of: 40", {40: "closed", 0: "closed"}, {"gh:o/r#40": 7, "gh:o/r#0": 7},
+         "attendu `Retry-of: #<numéro>`"),                       # sans dièse
+        ("Retry-of: #", {40: "closed"}, {"gh:o/r#40": 7}, "attendu `Retry-of: #<numéro>`"),
     ):
         github_admission.kernel = FakeKernel()
         gh = FakeGitHub(
@@ -287,6 +296,7 @@ def preuve_reprise_invalide() -> None:
         assert github_admission.kernel.admitted == ["gh:o/r#60"], (body, github_admission.kernel.admitted)
         assert retries == {} and len(gh.posted) == 1, (body, retries, gh.posted)
         assert word in gh.posted[0][1], (body, gh.posted)
+        assert "**Reprise ignorée**" in gh.posted[0][1], (body, gh.posted)
         assert "graphatom:code-task-retry-invalid" in gh.posted[0][1]
     print("6. reprise invalide : commentaire à clé logique, admission normale ✓")
 

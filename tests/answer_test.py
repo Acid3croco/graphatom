@@ -14,6 +14,11 @@ Scénario, sans base ni réseau — GitHub et la base sont des doublures :
      qu'un seul commentaire — la clé logique `reply-<commentaire>`
   6. les garde-fous tiennent : auteur non autorisé, fenêtre `armed_at`,
      et la première réponse valide gagne
+  7. quatre ratés devant la bonne réponse — auteur non autorisé, autre
+     question, deux mots, option hors contrat — chacun jugé seul : la bonne
+     est prise, trois reproches, aucun pour l'autre question
+  8. la fenêtre d'armement à la seconde : posté à `armed_at` même, pris ;
+     une seconde avant, ignoré
 
 Usage : uv run python tests/answer_test.py
 """
@@ -163,10 +168,11 @@ def option_inconnue() -> None:
 
 
 def autre_question() -> None:
-    """3. Une commande pour une autre question : silence complet."""
-    gh, _, q = sync([comment("/answer 77 merger")])
-    assert gh.posted == [], gh.posted
-    assert q["state"] == "open", q
+    """3. Une commande pour une autre question : silence complet, même mal formée."""
+    for corps in ("/answer 77 merger", "/answer 77"):
+        gh, _, q = sync([comment(corps)])
+        assert gh.posted == [], (corps, gh.posted)
+        assert q["state"] == "open", q
     print("3. commande pour une autre question : aucun bruit croisé ✓")
 
 
@@ -180,11 +186,13 @@ def aucun_id_lisible() -> None:
     assert q["state"] == "open", q
     print("4. `/answer plop merger` : une réponse, la forme attendue ✓")
 
-    # un mot de trop sur la ligne reste une malformation, et se dit aussi
-    gh, _, q = sync([comment("/answer 9 merger tout de suite")])
-    assert len(gh.posted) == 1, gh.posted
-    assert "commande non prise" in gh.posted[0][1], gh.posted
-    assert q["state"] == "open", q
+    # un mot de trop sur la ligne, ou `/answer` seul sans id : une
+    # malformation, dite aussi — jamais une exception
+    for corps in ("/answer 9 merger tout de suite", "/answer"):
+        gh, _, q = sync([comment(corps)])
+        assert len(gh.posted) == 1, (corps, gh.posted)
+        assert "commande non prise" in gh.posted[0][1], (corps, gh.posted)
+        assert q["state"] == "open", q
 
 
 def un_seul_reproche() -> None:
@@ -213,6 +221,34 @@ def garde_fous() -> None:
     print("6. autorisation, fenêtre d'armement, première réponse : inchangés ✓")
 
 
+def rates_devant_la_bonne() -> None:
+    """7. Chaque raté est jugé seul : la bonne réponse qui suit est prise."""
+    rates = [comment(PROSE, cid=1, author="passant"),      # (a) non autorisé
+             comment("/answer 77 merger", cid=2),         # (b) une autre question
+             comment("/answer 9", cid=3),                 # (c) deux mots
+             comment("/answer 9 plop", cid=4)]            # (d) option hors contrat
+    gh, _, q = sync(rates + [comment("/answer 9 reprendre", cid=5)])
+    assert q["state"] == "answered" and q["answer"] == "reprendre", q
+    corps = [body for _, body in gh.posted]
+    for cid in (1, 3, 4):
+        assert sum(f"<!-- graphatom:reply-{cid} -->" in b for b in corps) == 1, (cid, corps)
+    assert not any("reply-2 " in b for b in corps), "l'autre question : aucun reproche"
+    assert len(corps) == 4, "trois reproches et le reçu"
+    print("7. quatre ratés devant la bonne : chacun jugé seul, la bonne prise ✓")
+
+
+def fenetre_a_la_seconde() -> None:
+    """8. Posté à `armed_at` même : pris ; une seconde avant : ignoré."""
+    forme = "%Y-%m-%dT%H:%M:%SZ"
+    gh, _, q = sync([comment(PROSE, at=ARMED.strftime(forme))])
+    assert q["state"] == "answered", "à l'instant de l'armement, la commande vaut"
+    assert len(gh.posted) == 1, gh.posted
+    avant = (ARMED - dt.timedelta(seconds=1)).strftime(forme)
+    gh, _, q = sync([comment(PROSE, at=avant)])
+    assert q["state"] == "open" and gh.posted == [], (q, gh.posted)
+    print("8. fenêtre d'armement à la seconde : prise à l'instant, ignorée avant ✓")
+
+
 def main() -> None:
     premiere_ligne_valide()
     option_inconnue()
@@ -220,6 +256,8 @@ def main() -> None:
     aucun_id_lisible()
     un_seul_reproche()
     garde_fous()
+    rates_devant_la_bonne()
+    fenetre_a_la_seconde()
     print("\n/answer : OK — la prose passe, le raté parle, le reste se tait")
 
 
