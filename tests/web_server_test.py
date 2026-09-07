@@ -32,6 +32,7 @@ Usage : uv run python tests/web_server_test.py
 """
 
 import json
+import socket
 import threading
 import time
 from urllib.parse import quote, unquote
@@ -410,6 +411,28 @@ def traces_du_run(item_id: int, run: dict):
     return atelier
 
 
+def preuve_client_qui_traine() -> None:
+    """11. Un client qui garde sa connexion ouverte ne retient pas le serveur.
+
+    Les fils de requête sont des démons : le serveur s'arrête pendant qu'une
+    connexion traîne encore, et le fil qui la sert ne bloque personne.
+    """
+    server = web.build_server("127.0.0.1", 0, "jeton", "web")
+    assert server.daemon_threads is True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    lent = socket.create_connection(server.server_address)
+    lent.sendall(b"GET /api/load HTTP/1.1\r\nHost: x\r\n")  # jamais terminée
+    time.sleep(0.3)
+    fils = [t for t in threading.enumerate() if t.daemon and "Thread-" in t.name]
+    assert fils, "le fil de la connexion traînante est un démon"
+    debut = time.monotonic()
+    server.shutdown()
+    server.server_close()
+    assert time.monotonic() - debut < 5, "l'arrêt n'attend pas le client qui traîne"
+    lent.close()
+    print("11. un client qui traîne ne retient pas l'arrêt : fils démons, arrêt immédiat ✓")
+
+
 def main() -> None:
     db.init_db(drop=True)
     web.NOTIFY_POLL_S = 0.05
@@ -428,6 +451,7 @@ def main() -> None:
         qid_2 = question_de(conn, item_2)["id"]
         preuve_notify_serve(conn, item_2, qid_2)
         preuve_formulaire(conn, base, token, qid_2, item_2)
+        preuve_client_qui_traine()
         preuve_api(conn, base, [item_1, item_2], rev)
         run = run_de(conn, item_1, "travail")
         atelier = traces_du_run(item_1, run)

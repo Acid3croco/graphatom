@@ -176,5 +176,15 @@ def serve(port: int = 8848, by: str = "web", notify_cmd: str | None = None,
         threading.Thread(target=notify_loop, args=(notify_cmd, base_url),
                          daemon=True).start()
     print(f"canal humain sur {base_url} (réponses signées « {by} »)", flush=True)
-    handler = partial(Handler, token=token, by=by)
-    ThreadingHTTPServer((host, port), handler).serve_forever()
+    build_server(host, port, token, by).serve_forever()
+
+
+def build_server(host: str, port: int, token: str, by: str) -> ThreadingHTTPServer:
+    """Le serveur, un fil par requête — et ces fils sont des démons.
+
+    Un client qui garde sa connexion ouverte n'a pas à retenir le canal à
+    sa mort : un SIGINT arrête le processus même si un navigateur traîne.
+    """
+    server = ThreadingHTTPServer((host, port), partial(Handler, token=token, by=by))
+    server.daemon_threads = True
+    return server
