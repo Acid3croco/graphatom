@@ -28,7 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import db, graph, kernel  # noqa: E402
-from graphatom.kernel import MAX_ATTEMPTS  # noqa: E402
+from graphatom.policy import MAX_ATTEMPTS  # noqa: E402
 
 from outils import etat  # noqa: E402
 

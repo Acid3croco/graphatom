@@ -38,7 +38,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, github_sync as gs, graph, kernel  # noqa: E402
-from graphatom.kernel import MAX_ATTEMPTS  # noqa: E402
+from graphatom import agent, context, prompt, routing, workspace as bureau  # noqa: E402
+from graphatom.policy import MAX_ATTEMPTS  # noqa: E402
 
 from outils import etat, git  # noqa: E402
 
@@ -116,14 +117,14 @@ class FauxConn:
 
 def contexte(workdir: Path, cmd: str, node: str, budget_s: float = BUDGET_S,
              attempt: int = 1, cycle: int = 1, item_id: int = ITEM_FACTICE,
-             precedente: dict | None = None) -> blocks.Context:
-    blocks.DATA_DIR = workdir
+             precedente: dict | None = None) -> context.Context:
+    bureau.DATA_DIR = workdir
     spec = {"block": "ACT", "edges": {"ok": "fini"},
             "config": {"execution": {"kind": "agent", "cmd": cmd,
                                      "timeout_s": budget_s,
                                      "silence_s": SILENCE_S},
                        "agent": {"prompt": "fais le travail", "cli": "codex"}}}
-    return blocks.Context(
+    return context.Context(
         FauxConn(precedente),
         {"id": 1, "node": node, "cycle": cycle, "attempt": attempt},
         {"id": item_id, "subject_id": 1},
@@ -200,7 +201,7 @@ def route(conn, item_id: int, outcome: str, attempt: int) -> str:
     paquet = graph.load_bundle(conn, item["revision"])
     run = {"node": item["state"], "id": None, "attempt": attempt}
     with conn.transaction():
-        kernel._route(conn, item, paquet, run, outcome, kind="result")
+        routing.route(conn, item, paquet, run, outcome, kind="result")
     return etat(conn, item_id)["state"]
 
 
@@ -251,12 +252,12 @@ def regle_du_progres() -> None:
     octets présents la rend mécanique.
     """
     depart = (0, 10.0, 20.0)
-    assert blocks._progress(depart, (0, 10.0, 20.0)) is False, "rien n'a bougé"
-    assert blocks._progress(depart, (7, 10.0, 20.0)) is True, "des octets au journal"
-    assert blocks._progress(depart, (0, 11.0, 20.0)) is True, "un fichier du workspace"
-    assert blocks._progress(depart, (0, 10.0, 21.0)) is True, "un fichier du worktree"
+    assert agent.progress(depart, (0, 10.0, 20.0)) is False, "rien n'a bougé"
+    assert agent.progress(depart, (7, 10.0, 20.0)) is True, "des octets au journal"
+    assert agent.progress(depart, (0, 11.0, 20.0)) is True, "un fichier du workspace"
+    assert agent.progress(depart, (0, 10.0, 21.0)) is True, "un fichier du worktree"
     # la course : le journal était déjà non vide au relevé de départ
-    assert blocks._progress((7, 10.0, 20.0), (7, 10.0, 20.0)) is True, "journal non vide"
+    assert agent.progress((7, 10.0, 20.0), (7, 10.0, 20.0)) is True, "journal non vide"
     print("3-4 bis. _progress : 0 octet et aucun mtime bougé, et rien d'autre, "
           "vaut une pendaison ✓")
 
@@ -264,10 +265,10 @@ def regle_du_progres() -> None:
 def deux_morts(workdir: Path) -> None:
     """3, 4 et 7. le progrès constaté fait l'issue, le post-mortem reste entier."""
     pendu = blocks.act(contexte(workdir, MUET, node=f"{NOEUD}-pendu"))
-    log = blocks.attempt_log(blocks.item_workspace(ITEM_FACTICE),
+    log = bureau.attempt_log(bureau.item_workspace(ITEM_FACTICE),
                              {"node": f"{NOEUD}-pendu", "cycle": 1, "attempt": 1})
-    trace = blocks.attempt_command(
-        blocks.item_workspace(ITEM_FACTICE),
+    trace = bureau.attempt_command(
+        bureau.item_workspace(ITEM_FACTICE),
         {"node": f"{NOEUD}-pendu", "cycle": 1, "attempt": 1},
     )
     assert log.stat().st_size == 0, "le pendu a écrit quelque chose ?"
@@ -343,7 +344,7 @@ def prompt_de_reprise(workdir: Path, worktree: Path) -> None:
                    precedente={"cycle": 1, "attempt": 1, "outcome": "timed_out"})
     workspace = ctx.workspace.resolve()
     (workspace / "implementation.md").write_text("ce que la tentative 1 a écrit\n")
-    debordee = blocks._prompt(ctx, workspace, f"gh:{REPO}#112")
+    debordee = prompt.build(ctx, workspace, f"gh:{REPO}#112")
 
     assert "Reprise de la tentative 1 du passage 1" in debordee, debordee
     assert "ne recommence pas de zéro" in debordee, debordee
@@ -363,16 +364,16 @@ def prompt_de_reprise(workdir: Path, worktree: Path) -> None:
     vierge = contexte(workdir, "true", node=NOEUD, attempt=1, cycle=2,
                       item_id=ITEM_PROPRE,
                       precedente={"cycle": 1, "attempt": 1, "outcome": "timed_out"})
-    blocks.attempt_command(vierge.workspace.resolve(), {
+    bureau.attempt_command(vierge.workspace.resolve(), {
         "node": NOEUD, "cycle": 1, "attempt": 1,
     }).write_text('{"kind":"shell","executor":null,"command":"true"}\n')
-    rien = blocks._prompt(vierge, vierge.workspace.resolve(), f"gh:{REPO}#112")
+    rien = prompt.build(vierge, vierge.workspace.resolve(), f"gh:{REPO}#112")
     assert "Reprise" not in rien, rien
     print("5 bis. worktree propre et workspace vide : aucun bloc de reprise — "
           "une reprise ne s'invente pas ✓")
 
     # la mort d'avant est nommée, et les deux morts ne se disent pas pareil
-    pendue = blocks._prompt(
+    pendue = prompt.build(
         contexte(workdir, "true", node=NOEUD, attempt=2, cycle=2,
                  precedente={"cycle": 2, "attempt": 1, "outcome": "stalled"}),
         workspace, f"gh:{REPO}#112")
@@ -411,7 +412,7 @@ def main() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="graphatom-silence-"))
     workdir = tmp / "data"
     workdir.mkdir()
-    blocks.DATA_DIR = workdir  # les blocs écrivent là, jamais dans data/
+    bureau.DATA_DIR = workdir  # les blocs écrivent là, jamais dans data/
     repo_dir = os.environ.get("GRAPHATOM_REPO_DIR")
     worktree = worktree_factice(tmp)
     db.init_db()  # idempotent : ne détruit rien, rattrape juste le schéma

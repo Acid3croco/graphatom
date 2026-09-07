@@ -29,6 +29,7 @@ from outils import kill_group, provision_postgres, sh  # noqa: E402
 os.environ["GRAPHATOM_DSN"] = provision_postgres("graphatom-crash")
 
 from graphatom import blocks, db, kernel  # noqa: E402
+from graphatom import reaper, workspace as bureau  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 # le test travaille dans un répertoire à lui : jamais dans ROOT/data, qui
@@ -39,7 +40,7 @@ WORK = Path(tempfile.mkdtemp(prefix="graphatom-crash-test-"))
 # un ordonnanceur lancé d'ici n'en voit ni l'un ni l'autre.
 os.environ["GRAPHATOM_REPO_DIR"] = str(ROOT)
 os.environ.pop("GRAPHATOM_AGENT_DSN", None)
-blocks.DATA_DIR = WORK / "data"
+bureau.DATA_DIR = WORK / "data"
 LEASE_S = 600
 REAP_S = 5.0
 TIMEOUT_S = 90
@@ -124,7 +125,7 @@ def main() -> None:
 
     kill_group(proc, signal.SIGKILL)
     with db.connect() as conn:
-        assert kernel.reap(conn) == 0, "un groupe vivant a été pris pour un orphelin"
+        assert reaper.reap(conn) == 0, "un groupe vivant a été pris pour un orphelin"
         encore = conn.execute(
             "SELECT count(*) AS n FROM node_run WHERE id = ANY(%s) "
             "AND status = 'running'", ([run["id"] for run in anciens],),

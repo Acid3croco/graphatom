@@ -32,6 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, quota, scheduler, web  # noqa: E402
+from graphatom import agent, workspace as bureau  # noqa: E402
 
 T0 = dt.datetime(2026, 8, 7, 10, 0, tzinfo=dt.timezone.utc)
 ISSUE = "gh:Acid3croco/graphatom#66"
@@ -179,8 +180,8 @@ def open_conn(item_id: int) -> FakeConn:
 
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        blocks.DATA_DIR = Path(tmp)  # le seul répertoire de données, celui des blocs
-        workspace = blocks.item_workspace(14)
+        bureau.DATA_DIR = Path(tmp)  # le seul répertoire de données, celui des blocs
+        workspace = bureau.item_workspace(14)
         workspace.mkdir()
         (workspace / "criteria.md").write_text("1. ça marche — preuve : ce test\n")
         (workspace / "release.json").write_text(json.dumps({"pr_url": PR_URL}))
@@ -302,7 +303,7 @@ def main() -> None:
              "finished_at": T0 + dt.timedelta(seconds=3),
              "result": {"elu": "B", "summary": "B couvre les preuves"}},
         ]
-        item115 = blocks.item_workspace(115)
+        item115 = bureau.item_workspace(115)
         item115.mkdir()
         (item115 / "verdict.md").write_text("comparaison complète\n")
         decision = web._decision(115, decision_bundle, chosen_runs)
@@ -402,8 +403,8 @@ def main() -> None:
                "attempt": 1, "candidate": None, "status": "running"}
         traces = FakeConn(work_item=[{"id": 14}], node_run=[run])
         (workspace / "codex.jsonl").write_text('{"type":"start"}\n')
-        blocks.attempt_log(workspace, run).write_text("début\n")
-        blocks.attempt_command(workspace, run).write_text('{"kind":"model"}\n')
+        bureau.attempt_log(workspace, run).write_text("début\n")
+        bureau.attempt_command(workspace, run).write_text('{"kind":"model"}\n')
         first = web._api_run_trace(traces, 14, 31)
         assert first["events"]["type"] == "codex", first
         assert first["events"]["state"] == "available", first
@@ -415,11 +416,11 @@ def main() -> None:
         assert second["log"]["content"] == second["command"]["content"] == "", second
 
         candidate = run | {"id": 32, "candidate": 2, "status": "applied"}
-        candidate_workspace = blocks.run_workspace(14, candidate)
+        candidate_workspace = bureau.run_workspace(14, candidate)
         candidate_workspace.mkdir()
         (candidate_workspace / "opencode-events.jsonl").write_text('{"type":"text"}\n')
-        blocks._archive(candidate_workspace, blocks.attempt_name(candidate))
-        blocks.attempt_command(candidate_workspace, candidate).write_text("")
+        agent.archive(candidate_workspace, bureau.attempt_name(candidate))
+        bureau.attempt_command(candidate_workspace, candidate).write_text("")
         terminal = web._api_run_trace(
             FakeConn(work_item=[{"id": 14}], node_run=[candidate]), 14, 32)
         assert terminal["events"]["type"] == "opencode", terminal

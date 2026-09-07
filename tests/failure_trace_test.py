@@ -24,6 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, kernel  # noqa: E402
+from graphatom import context as contexte, failure, routing, workspace  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,7 +53,7 @@ class RouteConn:
 
 
 def context(node: str, attempt: int, cmd: str, outcome: str,
-            item_id: int = ITEM_ID) -> blocks.Context:
+            item_id: int = ITEM_ID) -> contexte.Context:
     """Un nœud ACT réel, sans dépôt ni base, avec son workspace de candidat."""
     run = {"id": attempt, "node": node, "cycle": 1, "attempt": attempt,
            "candidate": 4}
@@ -60,11 +61,11 @@ def context(node: str, attempt: int, cmd: str, outcome: str,
             "config": {"execution": {"kind": "agent", "cmd": cmd,
                                      "timeout_s": 10, "silence_s": 10},
                        "agent": {"prompt": "test déterministe"}}}
-    return blocks.Context(FakeConn(), run, {"id": item_id, "subject_id": 1},
+    return contexte.Context(FakeConn(), run, {"id": item_id, "subject_id": 1},
                           spec, {"name": "failure-trace"})
 
 
-def route(ctx: blocks.Context, result: dict) -> None:
+def route(ctx: contexte.Context, result: dict) -> None:
     """Le vrai point de routage, qui écrit la trace avant de bouger l'item."""
     item = {"id": ctx.item["id"], "state": ctx.run["node"],
             "cycle": 1, "version": 1}
@@ -72,7 +73,7 @@ def route(ctx: blocks.Context, result: dict) -> None:
                         "suite": {"terminal": True}},
               "on_kernel": {"escalate_to": "suite", "exhausted_to": "suite"}}
     run = {**ctx.run, "result": result}
-    kernel._route(RouteConn(), item, bundle, run, result["outcome"], kind="result")
+    routing.route(RouteConn(), item, bundle, run, result["outcome"], kind="result")
 
 
 def fake_codex(path: Path) -> None:
@@ -100,7 +101,7 @@ def rendered_failure(workdir: Path) -> tuple[Path, dict]:
     result = blocks.act(ctx)
     assert result["outcome"] == "failed", result
     route(ctx, result)
-    path = blocks.failure_path(ITEM_ID)
+    path = workspace.failure_path(ITEM_ID)
     return path, json.loads(path.read_text())
 
 
@@ -112,7 +113,7 @@ def dead_failure() -> tuple[Path, dict]:
     result = blocks.act(ctx)
     assert result["outcome"] == "crashed", result
     route(ctx, result)
-    path = blocks.failure_path(ITEM_ID)
+    path = workspace.failure_path(ITEM_ID)
     return path, json.loads(path.read_text())
 
 
@@ -126,14 +127,14 @@ def starved_failure() -> tuple[Path, dict]:
     result = blocks.act(ctx)
     assert result == {"outcome": "starved", "provider": "codex", "reason": reason}
     route(ctx, result)
-    path = blocks.failure_path(ITEM_ID)
+    path = workspace.failure_path(ITEM_ID)
     return path, json.loads(path.read_text())
 
 
 def success_writes_nothing() -> None:
     """Un item neuf reste sans trace avant et après une issue de succès."""
     item_id = ITEM_ID + 1
-    path = blocks.failure_path(item_id)
+    path = workspace.failure_path(item_id)
     assert not path.exists(), path
     cmd = "printf '{\"outcome\":\"done\",\"summary\":\"ok\"}' > outcome.json"
     ctx = context("release", 1, cmd, "done", item_id=item_id)
@@ -148,17 +149,17 @@ def success_writes_nothing() -> None:
 
 def main() -> None:
     workdir = Path(tempfile.mkdtemp(prefix="graphatom-failure-trace-"))
-    blocks.DATA_DIR = workdir
+    workspace.DATA_DIR = workdir
     os.environ.pop("GRAPHATOM_REPO_DIR", None)
 
     path, codex = rendered_failure(workdir)
     assert set(codex) == {"node", "outcome", "log_tail", "report"}, codex
     assert (codex["node"], codex["outcome"]) == ("codex", "failed"), codex
     assert "fin codex" in codex["log_tail"], codex["log_tail"]
-    assert len(codex["log_tail"]) <= blocks.TAIL_CHARS
+    assert len(codex["log_tail"]) <= failure.TAIL_CHARS
     assert codex["report"]["name"] == "codex.md", codex["report"]
     assert codex["report"]["content"].endswith("FIN RAPPORT CODEX\n")
-    assert len(codex["report"]["content"]) <= blocks.REPORT_CHARS
+    assert len(codex["report"]["content"]) <= failure.REPORT_CHARS
     print(f"1. agent Codex : échec rendu relu dans {path.name}, quatre champs bornés ✓")
 
     same_path, starved = starved_failure()
@@ -178,9 +179,9 @@ def main() -> None:
     assert "codex" not in path.read_text().lower(), "le premier échec s'est accumulé"
     print("3. shell sans issue : crashed au même chemin, qui ne porte que ce dernier échec ✓")
 
-    assert blocks.is_failure_outcome("none")
-    assert blocks.is_failure_outcome("timed_out")
-    assert not blocks.is_failure_outcome("done")
+    assert failure.is_failure_outcome("none")
+    assert failure.is_failure_outcome("timed_out")
+    assert not failure.is_failure_outcome("done")
     success_writes_nothing()
     print("4. règle explicite vérifiée ; item neuf et réussite sans trace inventée ✓")
 

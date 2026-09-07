@@ -36,6 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks  # noqa: E402
+from graphatom import context as contexte, process as processus, workspace  # noqa: E402
 
 # le shell note le pgid de son groupe, puis laisse un sous-processus derrière lui
 FACTICE = "ps -o pgid= -p $$ > pgid.txt; sleep 300 & sleep 300"
@@ -71,13 +72,13 @@ class FakeConn:
 
 
 def context(workdir: Path, cmd: str, attempt: int,
-            timeout_s: float = TIMEOUT_S) -> blocks.Context:
-    blocks.DATA_DIR = workdir
+            timeout_s: float = TIMEOUT_S) -> contexte.Context:
+    workspace.DATA_DIR = workdir
     node = {"block": "ACT", "edges": {"ok": "done"},
             "config": {"execution": {"kind": "agent", "cmd": cmd,
                                      "timeout_s": timeout_s},
                        "agent": {"prompt": "ne fais rien"}}}
-    return blocks.Context(
+    return contexte.Context(
         FakeConn(),
         {"id": RUN_ID, "node": NODE, "cycle": CYCLE, "attempt": attempt},
         {"id": ITEM_ID, "subject_id": 1},
@@ -152,7 +153,7 @@ def main() -> None:
     prompt = ctx.workspace / f"prompt-{NODE}-{CYCLE}-1.md"
     assert log.exists(), log
     assert prompt.exists(), prompt
-    assert not (ctx.workspace / blocks.PROMPT_NAME).exists(), "prompt.md doit être rangé"
+    assert not (ctx.workspace / workspace.PROMPT_NAME).exists(), "prompt.md doit être rangé"
     print(f"3. traces {log.name} et {prompt.name} écrites ✓")
 
     # 4. non-régression : un agent qui répond passe toujours, et son usage suit
@@ -160,7 +161,7 @@ def main() -> None:
     assert result == {"outcome": "ok", "summary": "fait", "usage": USAGE}, result
     assert json.loads(
         (ctx.workspace / f"usage-{NODE}-{CYCLE}-2.json").read_text()) == USAGE
-    trace_path = ctx.workspace / blocks.PGID_FILE
+    trace_path = ctx.workspace / workspace.PGID_FILE
     assert not trace_path.exists(), "une exécution collectée n'a plus de trace"
     print(f"4. agent nominal appliqué, usage fusionné : {result} ✓")
 
@@ -198,7 +199,7 @@ def main() -> None:
     print(f"6. worker tué, agent orphelin toujours vivant : groupe {trace['pgid']} ✓")
 
     # 7. le faucheur révoque l'orphelin à partir de la seule trace
-    tue = blocks.revoke_orphan(ITEM_ID, RUN_ID)
+    tue = processus.revoke_orphan(ITEM_ID, RUN_ID)
     assert tue == trace["pgid"], tue
     survivants = wait_dead(trace["pgid"])
     if survivants:
@@ -210,12 +211,12 @@ def main() -> None:
 
     # 8. garde-fou : la trace d'une autre tentative ne regarde pas ce run
     innocent = subprocess.Popen(["sleep", "300"], start_new_session=True)
-    identite = blocks._identity(innocent.pid)
+    identite = processus.identity(innocent.pid)
     vivant = {"run": RUN_ID + 1, "pgid": innocent.pid, "cmd": "sleep 300",
               "identity": identite}
     trace_path.write_text(json.dumps(vivant))
-    assert blocks.agent_state(ITEM_ID, RUN_ID) == blocks.AGENT_UNKNOWN
-    assert blocks.revoke_orphan(ITEM_ID, RUN_ID) is None
+    assert processus.agent_state(ITEM_ID, RUN_ID) == processus.AGENT_UNKNOWN
+    assert processus.revoke_orphan(ITEM_ID, RUN_ID) is None
     assert innocent.poll() is None, "l'agent d'une autre tentative doit vivre"
     assert trace_path.exists(), "sa trace doit rester armée pour son propre run"
     print("8. trace d'une autre tentative : ni suivie ni effacée ✓")
@@ -223,22 +224,22 @@ def main() -> None:
     # 9. garde-fou : une identité qui ne colle plus ne tue personne
     for faux in (identite | {"starttime": -1}, identite | {"boot": "un-autre-boot"}):
         trace_path.write_text(json.dumps(vivant | {"run": RUN_ID, "identity": faux}))
-        assert blocks.agent_state(ITEM_ID, RUN_ID) == blocks.AGENT_DEAD
-        assert blocks.revoke_orphan(ITEM_ID, RUN_ID) is None
+        assert processus.agent_state(ITEM_ID, RUN_ID) == processus.AGENT_DEAD
+        assert processus.revoke_orphan(ITEM_ID, RUN_ID) is None
         assert innocent.poll() is None, "un pid recyclé ne doit jamais être tué"
         assert not trace_path.exists(), "la trace périmée, elle, doit disparaître"
     innocent.kill()
     innocent.wait()
     trace_path.write_text(json.dumps(vivant | {"run": RUN_ID}))
-    assert blocks.agent_state(ITEM_ID, RUN_ID) == blocks.AGENT_DEAD
+    assert processus.agent_state(ITEM_ID, RUN_ID) == processus.AGENT_DEAD
     trace_path.unlink()
     print("9. identité périmée (naissance, boot) : le faucheur ne tue personne ✓")
 
     # 10. une trace abîmée ne fait pas tomber le tick du faucheur
     for abime in ("{ceci n'est pas du json", json.dumps({"run": RUN_ID})):
         trace_path.write_text(abime)
-        assert blocks.agent_state(ITEM_ID, RUN_ID) == blocks.AGENT_UNKNOWN
-        assert blocks.revoke_orphan(ITEM_ID, RUN_ID) is None
+        assert processus.agent_state(ITEM_ID, RUN_ID) == processus.AGENT_UNKNOWN
+        assert processus.revoke_orphan(ITEM_ID, RUN_ID) is None
     print("10. trace illisible ou amputée : le faucheur passe son chemin ✓")
 
     # 11. GNU timeout crée sinon un groupe enfant que la trace agent.pgid ne

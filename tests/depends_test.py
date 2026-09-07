@@ -21,6 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, github_sync as gs  # noqa: E402
+from graphatom import workspace as bureau  # noqa: E402
 
 
 class FakeCursor:
@@ -206,8 +207,8 @@ def main() -> None:
     # 5. reprise valide : dernier item terminal, trois noms fermés, accusé lisible
     temporary = tempfile.TemporaryDirectory(prefix="graphatom-retry-")
     workspace = Path(temporary.name)
-    blocks.DATA_DIR = workspace
-    old = blocks.item_workspace(7)
+    bureau.DATA_DIR = workspace
+    old = bureau.item_workspace(7)
     old.mkdir(parents=True)
     (old / "echec.md").write_text("trace de #40\n")
     (old / "criteria.md").write_text("critères de #40\n")
@@ -225,7 +226,7 @@ def main() -> None:
     assert gs._admit_labeled(conn, gh, "rev", set(), retries) == (set(), set())
     assert kernel.admitted == ["gh:o/r#50"], kernel.admitted
     assert retries == {1: (40, 7)}, retries
-    new = blocks.item_workspace(1)
+    new = bureau.item_workspace(1)
     assert (new / "echec.md").read_text() == "trace de #40\n"
     assert (new / "criteria.md").read_text() == "critères de #40\n"
     assert (new / "validate.md").read_text() == "validation de #40\n"

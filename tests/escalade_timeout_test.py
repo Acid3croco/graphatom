@@ -40,7 +40,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, github_sync as gs, graph, kernel  # noqa: E402
-from graphatom.kernel import MAX_ATTEMPTS  # noqa: E402
+from graphatom import context, failure, process, reaper, routing, workspace  # noqa: E402
+from graphatom.policy import MAX_ATTEMPTS  # noqa: E402
 
 from outils import etat  # noqa: E402
 
@@ -107,12 +108,12 @@ class FauxConn:
         return {"subject_key": "escalade:test"} if "FROM subject" in self.sql else None
 
 
-def contexte(workdir: Path, cmd: str, node: str) -> blocks.Context:
-    blocks.DATA_DIR = workdir
+def contexte(workdir: Path, cmd: str, node: str) -> context.Context:
+    workspace.DATA_DIR = workdir
     spec = {"block": "ACT", "edges": {"ok": "fini"},
             "config": {"execution": {"kind": "command", "cmd": cmd,
                                      "timeout_s": COURT_S}}}
-    return blocks.Context(
+    return context.Context(
         FauxConn(),
         {"id": 1, "node": node, "cycle": 1, "attempt": 1},
         {"id": ITEM_FACTICE, "subject_id": 1},
@@ -165,7 +166,7 @@ def route(conn, item_id: int, outcome: str, attempt: int) -> str:
     paquet = graph.load_bundle(conn, item["revision"])
     run = {"node": item["state"], "id": None, "attempt": attempt}
     with conn.transaction():
-        kernel._route(conn, item, paquet, run, outcome, kind="result")
+        routing.route(conn, item, paquet, run, outcome, kind="result")
     return etat(conn, item_id)["state"]
 
 
@@ -192,9 +193,9 @@ def autopsies(workdir: Path) -> None:
     """1. les deux issues d'`_autopsy`, et le même post-mortem des deux côtés."""
     log = workdir / "journal.log"
     log.write_text(JOURNAL)
-    debord = blocks._autopsy(
+    debord = failure.autopsy(
         FauxProc(), log, subprocess.TimeoutExpired("cmd", BUDGET_S), timeout=True)
-    panne = blocks._autopsy(FauxProc(), log, ValueError("pas d'outcome"), timeout=False)
+    panne = failure.autopsy(FauxProc(), log, ValueError("pas d'outcome"), timeout=False)
 
     assert debord["outcome"] == "timed_out", debord
     assert debord["timeout"] is True, debord
@@ -292,20 +293,20 @@ def seconde_chance(conn, revision: str) -> None:
 def faucheur(conn, revision: str) -> None:
     """5 et 6. le pgid tranche l'issue, et la révocation ne bouge pas."""
     vif, run_vif = en_vol(conn, revision, "faucheur-vivant")
-    espace = blocks.item_workspace(vif)
+    espace = workspace.item_workspace(vif)
     espace.mkdir(parents=True, exist_ok=True)
-    blocks.attempt_log(espace, run_vif).write_text(JOURNAL)
+    workspace.attempt_log(espace, run_vif).write_text(JOURNAL)
     dormeur = subprocess.Popen(["sleep", "300"], start_new_session=True)
-    blocks._write_pgid(espace / blocks.PGID_FILE, dormeur, "sleep 300", run_vif["id"])
-    assert blocks.agent_state(vif, run_vif["id"]) == blocks.AGENT_ALIVE
+    process.write_pgid(espace / workspace.PGID_FILE, dormeur, "sleep 300", run_vif["id"])
+    assert process.agent_state(vif, run_vif["id"]) == process.AGENT_ALIVE
     assert dormeur.pid != os.getpgid(0), "le cobaye doit avoir sa propre session"
 
     mort, run_mort = en_vol(conn, revision, "faucheur-mort")
-    assert blocks.agent_state(mort, run_mort["id"]) != blocks.AGENT_ALIVE, \
+    assert process.agent_state(mort, run_mort["id"]) != process.AGENT_ALIVE, \
         "pas de trace, pas d'agent"
 
     fences = {vif: etat(conn, vif)["fence"], mort: etat(conn, mort)["fence"]}
-    kernel.reap(conn)
+    reaper.reap(conn)
 
     attendu = {vif: ("timed_out", "escalate"), mort: ("crashed", "travail")}
     for item_id, (outcome, cible) in attendu.items():
@@ -327,7 +328,7 @@ def faucheur(conn, revision: str) -> None:
         for pid in restes:
             os.kill(pid, 9)
         sys.exit(f"ÉCHEC : l'orphelin a survécu au faucheur : {restes}")
-    assert not (espace / blocks.PGID_FILE).exists(), "la trace consommée doit disparaître"
+    assert not (espace / workspace.PGID_FILE).exists(), "la trace consommée doit disparaître"
     tail = conn.execute(
         "SELECT result FROM node_run WHERE item_id = %s ORDER BY id DESC LIMIT 1",
         (vif,),
@@ -361,7 +362,7 @@ def questions_d_escalade(conn, timeout_id: int, starved_id: int) -> None:
 
 def main() -> None:
     workdir = Path(tempfile.mkdtemp(prefix="graphatom-escalade-timeout-"))
-    blocks.DATA_DIR = workdir  # les blocs et le faucheur écrivent là, jamais dans data/
+    workspace.DATA_DIR = workdir  # les blocs et le faucheur écrivent là, jamais dans data/
     db.init_db()  # idempotent : ne détruit rien, rattrape juste le schéma
     try:
         autopsies(workdir)

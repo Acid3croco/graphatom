@@ -54,6 +54,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, graph, kernel, scheduler, worktree  # noqa: E402
+from graphatom import workspace as bureau  # noqa: E402
 
 from outils import attendre, git  # noqa: E402
 
@@ -308,7 +309,7 @@ def echeance(conn, workdir: Path, repo: Path) -> None:
 
     prets = [workspace / f"c{k}" / "pret" for k in range(2)]
     assert attendre(lambda: all(p.is_file() for p in prets)), "candidats jamais partis"
-    pgids = [json.loads((workspace / f"c{k}" / blocks.PGID_FILE).read_text())["pgid"]
+    pgids = [json.loads((workspace / f"c{k}" / bureau.PGID_FILE).read_text())["pgid"]
              for k in range(2)]
     table = inscrits(repo)
     ateliers = [item_wt.with_name(f"{item_wt.name}-c{k}") for k in range(2)]
@@ -609,7 +610,7 @@ def main() -> None:
     db.init_db()  # idempotent : ne détruit rien, rattrape juste le schéma
     workdir = Path(tempfile.mkdtemp(prefix="graphatom-fanout-wt-"))
     tmp = Path(tempfile.mkdtemp(prefix="graphatom-fanout-repo-"))
-    blocks.DATA_DIR = workdir
+    bureau.DATA_DIR = workdir
     repo = depot(tmp)
     try:
         with db.connect() as conn:

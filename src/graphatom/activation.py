@@ -18,8 +18,8 @@ from pathlib import Path
 
 import psycopg
 
-from . import kernel
-from .blocks import item_workspace
+from .policy import now
+from .workspace import item_workspace
 from .gates import DEPLOYED_SERVICES, deployed_service_shas
 
 WORKER_STARTED_AT = dt.datetime.now(dt.timezone.utc)
@@ -141,7 +141,7 @@ def reconcile(conn: psycopg.Connection) -> bool:
         attempted = previous.get("attempted_at")
         if attempted:
             try:
-                age = (kernel.now() - dt.datetime.fromisoformat(attempted)).total_seconds()
+                age = (now() - dt.datetime.fromisoformat(attempted)).total_seconds()
             except (TypeError, ValueError):
                 age = float("inf")
             retry_s = float(os.environ.get("GRAPHATOM_ACTIVATION_RETRY_S", "5"))
@@ -169,7 +169,7 @@ def reconcile(conn: psycopg.Connection) -> bool:
         ))
 
         state = {"status": "pending", "worker_sha": WORKER_SHA,
-                 "wanted_sha": wanted, "attempted_at": kernel.now().isoformat()}
+                 "wanted_sha": wanted, "attempted_at": now().isoformat()}
         _state(conn, request, state)
         _report(request["item_id"], request["node"],
                 f"worker porte {WORKER_SHA} - voulu {wanted}",

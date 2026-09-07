@@ -36,6 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, graph, kernel  # noqa: E402
+from graphatom import context, workspace  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 ADAPTATEUR = ROOT / "scripts" / "agent-opencode.sh"
@@ -121,7 +122,7 @@ def noeud_reel(conn, workdir: Path, binaire: str) -> None:
     item = conn.execute("SELECT * FROM work_item WHERE id = %s", (item_id,)).fetchone()
     paquet = graph.load_bundle(conn, revision)
     node = paquet["nodes"][NOEUD]
-    result = blocks.act(blocks.Context(conn, run, item, node, paquet))
+    result = blocks.act(context.Context(conn, run, item, node, paquet))
     kernel.apply(conn, run["id"], result)
 
     ligne = conn.execute("SELECT * FROM node_run WHERE id = %s", (run["id"],)).fetchone()
@@ -135,7 +136,7 @@ def noeud_reel(conn, workdir: Path, binaire: str) -> None:
     if "usage" in ligne["result"]:
         print(f"   usage fusionné dans le run : {ligne['result']['usage']}")
 
-    command_path = blocks.attempt_command(blocks.item_workspace(item_id), run)
+    command_path = workspace.attempt_command(workspace.item_workspace(item_id), run)
     trace = json.loads(command_path.read_text())
     assert trace["cli"] == "opencode" and trace["model"] == MODELE, trace
     assert MODELE in trace["command"], trace["command"]
@@ -157,7 +158,7 @@ def main() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="graphatom-opencode-"))
     workdir = tmp / "data"
     workdir.mkdir()
-    blocks.DATA_DIR = workdir  # les blocs écrivent là, jamais dans data/
+    workspace.DATA_DIR = workdir  # les blocs écrivent là, jamais dans data/
     db.init_db()  # idempotent : ne détruit rien, rattrape juste le schéma
     try:
         opencode_introuvable(workdir)

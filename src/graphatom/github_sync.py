@@ -69,7 +69,8 @@ import urllib.request
 from psycopg import Connection
 
 from . import channel, db, effects, graph, heartbeat, kernel
-from .blocks import AGENT_TIMEOUT_S, item_workspace
+from .policy import agent_timeout_s
+from .workspace import item_workspace
 
 API = "https://api.github.com"
 LABEL = "graphatom"
@@ -662,7 +663,7 @@ def _budget_s(conn: Connection, run: dict) -> float:
     La dérivation est celle du kernel, la même que le bloc qui exécute.
     """
     node = graph.load_bundle(conn, run["revision"])["nodes"][run["node"]]
-    return kernel.agent_timeout_s(node.get("config") or {}, AGENT_TIMEOUT_S)
+    return agent_timeout_s(node.get("config") or {})
 
 
 def _death_report(conn: Connection, item_id: int, node: str) -> str:

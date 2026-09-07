@@ -69,7 +69,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import activation, blocks, db, executors, gates, graph, kernel, scheduler  # noqa: E402
-from graphatom.blocks import AGENT_TIMEOUT_S  # noqa: E402
+from graphatom import agent as agent_mod, policy, workspace as bureau  # noqa: E402
+from graphatom.policy import AGENT_TIMEOUT_S  # noqa: E402
 
 from outils import git  # noqa: E402
 
@@ -824,7 +825,7 @@ def main() -> None:
     config = BUNDLE["nodes"]["verify_deploy"]["config"]
     cmd = config["execution"]["cmd"]
     budget = int(re.search(r"GRAPHATOM_PORTES_DELAI_S:-(\d+)", cmd).group(1))
-    couperet = kernel.agent_timeout_s(config, AGENT_TIMEOUT_S)
+    couperet = policy.agent_timeout_s(config, AGENT_TIMEOUT_S)
     assert budget < couperet < config["lease_s"], config
     readme = (ROOT / "README.md").read_text()
     assert "GRAPHATOM_PORTES_DELAI_S" in readme, "le README ne justifie pas le budget"
@@ -951,7 +952,7 @@ def main() -> None:
             assert "advisory_lock" not in shell, f"{nom} se sérialise lui aussi"
     config = BUNDLE["nodes"]["deploy"]["config"]
     verrou = int(re.search(r"GRAPHATOM_VERROU_DELAI_S:-(\d+)", deploiement).group(1))
-    couperet = kernel.agent_timeout_s(config, AGENT_TIMEOUT_S)
+    couperet = policy.agent_timeout_s(config, AGENT_TIMEOUT_S)
     assert verrou < couperet < config["lease_s"], config
     assert "agent" not in config, "deploy prétend encore être un agent"
     readme = (ROOT / "README.md").read_text()
@@ -1001,8 +1002,8 @@ def main() -> None:
     faux_deploiement(deploiement)
     for service in gates.DEPLOYED_SERVICES:
         (deploiement / f"sha-{service}.txt").write_text(wanted)
-    donnees, ancienne_data = quartier / "data", blocks.DATA_DIR
-    blocks.DATA_DIR = donnees
+    donnees, ancienne_data = quartier / "data", bureau.DATA_DIR
+    bureau.DATA_DIR = donnees
     ancien_sha = activation.WORKER_SHA
     ancien_repo = os.environ.get("GRAPHATOM_REPO_DIR")
     ancien_systemctl = os.environ.get("GRAPHATOM_SYSTEMCTL")
@@ -1032,7 +1033,7 @@ def main() -> None:
                 conn, revision, f"activation:{os.getpid()}",
                 _allow_parallel_for_test=True,
             )
-            workspace = blocks.item_workspace(item_id)
+            workspace = bureau.item_workspace(item_id)
             workspace.mkdir(parents=True)
             (workspace / "deploy.md").write_text("résultat du shell rendu\n")
             run = kernel.claim(conn, item_id)
@@ -1042,7 +1043,7 @@ def main() -> None:
                 "outcome": "done", "summary": "release prête",
                 "deploy_sha": wanted,
             }))
-            submitted = blocks.read_outcome(brut)
+            submitted = agent_mod.read_outcome(brut)
             assert submitted["deploy_sha"] == wanted
             assert kernel.apply(conn, run["id"], submitted) == "applied"
             event = conn.execute(
@@ -1127,7 +1128,7 @@ def main() -> None:
                 conn, revision, f"activation-plus-recente:{os.getpid()}",
                 _allow_parallel_for_test=True,
             )
-            second_workspace = blocks.item_workspace(second_id)
+            second_workspace = bureau.item_workspace(second_id)
             second_workspace.mkdir(parents=True)
             (second_workspace / "deploy.md").write_text("seconde release rendue\n")
             second_run = kernel.claim(conn, second_id)
@@ -1222,7 +1223,7 @@ def main() -> None:
                 "deploy_sha": wanted[:12],
             }))
             try:
-                blocks.read_outcome(brut)
+                agent_mod.read_outcome(brut)
             except ValueError:
                 pass
             else:
@@ -1232,7 +1233,7 @@ def main() -> None:
               "acquittement idempotent par le worker neuf ✓")
     finally:
         activation.WORKER_SHA = ancien_sha
-        blocks.DATA_DIR = ancienne_data
+        bureau.DATA_DIR = ancienne_data
         if ancien_repo is None:
             os.environ.pop("GRAPHATOM_REPO_DIR", None)
         else:

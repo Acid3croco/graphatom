@@ -54,6 +54,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, graph, kernel, scheduler  # noqa: E402
+from graphatom import workspace as bureau  # noqa: E402
 
 from outils import git  # noqa: E402
 
@@ -213,7 +214,7 @@ def course(conn, workdir: Path, repo: Path) -> None:
                                    (3, 2, "tests/validate_test.py",
                                     "tests/validate_test.py")):
         cw = workspace / f"c{k}"
-        assert not (cw / blocks.OUTCOME_NAME).exists(), \
+        assert not (cw / bureau.OUTCOME_NAME).exists(), \
             f"c{k} garde un outcome.json alors que ses portes ont lâché"
         assert f"ÉCHEC — porte « {porte} »" in portes[k], portes[k][-600:]
         run = finaux[k]
@@ -229,7 +230,7 @@ def course(conn, workdir: Path, repo: Path) -> None:
     # 4. le sain passe, garde son issue, et gagne
     gagnant = finaux[0]
     assert gagnant["status"] == "applied" and gagnant["outcome"] == "done", gagnant
-    issue = json.loads((workspace / "c0" / blocks.OUTCOME_NAME).read_text())
+    issue = json.loads((workspace / "c0" / bureau.OUTCOME_NAME).read_text())
     assert issue["outcome"] == "done", issue
     assert "PORTES OK" in portes[0], portes[0]
     assert "suite de tests non concernée" in portes[0], portes[0]
@@ -270,7 +271,7 @@ def main() -> None:
     portes_sans_base()
     db.init_db()  # idempotent : ne détruit rien, rattrape juste le schéma
     workdir = Path(tempfile.mkdtemp(prefix="graphatom-portes-"))
-    blocks.DATA_DIR = workdir
+    bureau.DATA_DIR = workdir
     tmp = Path(tempfile.mkdtemp(prefix="graphatom-portes-repo-"))
     try:
         repo = depot(tmp)

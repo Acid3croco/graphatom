@@ -66,8 +66,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote
 
 from . import channel, db, executors, heartbeat, scheduler
-from .blocks import (attempt_command, attempt_log, attempt_name, item_workspace,
-                     run_workspace)
+from .workspace import (attempt_command, attempt_log, attempt_name, item_workspace,
+                        run_workspace)
 from .graph import (KERNEL_OUTCOMES, candidate_node, fanout_variants,
                     judge_source, load_bundle)
 

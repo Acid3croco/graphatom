@@ -64,11 +64,13 @@ os.environ["GRAPHATOM_DSN"] = (os.environ.get("GRAPHATOM_TRAIN_DSN")
                                or provision_postgres("graphatom-train"))
 
 from graphatom import blocks, channel, db, effects, graph, kernel, scheduler  # noqa: E402
-from graphatom.blocks import PGID_FILE, Context  # noqa: E402
-from graphatom.kernel import MAX_ATTEMPTS  # noqa: E402
+from graphatom import process, reaper, workspace as bureau  # noqa: E402
+from graphatom.context import Context  # noqa: E402
+from graphatom.workspace import PGID_FILE  # noqa: E402
+from graphatom.policy import MAX_ATTEMPTS  # noqa: E402
 
 TMP = Path(tempfile.mkdtemp(prefix="graphatom-train-"))
-blocks.DATA_DIR = TMP  # les workspaces du test, jamais ceux du repo
+bureau.DATA_DIR = TMP  # les workspaces du test, jamais ceux du repo
 atexit.register(shutil.rmtree, TMP, ignore_errors=True)
 
 
@@ -428,7 +430,7 @@ def part2_faucheur_mort(conn) -> None:
              conn.execute("SELECT lease_expires_at < now() AS mort "
                           "FROM node_run WHERE id = %s",
                           (run["id"],)).fetchone()["mort"], 10)
-    fauches = kernel.reap(conn)
+    fauches = reaper.reap(conn)
     assert fauches == 1, fauches
     ligne = conn.execute("SELECT status, outcome FROM node_run WHERE id = %s",
                          (run["id"],)).fetchone()
@@ -441,14 +443,14 @@ def part2_faucheur_mort(conn) -> None:
 def part2_faucheur_vivant(conn) -> None:
     item_id = admet(conn, bundle_commande("true", lease_s=1))
     run = kernel.claim(conn, item_id)
-    workspace = blocks.run_workspace(item_id, run)
+    workspace = bureau.run_workspace(item_id, run)
     workspace.mkdir(parents=True, exist_ok=True)
     proc = subprocess.Popen(["sleep", "60"], start_new_session=True)
-    blocks._write_pgid(workspace / PGID_FILE, proc, "sleep 60", run["id"])
+    process.write_pgid(workspace / PGID_FILE, proc, "sleep 60", run["id"])
     attendre(lambda: conn.execute(
         "SELECT lease_expires_at < now() AS mort FROM node_run WHERE id = %s",
         (run["id"],)).fetchone()["mort"], 10)
-    fauches = kernel.reap(conn)
+    fauches = reaper.reap(conn)
     assert fauches == 1, fauches
     ligne = conn.execute("SELECT outcome FROM node_run WHERE id = %s",
                          (run["id"],)).fetchone()

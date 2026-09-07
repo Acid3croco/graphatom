@@ -35,8 +35,9 @@ import time
 
 import psycopg
 
-from . import activation, heartbeat, kernel
-from .blocks import BLOCKS, Context
+from . import activation, heartbeat, kernel, reaper
+from .blocks import BLOCKS
+from .context import Context
 from .graph import (FANOUT_MAX_CANDIDATES, GraphError, candidate_node,
                     fanout_variants, load_bundle, validate)
 
@@ -72,7 +73,7 @@ def tick(conn: psycopg.Connection) -> int:
     heartbeat.beat(conn, heartbeat.RAIL, activation.WORKER_SHA,
                    activation.WORKER_STARTED_AT)
     activation_pending = activation.reconcile(conn)
-    did = kernel.reap(conn)
+    did = reaper.reap(conn)
     did += _settle_waits(conn)
     if activation_pending:
         return did

@@ -36,12 +36,13 @@ from outils import kill_group, provision_postgres, sh  # noqa: E402
 os.environ["GRAPHATOM_DSN"] = provision_postgres("graphatom-reconnect")
 
 from graphatom import blocks, db, kernel, scheduler  # noqa: E402
+from graphatom import reaper, workspace  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 # comme le crash-test : le test travaille dans un répertoire à lui, jamais
 # dans ROOT/data, qui peut être le data/ vivant d'un rail (workspaces d'items)
 WORK = Path(tempfile.mkdtemp(prefix="graphatom-reconnect-test-"))
-blocks.DATA_DIR = WORK / "data"  # les blocs joués en direct écrivent là aussi
+workspace.DATA_DIR = WORK / "data"  # les blocs joués en direct écrivent là aussi
 # hermétisme : ce dépôt-ci est le seul univers du test. L'agent qui nous
 # lance a dans son environnement le clone et l'instance de la production —
 # un ordonnanceur lancé d'ici n'en voit ni l'un ni l'autre.
@@ -141,7 +142,7 @@ def thread_sans_base(conn, revision: str) -> None:
         "UPDATE node_run SET lease_expires_at = now() - interval '1 second' "
         "WHERE id = %s", (run["id"],),
     )
-    kernel.reap(conn)
+    reaper.reap(conn)
     run = conn.execute(
         "SELECT * FROM node_run WHERE id = %s", (run["id"],)
     ).fetchone()

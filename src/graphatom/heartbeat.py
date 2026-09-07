@@ -27,7 +27,7 @@ import datetime as dt
 
 import psycopg
 
-from .kernel import now
+from .policy import now
 
 STALE_S = 120.0  # au-delà, le batteur est déclaré à l'arrêt sur les deux surfaces
 

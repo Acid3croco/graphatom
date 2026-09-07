@@ -36,6 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, graph, kernel, quota, scheduler, web  # noqa: E402
+from graphatom import workspace  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 # l'instance jetable : celle de l'agent qui nous lance, sinon la nôtre
@@ -321,7 +322,7 @@ def api_load(conn) -> None:
 
 def main() -> None:
     workdir = Path(tempfile.mkdtemp(prefix="graphatom-plafond-"))
-    blocks.DATA_DIR = workdir
+    workspace.DATA_DIR = workdir
     # aucun dépôt à portée : la promotion et le rangement des ateliers d'un
     # fan-out n'ont alors rien à toucher, et rien de la production ne fuit
     os.environ["GRAPHATOM_REPO_DIR"] = str(workdir / "sans-depot")

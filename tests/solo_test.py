@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, graph, kernel, scheduler  # noqa: E402
+from graphatom import workspace  # noqa: E402
 
 INSTANCE = os.environ.get("GRAPHATOM_AGENT_DSN") or db.DSN
 os.environ["GRAPHATOM_AGENT_DSN"] = INSTANCE
@@ -74,7 +75,7 @@ def rendre(conn, item_id: int) -> None:
 
 def main() -> None:
     workdir = Path(tempfile.mkdtemp(prefix="graphatom-solo-"))
-    blocks.DATA_DIR = workdir
+    workspace.DATA_DIR = workdir
     os.environ["GRAPHATOM_REPO_DIR"] = str(workdir / "sans-depot")
     garde = (db.DSN, scheduler.MAX_RUNS, scheduler.MAX_RUNS_PER_ITEM,
              scheduler.MAX_ACTIVE_ITEMS, scheduler._execute)

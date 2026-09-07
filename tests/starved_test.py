@@ -24,6 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks  # noqa: E402
+from graphatom import context, prompt, workspace as bureau  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 ADAPTERS = {
@@ -51,9 +52,9 @@ class FauxConn:
         return None
 
 
-def contexte(workdir: Path, cmd: str, attempt: int) -> blocks.Context:
+def contexte(workdir: Path, cmd: str, attempt: int) -> context.Context:
     """Un bloc agent minimal, sans base ni atelier git."""
-    blocks.DATA_DIR = workdir
+    bureau.DATA_DIR = workdir
     spec = {
         "block": "ACT",
         "edges": {"ok": "fini"},
@@ -62,7 +63,7 @@ def contexte(workdir: Path, cmd: str, attempt: int) -> blocks.Context:
                    "agent": {"prompt": "fais le travail",
                              "passation": False}},
     }
-    return blocks.Context(
+    return context.Context(
         FauxConn(),
         {"id": attempt, "node": "travail", "cycle": 1, "attempt": attempt},
         {"id": 0, "subject_id": 1},
@@ -73,10 +74,10 @@ def contexte(workdir: Path, cmd: str, attempt: int) -> blocks.Context:
 
 def contrat_du_bloc(workdir: Path) -> None:
     """1 à 3. Le fichier valide gagne sur le crash, et lui seul."""
-    blocks.DATA_DIR = workdir
-    workspace = blocks.item_workspace(0)
+    bureau.DATA_DIR = workdir
+    workspace = bureau.item_workspace(0)
     workspace.mkdir(parents=True)
-    stale = workspace / blocks.STARVED_NAME
+    stale = workspace / bureau.STARVED_NAME
     stale.write_text(json.dumps({"provider": "ancien", "reason": "ancien quota"}))
 
     crashed = blocks.act(contexte(workdir, "exit 7", 1))
@@ -90,7 +91,7 @@ def contrat_du_bloc(workdir: Path) -> None:
            "> starved.json; exit 9")
     starved = blocks.act(contexte(workdir, cmd, 2))
     assert starved == {"outcome": "starved", "provider": "codex", "reason": reason}, starved
-    reprise = blocks._death({"outcome": "starved", "result": starved})
+    reprise = prompt.death({"outcome": "starved", "result": starved})
     assert "codex" in reprise and reason in reprise, reprise
     print("2. starved.json valide sans outcome.json → starved, raison intacte ✓")
 
@@ -138,10 +139,10 @@ def joue_adaptateur(workdir: Path, provider: str) -> None:
     )
 
     assert done.returncode == 5, (done.returncode, done.stdout, done.stderr)
-    result = json.loads((workspace / blocks.STARVED_NAME).read_text())
+    result = json.loads((workspace / bureau.STARVED_NAME).read_text())
     assert result == {"provider": provider, "reason": reason}, result
     assert reason in done.stderr, done.stderr
-    assert not (workspace / blocks.OUTCOME_NAME).exists()
+    assert not (workspace / bureau.OUTCOME_NAME).exists()
     print(f"4. {provider} : sortie enregistrée → starved.json, raison intacte ✓")
 
 

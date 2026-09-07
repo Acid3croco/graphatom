@@ -33,6 +33,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, kernel  # noqa: E402
+from graphatom import reaper, workspace  # noqa: E402
 
 from outils import kill_group, sh  # noqa: E402
 
@@ -40,7 +41,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # comme le test de reconnexion : le test travaille dans un répertoire à lui,
 # jamais dans ROOT/data, qui peut être le data/ vivant d'un rail
 WORK = Path(tempfile.mkdtemp(prefix="graphatom-migration-test-"))
-blocks.DATA_DIR = WORK / "data"
+workspace.DATA_DIR = WORK / "data"
 # hermétisme : ce dépôt-ci est le seul univers du test. L'agent qui nous
 # lance a dans son environnement le clone et l'instance de la production —
 # un ordonnanceur lancé d'ici n'en voit ni l'un ni l'autre.
@@ -157,7 +158,7 @@ def redemarrage_nomme(conn, revision: str) -> None:
           f"« {poste['error']} » ✓")
 
     sien = en_vol(conn, revision, "migration-sien")
-    kernel.reap(conn)  # le worker qui l'a réservé : rien n'a redémarré
+    reaper.reap(conn)  # le worker qui l'a réservé : rien n'a redémarré
     poste = post_mortem(conn, sien["id"])
     assert poste["error"].startswith("bail expiré, agent"), poste
     print(f"4.2 run {sien['id']} fauché par son propre worker : "

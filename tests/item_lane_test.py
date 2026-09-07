@@ -24,6 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, channel, db, graph, github_sync, kernel, scheduler  # noqa: E402
+from graphatom import workspace  # noqa: E402
 
 INSTANCE = os.environ.get("GRAPHATOM_AGENT_DSN") or db.DSN
 os.environ["GRAPHATOM_AGENT_DSN"] = INSTANCE
@@ -106,7 +107,7 @@ def item_for(conn, number: int) -> dict | None:
 
 def main() -> None:
     temporary = Path(tempfile.mkdtemp(prefix="graphatom-item-lane-"))
-    blocks.DATA_DIR = temporary / "data"
+    workspace.DATA_DIR = temporary / "data"
     os.environ["GRAPHATOM_REPO_DIR"] = str(temporary / "sans-depot")
     saved = (db.DSN, scheduler._execute)
     dsn = db.agent_dsn(ITEM_ID)

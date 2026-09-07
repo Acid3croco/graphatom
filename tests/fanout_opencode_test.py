@@ -42,6 +42,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, executors, graph, kernel, scheduler  # noqa: E402
+from graphatom import workspace  # noqa: E402
 
 from outils import git  # noqa: E402
 
@@ -178,8 +179,8 @@ def cli_absente(conn, workdir: Path, repo: Path) -> None:
     assert str(absent) in trace, trace
     assert "agent-opencode:" in trace, trace
 
-    espace = blocks.run_workspace(item_id, run)
-    assert not (espace / blocks.OUTCOME_NAME).exists(), "une issue inventée sans modèle ?"
+    espace = workspace.run_workspace(item_id, run)
+    assert not (espace / workspace.OUTCOME_NAME).exists(), "une issue inventée sans modèle ?"
     assert not (espace / "portes.md").exists(), \
         "les portes ont tourné : l'échec se lirait comme un échec de code"
 
@@ -291,7 +292,7 @@ def main() -> None:
     declaration()
     db.init_db()  # idempotent : ne détruit rien, rattrape juste le schéma
     workdir = Path(tempfile.mkdtemp(prefix="graphatom-opencode-absent-"))
-    blocks.DATA_DIR = workdir
+    workspace.DATA_DIR = workdir
     tmp = Path(tempfile.mkdtemp(prefix="graphatom-opencode-absent-repo-"))
     try:
         repo = depot(tmp)

@@ -26,7 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import heartbeat, web  # noqa: E402
-from graphatom.kernel import now  # noqa: E402
+from graphatom.policy import now  # noqa: E402
 
 FRESH = now() - dt.timedelta(seconds=3)
 OLD = now() - dt.timedelta(seconds=heartbeat.STALE_S + 1)

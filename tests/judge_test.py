@@ -40,6 +40,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, graph, kernel, scheduler, worktree  # noqa: E402
+from graphatom import workspace as bureau  # noqa: E402
 
 from outils import attendre, etat, git  # noqa: E402
 
@@ -260,12 +261,12 @@ def sole(conn, workdir: Path, repo: Path) -> None:
     print(f"1. item {item_id} : un finaliste → issue « sole », aucune trace d'agent "
           f"({', '.join(p.name for p in sorted(workspace.iterdir()))}), coût nul ✓")
 
-    verdict = (workspace / blocks.VERDICT_NAME).read_text()
+    verdict = (workspace / bureau.VERDICT_NAME).read_text()
     assert "finaliste A" in verdict and "seul" in verdict, verdict
     assert "aucun modèle" in verdict, verdict
     assert ancetre(repo, commit, branche), "le travail du finaliste unique est promu"
     assert git(repo, "branch", "--list", f"{branche}-c*") == "", "branches survivantes"
-    print(f"   {blocks.VERDICT_NAME} écrit, travail de l'unique finaliste promu, "
+    print(f"   {bureau.VERDICT_NAME} écrit, travail de l'unique finaliste promu, "
           "ateliers rangés ✓")
 
 
@@ -327,7 +328,7 @@ def chosen(conn, workdir: Path, repo: Path) -> None:
 
     # 2 (suite). le verdict nomme l'élu et la raison, et le travail suit
     elu = finalistes[1]  # le faux modèle a élu la lettre B, la seconde
-    verdict = (workspace / blocks.VERDICT_NAME).read_text()
+    verdict = (workspace / bureau.VERDICT_NAME).read_text()
     assert "faux modèle" in verdict, "la comparaison du modèle est gardée"
     assert "Élu : finaliste B" in verdict, verdict
     assert RAISON in verdict, verdict
@@ -375,7 +376,7 @@ def none(conn, workdir: Path, repo: Path) -> None:
     assert apres["state"] == "travail", apres["state"]
     assert apres["escalations"] == depart["escalations"], \
         "sortir d'un nœud d'escalade ne débite rien — c'est y revenir qui débite"
-    verdict = (workspace / blocks.VERDICT_NAME).read_text()
+    verdict = (workspace / bureau.VERDICT_NAME).read_text()
     assert "Aucun finaliste" in verdict, verdict
     print(f"5. item {item_id} : zéro finaliste → issue « none », retour sur "
           f"`travail`, budget intact à {apres['escalations']} ✓")
@@ -394,7 +395,7 @@ def main() -> None:
     db.init_db()  # idempotent : ne détruit rien, rattrape juste le schéma
     workdir = Path(tempfile.mkdtemp(prefix="graphatom-judge-"))
     tmp = Path(tempfile.mkdtemp(prefix="graphatom-judge-repo-"))
-    blocks.DATA_DIR = workdir
+    bureau.DATA_DIR = workdir
     repo = depot(tmp)
     try:
         with db.connect() as conn:

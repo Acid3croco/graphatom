@@ -38,6 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks  # noqa: E402
+from graphatom import agent, context, failure, prompt as invite, workspace as bureau  # noqa: E402
 
 # hermétisme : ni dépôt ni instance jetable dans l'environnement, sinon le
 # bloc irait lire l'atelier d'un item qui existe pour de vrai
@@ -86,12 +87,12 @@ def run(run_id: int, node: str, outcome: str, candidate: int | None = None) -> d
 
 
 def contexte(workdir: Path, node: str, events: list[dict],
-             runs: dict[int, dict]) -> blocks.Context:
-    blocks.DATA_DIR = workdir
+             runs: dict[int, dict]) -> context.Context:
+    bureau.DATA_DIR = workdir
     spec = {"block": "ACT", "edges": {"done": "suite"},
             "config": {"execution": {"kind": "agent", "cmd": "true"},
                        "agent": {"prompt": "fais le travail"}}}
-    return blocks.Context(
+    return context.Context(
         FauxConn(events, runs),
         {"id": 99, "node": node, "cycle": 1, "attempt": 1},
         {"id": ITEM, "subject_id": 1},
@@ -103,16 +104,16 @@ def contexte(workdir: Path, node: str, events: list[dict],
 def prompt(workdir: Path, node: str, events: list[dict],
            runs: dict[int, dict]) -> str:
     ctx = contexte(workdir, node, events, runs)
-    return blocks._prompt(ctx, ctx.workspace.resolve(), SUJET)
+    return invite.build(ctx, ctx.workspace.resolve(), SUJET)
 
 
 def ecrire(workdir: Path, run: dict, passation: str, journal: str = "") -> None:
     """Ce qu'un nœud laisse dans son workspace : sa passation, son journal."""
-    workspace = blocks.run_workspace(ITEM, run)
+    workspace = bureau.run_workspace(ITEM, run)
     workspace.mkdir(parents=True, exist_ok=True)
-    blocks.passation_path(ITEM, run).write_text(passation)
+    bureau.passation_path(ITEM, run).write_text(passation)
     if journal:
-        blocks.attempt_log(workspace, run).write_text(journal)
+        bureau.attempt_log(workspace, run).write_text(journal)
 
 
 def demande(workdir: Path) -> None:
@@ -129,13 +130,13 @@ def demande(workdir: Path) -> None:
 def passation_obligatoire(workdir: Path) -> None:
     """1 bis. une réussite porte une passation neuve, complète et bornée."""
     ctx = contexte(workdir, "scope", [], {})
-    fichier = blocks.passation_path(ITEM, ctx.run)
+    fichier = bureau.passation_path(ITEM, ctx.run)
     fichier.write_text("ancienne passation sans sections")
     ctx.config["execution"]["cmd"] = (
         "printf '%s' '{\"outcome\":\"done\",\"summary\":\"trop tôt\"}' "
         "> outcome.json"
     )
-    resultat = blocks._attempt(ctx, ctx.workspace.resolve())
+    resultat = agent.attempt(ctx, ctx.workspace.resolve())
     assert resultat["outcome"] == "crashed", resultat
     assert "passation absente" in resultat["error"], resultat
     assert not fichier.exists(), "la passation de la tentative précédente a survécu"
@@ -146,12 +147,12 @@ def passation_obligatoire(workdir: Path) -> None:
         "printf '%s' '{\"outcome\":\"done\",\"summary\":\"complet\"}' "
         "> outcome.json"
     )
-    resultat = blocks._attempt(ctx, ctx.workspace.resolve())
+    resultat = agent.attempt(ctx, ctx.workspace.resolve())
     assert resultat == {"outcome": "done", "summary": "complet"}, resultat
-    assert blocks._passation_invalide(fichier) is None
+    assert invite.passation_invalide(fichier) is None
 
     fichier.write_text("## Fait\noui\n\n## Appris\n\n## Pas fait\nrien\n")
-    assert "section '## Appris' vide" == blocks._passation_invalide(fichier)
+    assert "section '## Appris' vide" == invite.passation_invalide(fichier)
     print("1 bis. vieille passation purgée ; succès refusé sans trois sections "
           "neuves, ordonnées, remplies et bornées ✓")
 
@@ -166,15 +167,15 @@ def portes_de_pertinence(workdir: Path) -> None:
         )
         run = {"id": index, "node": node, "cycle": 1, "attempt": 1,
                "candidate": None}
-        ctx = blocks.Context(FauxConn([], {}), run,
+        ctx = context.Context(FauxConn([], {}), run,
                              {"id": ITEM, "subject_id": 1}, spec, BUNDLE)
         passation = ctx.workspace / f"passation-{node}.md"
-        prompt_path = ctx.workspace / blocks.PROMPT_NAME
+        prompt_path = ctx.workspace / bureau.PROMPT_NAME
         passation.write_text("ancienne fausse passation\n")
         prompt_path.write_text("ancien faux prompt\n")
 
-        resultat = blocks._attempt(ctx, ctx.workspace.resolve())
-        trace = json.loads(blocks.attempt_command(ctx.workspace, run).read_text())
+        resultat = agent.attempt(ctx, ctx.workspace.resolve())
+        trace = json.loads(bureau.attempt_command(ctx.workspace, run).read_text())
         assert resultat == {"outcome": "pass", "summary": "porte"}, resultat
         assert not passation.exists(), node
         assert not prompt_path.exists(), node
@@ -219,18 +220,18 @@ def noeud_d_entree(workdir: Path) -> None:
 def bornes(workdir: Path) -> None:
     """4. la passation et le journal transmis sont bornés en taille."""
     amont = run(21, "implement", "done")
-    ecrire(workdir, amont, "A" * (blocks.PASSATION_CHARS * 3),
+    ecrire(workdir, amont, "A" * (invite.PASSATION_CHARS * 3),
            journal="".join(f"ligne {n}\n" for n in range(500)))
     events = [{"to_state": "test_backend", "run_id": 21}]
     texte = prompt(workdir, "test_backend", events, {21: amont})
 
-    assert "A" * blocks.PASSATION_CHARS in texte, "la passation n'est pas passée"
-    assert "A" * (blocks.PASSATION_CHARS + 1) not in texte, "borne dépassée"
+    assert "A" * invite.PASSATION_CHARS in texte, "la passation n'est pas passée"
+    assert "A" * (invite.PASSATION_CHARS + 1) not in texte, "borne dépassée"
     assert "… (tronqué)" in texte, texte
     assert "ligne 499" in texte, texte
     assert "ligne 400" not in texte, "le journal remonte au-delà de sa queue"
-    print(f"4. passation coupée à {blocks.PASSATION_CHARS} caractères, journal "
-          f"réduit à ses {blocks.TAIL_LINES} dernières lignes ✓")
+    print(f"4. passation coupée à {invite.PASSATION_CHARS} caractères, journal "
+          f"réduit à ses {failure.TAIL_LINES} dernières lignes ✓")
 
 
 def profondeur(workdir: Path) -> None:
@@ -257,12 +258,12 @@ def profondeur(workdir: Path) -> None:
 def phase_predeploiement(workdir: Path) -> None:
     """5 bis. Une validation ne demande pas le rapport d'un nœud futur."""
     spec = BUNDLE["nodes"]["validate"]
-    ctx = blocks.Context(
+    ctx = context.Context(
         FauxConn([], {}),
         {"id": 98, "node": "validate", "cycle": 1, "attempt": 1},
         {"id": ITEM, "subject_id": 1}, spec, BUNDLE,
     )
-    texte = blocks._prompt(ctx, ctx.workspace.resolve(), SUJET)
+    texte = invite.build(ctx, ctx.workspace.resolve(), SUJET)
     assert "Contrat de phase pré-déploiement" in texte, texte
     assert "Ne laisse pas une case vide pour la seule absence de `deploy.md`" in texte
     assert "verify_deploy" in texte, texte
@@ -292,7 +293,7 @@ def fan_out(workdir: Path) -> None:
     voisin = run(52, "implement", "done", candidate=0)
     ecrire(workdir, elu, "## Fait\nle travail de l'élu\n")
     ecrire(workdir, voisin, "## Fait\nle travail du voisin recalé\n")
-    assert blocks.passation_path(ITEM, elu).parent.name == "c1", "workspace du candidat"
+    assert bureau.passation_path(ITEM, elu).parent.name == "c1", "workspace du candidat"
     events = [{"to_state": "test_backend", "run_id": 51}]
     texte = prompt(workdir, "test_backend", events, {51: elu, 52: voisin})
 
@@ -306,7 +307,7 @@ def fan_out(workdir: Path) -> None:
     ctx = contexte(workdir, "judge", events, {51: elu})
     ctx.node["config"]["finalists_from"] = "implement"
     ctx.node["block"] = "JUDGE"
-    arbitre = blocks._prompt(ctx, ctx.workspace.resolve(), SUJET)
+    arbitre = invite.build(ctx, ctx.workspace.resolve(), SUJET)
     assert "Passation de" not in arbitre, arbitre
     assert "le travail de l'élu" not in arbitre, "l'arbitre lit un finaliste nommé"
     assert "passation-judge.md" in arbitre, "l'arbitre en écrit une, lui"
@@ -317,7 +318,7 @@ def fan_out(workdir: Path) -> None:
 def sans_passation(workdir: Path) -> None:
     """8. un prédécesseur muet le dit, et rien ne tombe."""
     muet = run(61, "worktree", "done")
-    blocks.run_workspace(ITEM, muet).mkdir(parents=True, exist_ok=True)
+    bureau.run_workspace(ITEM, muet).mkdir(parents=True, exist_ok=True)
     texte = prompt(workdir, "scope", [{"to_state": "scope", "run_id": 61}], {61: muet})
 
     assert "Passation de « worktree »" in texte, texte

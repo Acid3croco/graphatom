@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, graph, kernel, web  # noqa: E402
+from graphatom import signature, workspace as bureau  # noqa: E402
 
 from outils import etat  # noqa: E402
 
@@ -47,9 +48,9 @@ def bundle(fanout: bool = False) -> dict:
 
 def command(run: dict, value: str = "exit 3") -> None:
     """Pose la commande résolue que le vrai bloc aurait archivée."""
-    workspace = blocks.run_workspace(run["item_id"], run)
+    workspace = bureau.run_workspace(run["item_id"], run)
     workspace.mkdir(parents=True, exist_ok=True)
-    blocks.attempt_command(workspace, run).write_text(json.dumps({
+    bureau.attempt_command(workspace, run).write_text(json.dumps({
         "kind": "composed",
         "executor": {"cli": "codex", "model": None, "effort": None},
         "command": value,
@@ -59,12 +60,12 @@ def command(run: dict, value: str = "exit 3") -> None:
 def crash(conn, run: dict, command_value: str = "exit 3",
           human: str | None = None, provider_traces: bool = False) -> None:
     command(run, command_value)
-    workspace = blocks.run_workspace(run["item_id"], run)
+    workspace = bureau.run_workspace(run["item_id"], run)
     if human is not None:
         (workspace / f"{run['node']}.md").write_text(human)
-        blocks.passation_path(run["item_id"], run).write_text(f"passation {human}")
+        bureau.passation_path(run["item_id"], run).write_text(f"passation {human}")
     if provider_traces:
-        name = blocks.attempt_name(run)
+        name = bureau.attempt_name(run)
         (workspace / f"codex-{name}.jsonl").write_text('{"event":"same"}\n')
         (workspace / f"opencode-events-{name}.jsonl").write_text(
             '{"event":"same"}\n')
@@ -100,7 +101,7 @@ def identique(conn, revision: str) -> None:
     message = runs[-1]["result"]["retry"]
     assert message == (f"relance identique supprimée — runs {first['id']} "
                        f"et {second['id']}")
-    failure = json.loads(blocks.failure_path(item_id).read_text())
+    failure = json.loads(bureau.failure_path(item_id).read_text())
     assert failure["retry"] == message
     assert message in web._result(runs[-1]["result"]), "trace UI absente"
     assert web._api_item(conn, item_id)["runs"][-1]["result"]["retry"] == message
@@ -112,7 +113,7 @@ def changement(conn, revision: str) -> None:
     for mode in ("commande", "workspace"):
         item_id = item(conn, revision)
         first = kernel.claim(conn, item_id)
-        workspace = blocks.run_workspace(item_id, first)
+        workspace = bureau.run_workspace(item_id, first)
         workspace.mkdir(parents=True, exist_ok=True)
         if mode == "workspace":
             (workspace / "travail.txt").write_text("avant")
@@ -125,16 +126,16 @@ def changement(conn, revision: str) -> None:
         assert kernel.claim(conn, item_id)["attempt"] == 3, mode
 
     item_id = item(conn, revision)
-    too_large = "x" * (blocks.SIGNATURE_BYTES + 1)
+    too_large = "x" * (signature.SIGNATURE_BYTES + 1)
     crash(conn, kernel.claim(conn, item_id), too_large)
     crash(conn, kernel.claim(conn, item_id), too_large)
     assert etat(conn, item_id)["state"] == "travail"
 
     item_id = item(conn, revision)
     first = kernel.claim(conn, item_id)
-    workspace = blocks.run_workspace(item_id, first)
+    workspace = bureau.run_workspace(item_id, first)
     workspace.mkdir(parents=True, exist_ok=True)
-    for index in range(blocks.SIGNATURE_ENTRIES + 1):
+    for index in range(signature.SIGNATURE_ENTRIES + 1):
         (workspace / f"agent-ignore-{index}.log").write_text("")
     crash(conn, first)
     crash(conn, kernel.claim(conn, item_id))
@@ -216,7 +217,7 @@ def limites(conn, revision: str) -> None:
 
 def main() -> None:
     workspace = Path(tempfile.mkdtemp(prefix="graphatom-retry-identique-"))
-    blocks.DATA_DIR = workspace
+    bureau.DATA_DIR = workspace
     db.init_db()
     try:
         with db.connect() as conn:

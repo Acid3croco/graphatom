@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, executors, graph  # noqa: E402
+from graphatom import context, workspace as bureau  # noqa: E402
 
 
 class FakeConn:
@@ -151,7 +152,7 @@ def adapter(cli: str, model: str, expected_input: int, tmp: Path) -> None:
         paquet = bundle({"cli": "codex", "model": "défaut"}, spec)
         run = {"id": expected_input, "node": "travail", "cycle": 1,
                "attempt": 1, "candidate": None}
-        ctx = blocks.Context(FakeConn(), run, {"id": expected_input,
+        ctx = context.Context(FakeConn(), run, {"id": expected_input,
                                                "subject_id": 1}, spec, paquet)
         ctx.workspace = workspace
         ctx.worktree = tmp
@@ -168,7 +169,7 @@ def adapter(cli: str, model: str, expected_input: int, tmp: Path) -> None:
     args = capture.read_text().splitlines()
     assert model in args, args
     assert "Réponds à ce test" in "\n".join(args), args
-    trace = json.loads(blocks.attempt_command(workspace, run).read_text())
+    trace = json.loads(bureau.attempt_command(workspace, run).read_text())
     resolved = executors.resolve(paquet, spec)
     assert trace == {
         "kind": "model",
@@ -197,11 +198,11 @@ def explicit_command(tmp: Path) -> None:
     paquet = bundle({"cli": "codex", "model": "ne-doit-pas-tourner"}, spec)
     run = {"id": 40, "node": "travail", "cycle": 1, "attempt": 1,
            "candidate": None}
-    ctx = blocks.Context(FakeConn(), run, {"id": 40, "subject_id": 1}, spec, paquet)
+    ctx = context.Context(FakeConn(), run, {"id": 40, "subject_id": 1}, spec, paquet)
     ctx.workspace = workspace
     ctx.worktree = tmp
     result = blocks.act(ctx)
-    trace = json.loads(blocks.attempt_command(workspace, run).read_text())
+    trace = json.loads(bureau.attempt_command(workspace, run).read_text())
     assert result["outcome"] == "done", result
     assert trace == {"kind": "command", "executor": None,
                      "command": commande}, trace
@@ -227,11 +228,11 @@ def composed_command(tmp: Path) -> None:
     paquet = bundle({"cli": "codex", "model": "défaut"}, spec)
     run = {"id": 41, "node": "travail", "cycle": 2, "attempt": 3,
            "candidate": 1}
-    ctx = blocks.Context(FakeConn(), run, {"id": 41, "subject_id": 1}, spec, paquet)
+    ctx = context.Context(FakeConn(), run, {"id": 41, "subject_id": 1}, spec, paquet)
     ctx.workspace = workspace
     ctx.worktree = tmp
     result = blocks.act(ctx)
-    trace = json.loads(blocks.attempt_command(workspace, run).read_text())
+    trace = json.loads(bureau.attempt_command(workspace, run).read_text())
     filled = commande.replace("{subject_key}", "gh:test/graphatom#194") \
         .replace("{label}", "minimal Sol").replace("{strategy}", "diff minimal")
     assert result["outcome"] == "done", result
@@ -343,7 +344,7 @@ def variantes() -> None:
 def main() -> None:
     resolution()
     tmp = Path(tempfile.mkdtemp(prefix="graphatom-executor-"))
-    blocks.DATA_DIR = tmp / "data"
+    bureau.DATA_DIR = tmp / "data"
     os.environ.pop("GRAPHATOM_REPO_DIR", None)
     adapters(tmp)
     explicit_command(tmp)

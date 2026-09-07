@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import github_sync as gs  # noqa: E402
 from graphatom import heartbeat, web  # noqa: E402
-from graphatom.kernel import now  # noqa: E402
+from graphatom.policy import now  # noqa: E402
 
 
 class FakeCursor:

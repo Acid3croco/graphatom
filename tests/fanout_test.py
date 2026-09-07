@@ -47,6 +47,7 @@ from psycopg.pq import TransactionStatus
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks, db, graph, kernel, scheduler, web  # noqa: E402
+from graphatom import policy, process, reduction, workspace as bureau  # noqa: E402
 
 from outils import attendre, etat  # noqa: E402
 
@@ -228,7 +229,7 @@ def sans_fanout(conn) -> None:
     assert len(runs) == 1, f"un nœud sans fan-out réserve un seul run : {runs}"
     run = runs[0]
     assert run["candidate"] is None, run["candidate"]
-    assert blocks.run_workspace(item_id, run) == blocks.item_workspace(item_id)
+    assert bureau.run_workspace(item_id, run) == bureau.item_workspace(item_id)
     kernel.apply(conn, run["id"], {"outcome": "ok"})
     item = etat(conn, item_id)
     assert item["state"] == "fini", item["state"]
@@ -269,7 +270,7 @@ def course(conn, workdir: Path) -> int:
                                args=(par_candidat[k]["id"], item_id), daemon=True)
         fil.start()
         fils.append(fil)
-    traces = [workspace / f"c{k}" / blocks.PGID_FILE for k in (0, 1)]
+    traces = [workspace / f"c{k}" / bureau.PGID_FILE for k in (0, 1)]
     assert attendre(lambda: all(t.is_file() for t in traces), 15.0), \
         f"les candidats lents n'ont pas laissé leur trace : {traces}"
     pgids = {k: json.loads(trace.read_text())["pgid"]
@@ -293,7 +294,7 @@ def course(conn, workdir: Path) -> int:
         assert (cw / "agent-travail-1-1.log").is_file(), f"journal du candidat {k}"
         assert (cw / "prompt-travail-1-1.md").is_file(), f"prompt du candidat {k}"
         assert (cw / "usage-travail-1-1.json").is_file(), f"usage du candidat {k}"
-    for fixe in ("agent-travail-1-1.log", "label.txt", blocks.OUTCOME_NAME):
+    for fixe in ("agent-travail-1-1.log", "label.txt", bureau.OUTCOME_NAME):
         assert not (workspace / fixe).exists(), \
             f"{fixe} ne doit pas être écrit dans le workspace de l'item"
     fichiers = {k: sorted(p.name for p in (workspace / f"c{k}").iterdir())
@@ -396,7 +397,7 @@ def transition_sans_run(conn) -> None:
     """7 bis. Une échéance révoque toute la course avant de déplacer l'item."""
     item_id = nouvel_item(conn, bundle_stub(3))
     runs = reserve_tout(conn, item_id)
-    assert all(run["id"] in kernel.CLAIMED for run in runs)
+    assert all(run["id"] in policy.CLAIMED for run in runs)
 
     kernel.apply_item(conn, item_id, "wall_deadline", kind="wall")
     apres = etat(conn, item_id)
@@ -406,7 +407,7 @@ def transition_sans_run(conn) -> None:
     classes = runs_de(conn, item_id)
     assert all(run["status"] == "superseded" for run in classes), classes
     assert all(run["finished_at"] is not None for run in classes), classes
-    assert not any(run["id"] in kernel.CLAIMED for run in runs)
+    assert not any(run["id"] in policy.CLAIMED for run in runs)
 
     conn.execute(
         "UPDATE node_run SET lease_expires_at = now() - interval '1 hour' "
@@ -453,27 +454,27 @@ def expiration_wait(conn) -> None:
         "finished_at = NULL, lease_expires_at = now() - interval '1 hour' "
         "WHERE id = %s", (run["id"],),
     )
-    kernel.CLAIMED.add(run["id"])
+    policy.CLAIMED.add(run["id"])
     conn.execute(
         "UPDATE question SET deadline = now() - interval '1 minute' "
         "WHERE item_id = %s AND state = 'open'", (item_id,),
     )
 
     transactions = []
-    vrai_menage = kernel._menage
+    vrai_menage = reduction.menage
 
     def observe(item: int, run_ids: list[int], ranger: bool) -> None:
         transactions.append(conn.info.transaction_status)
         vrai_menage(item, run_ids, ranger)
 
-    kernel._menage = observe
+    reduction.menage = observe
     vrai_active_item = kernel.active_item
     kernel.active_item = lambda _conn: etat(conn, item_id)
     try:
         assert scheduler._settle_waits(conn) == 1
     finally:
         kernel.active_item = vrai_active_item
-        kernel._menage = vrai_menage
+        reduction.menage = vrai_menage
 
     apres = etat(conn, item_id)
     question = conn.execute(
@@ -542,8 +543,8 @@ def keep_n(conn) -> None:
     # candidats restants. `_menage` doit recevoir leurs runs pour tuer leurs
     # groupes de processus hors transaction.
     revoques = []
-    ancien_revoke = kernel.revoke_orphan
-    kernel.revoke_orphan = lambda item, run: revoques.append((item, run))
+    ancien_revoke = process.revoke_orphan
+    process.revoke_orphan = lambda item, run: revoques.append((item, run))
     try:
         assert kernel.apply(conn, runs[0]["id"], {"outcome": "ok"}) == "applied"
         attente = etat(conn, item_id)
@@ -552,7 +553,7 @@ def keep_n(conn) -> None:
 
         assert kernel.apply(conn, runs[1]["id"], {"outcome": "ok"}) == "applied"
     finally:
-        kernel.revoke_orphan = ancien_revoke
+        process.revoke_orphan = ancien_revoke
 
     item = etat(conn, item_id)
     assert item["version"] == depart["version"] + 1, "une seule issue de nœud"
@@ -586,7 +587,7 @@ def keep_n(conn) -> None:
     )
     ancien = etat(conn, item_id)
     with conn.transaction():
-        verdict = kernel._keep_n(conn, ancien, runs[2], 2)
+        verdict = reduction._keep_n(conn, ancien, runs[2], 2)
     finaliste, issue, a_tuer = verdict
     classes = {r["candidate"]: r for r in runs_de(conn, item_id)}
     assert finaliste["id"] == runs[0]["id"] and issue == "ok", verdict
@@ -632,7 +633,7 @@ def keep_n(conn) -> None:
 def main() -> None:
     db.init_db()  # idempotent : ne détruit rien, rattrape juste le schéma
     workdir = Path(tempfile.mkdtemp(prefix="graphatom-fanout-"))
-    blocks.DATA_DIR = workdir
+    bureau.DATA_DIR = workdir
     try:
         with db.connect() as conn:
             sans_fanout(conn)

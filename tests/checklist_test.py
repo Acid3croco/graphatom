@@ -27,6 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks  # noqa: E402
+from graphatom import context, workspace as bureau  # noqa: E402
 from graphatom import github_sync as gs  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -134,7 +135,7 @@ def renoncement_force(bundle: dict, workspace: Path) -> None:
         "printf '%s' '{\"outcome\":\"fail\",\"summary\":\"critère 2 ouvert\"}' "
         "> outcome.json"
     )
-    ctx = blocks.Context(
+    ctx = context.Context(
         FakeConn({}),
         {"id": 71, "node": "validate", "cycle": 1, "attempt": 1,
          "candidate": None},
@@ -177,8 +178,8 @@ def main() -> None:
     print("1. review obligatoire avant release et close ; cycle borné ✓")
 
     with tempfile.TemporaryDirectory() as tmp:
-        blocks.DATA_DIR = Path(tmp)
-        workspace = blocks.item_workspace(ITEM_ID)
+        bureau.DATA_DIR = Path(tmp)
+        workspace = bureau.item_workspace(ITEM_ID)
 
         # 2. pas de workspace, pas de validate.md : la question d'avant
         nue = question_body()

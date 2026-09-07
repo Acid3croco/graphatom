@@ -26,6 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import blocks  # noqa: E402
+from graphatom import workspace as bureau  # noqa: E402
 from graphatom import github_sync as gs  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -144,8 +145,8 @@ def main() -> None:
     print("2. le prompt de scope : l'exception, le corps intouché, la spec ✓")
 
     with tempfile.TemporaryDirectory() as tmp:
-        blocks.DATA_DIR = Path(tmp)
-        workspace = blocks.item_workspace(ITEM_ID)
+        bureau.DATA_DIR = Path(tmp)
+        workspace = bureau.item_workspace(ITEM_ID)
 
         # 3. pas de criteria.md : rien n'est dit, et la question ne bouge pas
         nue = question_body()
