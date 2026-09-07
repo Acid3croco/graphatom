@@ -14,6 +14,11 @@ ce que le test les rende :
      n'empêche pas un item sur un nœud bon marché de démarrer, au même tick
   4. le défaut se dérive du nombre de cœurs, la configuration le surcharge,
      et `GET /api/load` rend les runs en vol et le plafond effectif
+  7. le plafond global se lit sur les runs en vol, jamais en plus d'eux :
+     trois items d'un run, plafond 2 → un tick en réserve deux, et rend 2
+  8. la place d'un item est son plafond moins ses runs en vol : une course
+     plus large que la place attend entière, part au dernier recours à sa
+     largeur — le tick la rend —, et un candidat déjà en vol réduit la place
 
 La base est celle de l'item de test, dérivée comme celle d'un agent : le
 compte des runs en vol est global, donc il ne se mesure que seul.
@@ -100,6 +105,17 @@ def rendre(conn) -> int:
     for run_id in tenus:
         kernel.apply(conn, run_id, {"outcome": "ok"})
     return len(tenus)
+
+
+def epuiser(conn, items: list[int]) -> None:
+    """Rend et tick jusqu'à ce que ces items soient tous au terminal."""
+    rendre(conn)
+    for _ in range(20):
+        if not actifs(conn, items):
+            break
+        scheduler.tick(conn)
+        rendre(conn)
+    assert not actifs(conn, items), actifs(conn, items)
 
 
 # -------------------------------------------------------------------- épreuves
@@ -199,13 +215,7 @@ def plafond_par_item(conn) -> None:
     print(f"   rail vide au tick suivant → les 4 candidats partent ensemble, "
           "jamais en deux fois ✓")
 
-    rendre(conn)
-    for _ in range(20):
-        if not actifs(conn, [large, petit]):
-            break
-        scheduler.tick(conn)
-        rendre(conn)
-    assert not actifs(conn, [large, petit]), actifs(conn, [large, petit])
+    epuiser(conn, [large, petit])
     print("   les deux items sont allés au bout ✓")
 
 
@@ -287,12 +297,63 @@ def api_load(conn) -> None:
     print(f"5. GET /api/load → {charge} : runs et constructions en vol, "
           "avec leurs plafonds effectifs ✓")
 
+    epuiser(conn, [item_id])
+
+
+def plafond_global_borne(conn) -> None:
+    """7 : un rail plein n'admet rien — le plafond se lit sur les runs en vol.
+
+    La course large est admise la première : c'est elle que le dispatch
+    regarde en premier, sur un rail que les deux runs d'après remplissent.
+    Un plafond lu en plus des runs en vol, et non en moins, la ferait naître
+    par-dessus la charge.
+    """
+    scheduler.MAX_RUNS, scheduler.MAX_RUNS_PER_ITEM = 2, 8
+    scheduler.MAX_ACTIVE_ITEMS = 8
+    assert en_vol(conn) == 0, "le rail n'est pas vide au départ"
+    large = seme(conn, LARGE)
+    etroits = [seme(conn, None) for _ in range(2)]
+    assert scheduler.tick(conn) == 2, "le tick ne rend pas le compte des runs réservés"
+    assert [par_item(conn, i) for i in etroits] == [1, 1], "un item étroit attend"
+    assert runs_de(conn, large) == [], "la course est partie sur la place des étroits"
+    print(f"7. plafond 2 : la course de {LARGE} attend, les deux items étroits "
+          "volent, le tick rend 2 ✓")
+
+    assert scheduler.tick(conn) == 0, "un rail plein a réservé"
+    assert en_vol(conn) == 2 and runs_de(conn, large) == [], \
+        f"{en_vol(conn)} runs en vol : la course est née par-dessus le plafond"
+    print("   rail plein, rien rendu : le tick suivant ne réserve rien et rend 0 ✓")
+    epuiser(conn, [large, *etroits])
+
+
+def place_par_item(conn) -> None:
+    """8 : la place d'un item, c'est son plafond moins ses runs en vol.
+
+    Le dispatch ne coupe jamais une course : le seul état où un item a des
+    runs en vol *et* des candidats à naître, le test le joue à la main par
+    `_reserve`. C'est là que la soustraction se voit.
+    """
+    scheduler.MAX_RUNS, scheduler.MAX_RUNS_PER_ITEM = 8, 2
+    scheduler.MAX_ACTIVE_ITEMS = 8
+    large, petit = seme(conn, LARGE), seme(conn, None)
+    assert scheduler.tick(conn) == 1, "le tick a réservé au-delà de l'item étroit"
+    assert (par_item(conn, large), par_item(conn, petit)) == (0, 1), \
+        (par_item(conn, large), par_item(conn, petit))
     rendre(conn)
-    for _ in range(10):
-        if not actifs(conn, [item_id]):
-            break
-        scheduler.tick(conn)
-        rendre(conn)
+    assert scheduler.tick(conn) == LARGE, "le dernier recours ne rend pas sa largeur"
+    assert par_item(conn, large) == LARGE, par_item(conn, large)
+    print(f"8. place 2 < largeur {LARGE} : l'item étroit part seul, tick 1 ; rail "
+          f"vide, la course passe entière et le tick rend {LARGE} ✓")
+    epuiser(conn, [large, petit])
+
+    entamee = seme(conn, LARGE)
+    assert scheduler._reserve(conn, entamee, 1) == 1
+    assert scheduler._dispatch(conn) == 0, \
+        "le dispatch a complété une course sur une place déjà prise"
+    assert par_item(conn, entamee) == 1, par_item(conn, entamee)
+    print("   un candidat en vol compte dans la place de son item : 2 - 1 < "
+          f"{LARGE}, rien de plus ne naît ✓")
+    epuiser(conn, [entamee])
 
 
 def main() -> None:
@@ -314,6 +375,8 @@ def main() -> None:
             plafond_par_item(conn)
             api_load(conn)
             defaut_des_coeurs()
+            plafond_global_borne(conn)
+            place_par_item(conn)
     finally:
         db.drop_agent_db()
         (db.DSN, scheduler.MAX_RUNS, scheduler.MAX_RUNS_PER_ITEM,

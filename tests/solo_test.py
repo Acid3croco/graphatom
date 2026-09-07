@@ -3,7 +3,8 @@
 Sur une base jetable, le dispatch réel et un exécuteur factice vérifient les
 deux sens du verrou : un solo attend les runs déjà en vol, puis aucun autre
 item ne part sous lui. L'attente ne crée aucune ligne `node_run` ; elle ne
-pose donc ni bail ni numéro de tentative.
+pose donc ni bail ni numéro de tentative. Le tick rend ce qu'il a fait : 1
+par run réservé, et 0 — le dispatch aussi — tant que le solo vole.
 
 Usage : uv run python tests/solo_test.py
 """
@@ -66,7 +67,7 @@ def main() -> None:
             ordinaire = seme(conn, False)
             seul = seme(conn, True)
 
-            scheduler.tick(conn)
+            assert scheduler.tick(conn) == 1, "un run réservé compte 1"
             assert len(runs_de(conn, ordinaire)) == 1
             assert runs_de(conn, seul) == [], \
                 "le solo attendu ne doit avoir ni bail ni tentative"
@@ -74,21 +75,22 @@ def main() -> None:
             print("1. un run ordinaire vole : le solo attend sans node_run ✓")
 
             rendre(conn, ordinaire)
-            scheduler.tick(conn)
+            assert scheduler.tick(conn) == 1, "le solo réservé compte 1"
             solo_runs = runs_de(conn, seul)
             assert len(solo_runs) == 1 and solo_runs[0]["attempt"] == 1
             assert scheduler.etat_solo(conn) == {"running": 1, "waiting": 0}
             print("2. voie vide : le solo part à sa première tentative ✓")
 
             voisin = seme(conn, False)
-            scheduler.tick(conn)
+            assert scheduler._dispatch(conn) == 0, "un solo en vol, et le dispatch compte"
+            assert scheduler.tick(conn) == 0, "un solo en vol, et le tick compte"
             assert runs_de(conn, voisin) == [], \
                 "un voisin ne doit avoir ni bail ni tentative sous un solo"
             assert scheduler.en_vol(conn) == 1
-            print("3. le solo vole : aucun voisin n'est réservé ✓")
+            print("3. le solo vole : aucun voisin n'est réservé, tick et dispatch rendent 0 ✓")
 
             rendre(conn, seul)
-            scheduler.tick(conn)
+            assert scheduler.tick(conn) == 1, "le voisin réservé compte 1"
             voisin_runs = runs_de(conn, voisin)
             assert len(voisin_runs) == 1 and voisin_runs[0]["attempt"] == 1
             print("4. le solo rendu : le voisin part à sa première tentative ✓")
