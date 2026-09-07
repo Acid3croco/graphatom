@@ -203,6 +203,7 @@ def preuve_api(conn, base: str, items: list[int], rev: str) -> None:
     assert graphs == [{"id": rev, "name": "web-vitrine", "items": len(items),
                        "published_at": graphs[0]["published_at"]}], graphs
     status, bundle = get_json(base, f"/api/graph/{rev}")
+    assert status == 200, "une révision connue répond 200, comme les collections"
     assert bundle["nodes"] == BUNDLE_VITRINE["nodes"] and bundle["items"] == len(items)
     assert get_json(base, "/api/graph/r%C3%A9v-x") == (
         404, {"error": "révision rév-x inconnue"}), "la révision est décodée"
