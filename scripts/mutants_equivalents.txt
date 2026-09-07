@@ -42,8 +42,8 @@ scheduler:156:37:int  # longueur d'affichage d'une révision dans un message d'a
 worktree:46:16:int  # GIT_TIMEOUT_S : délai des git du dépôt, réglage de patience
 worktree:252:75:int  # une branche dont l'atelier vient d'être retiré n'est plus tenue : la seconde boucle la supprime et la compte de toute façon
 worktree:259:34:compare:0:Eq  # branch -D ne rate que sur une branche tenue par un atelier, que 'tenues' vient d'exclure : le code est toujours 0
-activation:116:11:compare:0:Lt  # instant de la reprise autorisée : < et <= sont indistinguables sur une horloge
-activation:99:74:bool  # text=False rend des bytes, et int() les lit pareil : la clé du verrou est la même
+activation:120:11:compare:0:Lt  # instant de la reprise autorisée : < et <= sont indistinguables sur une horloge
+activation:104:66:bool  # text=False rend des bytes, et int() les lit pareil : la clé du verrou est la même
 quota:37:23:int  # BUILD_LOCK_NAMESPACE est un identifiant arbitraire, lu des deux côtés par le symbole : toute valeur fait le même verrou
 quota:113:17:binop:Add  # l'ordre de parcours des places ne change rien : toutes sont essayées, la première libre est prise
 quota:31:24:int  # repli quand cpu_count() est inconnu : un choix de machine
@@ -66,3 +66,4 @@ quota:142:15:compare:0:Is  # place de la pause dans la boucle d'attente d'une pl
 quota:158:15:compare:0:Is  # idem pour la boucle des places globales
 quota:137:15:compare:0:GtE  # instant du renouvellement du bail dans la boucle d'item : >= et > se rejoignent
 reaper:37:20:boolop:And  # le balayage d'avant les verrous n'a pas d'autorité : élargir les suspects ne classe rien de plus, _doomed re-décide sous les verrous avec la même conjonction
+activation:131:52:int  # le code du CompletedProcess factice n'est jamais lu : l'erreur est déjà posée depuis l'OSError, et seul le non-zéro compte
