@@ -436,6 +436,19 @@ def places_par_item(tmp: Path) -> None:
           "deux items travaillent en même temps ✓")
 
 
+def chef_de_session(tmp: Path) -> None:
+    """13. La commande est chef de sa propre session : sa famille se révoque d'un
+    seul geste, et le preneur ne tue jamais son propre groupe."""
+    temoin = tmp / "session.txt"
+    code = quota.run(["sh", "-c", f"echo $$ $(ps -o pgid= -p $$) > {temoin}"])
+    assert code == 0, code
+    pid, pgid = (int(x) for x in temoin.read_text().split())
+    assert pid == pgid, "la commande n'est pas chef de son groupe"
+    assert pgid != os.getpgid(0), "la commande partage le groupe du preneur"
+    print("13. la commande lancée sous quota est chef de sa session, hors du "
+          "groupe du preneur ✓")
+
+
 def main() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="graphatom-quota-edges-"))
     workspace = tmp / "item-7"
@@ -461,6 +474,7 @@ def main() -> None:
         sigterm_en_commande(tmp)
         sigterm_en_attente(workspace)
         places_par_item(tmp)
+        chef_de_session(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("\nbords du quota : OK")
