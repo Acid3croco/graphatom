@@ -99,6 +99,18 @@ Un survivant est une preuve qui manque. Le runner est lui-même prouvé par
 `tests/mutants_test.py`, et « zéro survivant » se lit toujours avec son
 périmètre : les modules joués et les opérateurs de ce runner.
 
+La campagne du 7 septembre 2026 a joué les trente-huit modules de
+`src/graphatom`, chacun sur une copie de la tête du dépôt et avec les
+preuves qui l'exercent : 1 263 mutants, 1 193 tués, 68 équivalents inscrits
+avec leur raison, aucun survivant, deux dépassements examinés. Ces deux-là
+sont des blocages par construction, qu'aucune preuve ne peut voir autrement
+qu'en s'éternisant : la boucle qui décale les étiquettes du SVG, une fois
+sa garde niée, ne s'arrête plus ; le fil de notification du canal web,
+rendu non-démon, retient l'interpréteur après que la preuve est tombée.
+Un verdict ne vaut que ce que valent les preuves : une preuve qui tombe
+sous la charge « tue » tout mutant qu'elle croise, et seule une seconde
+campagne du même module le montre.
+
 ```sh
 uv run python scripts/mutants.py src/graphatom/validation.py tests/validate_test.py
 ```
