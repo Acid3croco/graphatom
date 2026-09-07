@@ -180,7 +180,7 @@ def _previous_batch(conn, item: dict, run: dict) -> int | None:
         "AND node = %s AND cycle = %s AND attempt < %s",
         (item["id"], run["node"], run["cycle"], run["attempt"]),
     ).fetchone()
-    if previous is None or previous["attempt"] is None:
+    if previous["attempt"] is None:  # un agrégat rend toujours sa ligne
         return None
     current_batch = _retry_batch(conn, item, run, run["attempt"])
     previous_batch = _retry_batch(conn, item, run, previous["attempt"])
