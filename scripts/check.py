@@ -43,7 +43,8 @@ CORE_PY = (
 )
 
 FULL_PY = (
-    "activation_test.py", "crash_test.py", "cycle_test.py", "db_schema_test.py",
+    "activation_test.py", "cli_test.py", "crash_test.py", "cycle_test.py",
+    "db_schema_test.py",
     "deterministic_retry_test.py", "effect_test.py", "escalade_timeout_test.py",
     "fanout_course_test.py", "fanout_guards_test.py", "fanout_isolation_test.py",
     "fanout_opencode_test.py", "fanout_promotion_test.py",
@@ -54,7 +55,8 @@ FULL_PY = (
     "quota_edges_test.py", "quota_test.py", "reconnect_test.py",
     "scheduler_dispatch_test.py", "shell_activation_test.py",
     "shell_deploy_test.py", "shell_release_test.py", "shell_worktree_test.py",
-    "silence_test.py", "solo_test.py", "verrou_test.py",
+    "silence_test.py", "solo_test.py", "verrou_test.py", "web_pages_test.py",
+    "web_server_test.py",
 )
 
 LIVE_PY = ("opencode_test.py",)

@@ -6,3 +6,4 @@ data/
 profiles/
 c0.txt
 travail-c*.txt
+.coverage-rules/

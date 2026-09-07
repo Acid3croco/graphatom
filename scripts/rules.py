@@ -206,13 +206,25 @@ def _crap(functions, report: dict) -> list[str]:
     return problems
 
 
+def _classified_tests() -> list[Path]:
+    """Les preuves des paliers train, core et full — jamais le palier live.
+
+    L'inventaire fermé de `check.py` fait foi : `live` dépend d'un
+    fournisseur réel et du réseau, la couverture ne l'attend pas.
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import check  # noqa: PLC0415 — le module voisin, lu pour son inventaire
+    names = (*check.TRAIN_PY, *check.CORE_PY, *check.FULL_PY)
+    return [ROOT / "tests" / name for name in names]
+
+
 def coverage(tests: list[Path] | None = None) -> list[str]:
     data_dir = ROOT / ".coverage-rules"
     data_dir.mkdir(exist_ok=True)
     for stale in data_dir.glob(".coverage*"):
         stale.unlink()
     _coverage_hook()
-    _measure(tests or sorted((ROOT / "tests").glob("*_test.py")), data_dir)
+    _measure(tests or _classified_tests(), data_dir)
     report = _lines_report(data_dir)
     problems = []
     for path, entry in sorted(report["files"].items()):
