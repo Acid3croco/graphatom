@@ -235,10 +235,16 @@ def preuve_usage() -> None:
     rien = cli()
     assert rien.returncode == 2 and "the following arguments are required: cmd" in rien.stderr, \
         (rien.returncode, rien.stderr)
+    for sous_commande in (("github-sync", "--graph", "g.json"),
+                          ("split-close", "--mother", "1", "--children", "2")):
+        sans_repo = cli(*sous_commande)
+        assert sans_repo.returncode == 2 and "required: --repo" in sans_repo.stderr, \
+            (sous_commande, sans_repo.stderr)
     defauts = commande._parser().parse_args(["serve"])
     assert (defauts.port, defauts.host, defauts.by, defauts.notify_cmd) == \
         (8848, "127.0.0.1", "jack", None), vars(defauts)
-    print("7. sans commande → usage en 2 ; serve par défaut : 127.0.0.1:8848, signé jack ✓")
+    print("7. sans commande ou sans --repo → usage en 2 ; serve par défaut : 127.0.0.1:8848, "
+          "signé jack ✓")
 
 
 def main() -> None:
