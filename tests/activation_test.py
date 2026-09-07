@@ -351,14 +351,14 @@ def sha_du_module(banc: Banc) -> None:
             raise OSError("git introuvable")
         return reel(args, **kwargs)
 
-    def git_en_echec(args, **kwargs):
-        if args[:1] == ["git"]:
-            return subprocess.CompletedProcess(args, 128, stdout="", stderr="fatal")
-        return reel(args, **kwargs)
-
-    for casse in (sans_git, git_en_echec):
-        with patche(activation.subprocess, "run", casse):
-            assert activation._worker_sha() == "inconnu"
+    with patche(activation.subprocess, "run", sans_git):
+        assert activation._worker_sha() == "inconnu"
+    # le vrai git sur un dossier sans dépôt : il répond 128, pas une exception
+    hors_depot = Path(tempfile.mkdtemp(prefix="graphatom-sans-git-"))
+    fichier_deplace = str(hors_depot / "src" / "graphatom" / "activation.py")
+    with patche(activation, "__file__", fichier_deplace):
+        assert activation._worker_sha() == "inconnu"
+    shutil.rmtree(hors_depot)
     # sans GRAPHATOM_REPO_DIR, le checkout relu est celui du dépôt du module :
     # une demande qui veut sa tête ne bute pas sur le checkout
     run = banc.demande(tete)
