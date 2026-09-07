@@ -263,6 +263,16 @@ def preuve_fanout(graph: dict) -> None:
     assert agents[0] == {"cli": "claude", "model": "opus", "effort": "high"}, agents
     assert agents[3] == {"cli": "claude", "model": "haiku", "effort": "high"}, agents
     assert all(c["cmd"] is None for c in fanout["candidates"]), fanout
+    compose = api.candidate(BUNDLE, {"block": "ACT", "config": {
+        "execution": {"cmd": "mon-outil --modele {model}"}, "fanout": FANOUT_VITRINE}},
+        0, {"label": "x"})
+    assert compose["agent"] == {"cli": "claude", "model": "opus", "effort": "high",
+                                "cmd": "mon-outil --modele {model}", "cmd_uses_executor": True}, \
+        "un candidat composé dit sa commande et le drapeau"
+    brut = api.candidate(BUNDLE, {"block": "ACT", "config": {
+        "execution": {"kind": "command", "cmd": "true"}, "fanout": FANOUT_VITRINE}},
+        0, {"label": "x"})
+    assert brut["agent"] == {"cmd": "true"}, "une commande brute : ni modèle ni drapeau"
     assert api.fanout(BUNDLE, {"block": "ACT", "config": {}}) is None
     print("   fanout projeté : 4 agents structurés effectifs ✓")
 

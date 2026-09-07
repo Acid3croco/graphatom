@@ -278,7 +278,7 @@ def api_load(conn) -> None:
     with socket.socket() as libre:  # un port éphémère : le rail peut tourner à côté
         libre.bind(("127.0.0.1", 0))
         port = libre.getsockname()[1]
-    threading.Thread(target=web.serve, args=(port, "plafond-test"),
+    threading.Thread(target=web.serve, args=(port, "plafond-test", None, "127.0.0.1"),
                      daemon=True).start()
     url = f"http://127.0.0.1:{port}/api/load"
     charge = None

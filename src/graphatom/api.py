@@ -76,14 +76,11 @@ def items(conn) -> list[dict]:
 def candidate(bundle: dict, spec: dict, index: int, variant: dict) -> dict:
     """Une variante et les champs de son exécuteur résolu."""
     resolved = executors.resolve(bundle, candidate_node(spec, index))
-    agent = {key: value for key, value in {
-        "cli": resolved.cli,
-        "model": resolved.model,
-        "effort": resolved.effort,
-        "cmd": resolved.cmd,
-        "cmd_uses_executor": resolved.kind == "composed",
-    }.items() if value is not None
-             and not (key == "cmd_uses_executor" and value is False)}
+    fields = {"cli": resolved.cli, "model": resolved.model,
+              "effort": resolved.effort, "cmd": resolved.cmd}
+    agent = {key: value for key, value in fields.items() if value is not None}
+    if resolved.kind == "composed":  # le drapeau n'est dit que quand il est vrai
+        agent["cmd_uses_executor"] = True
     return {"variant": variant, "agent": agent, "cmd": resolved.cmd}
 
 

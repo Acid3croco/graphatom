@@ -94,6 +94,8 @@ def preuve_routes(base: str) -> None:
     assert status == 404 and body == b"introuvable", (status, body)
     assert en_tetes["Content-Type"].startswith("text/html"), en_tetes
     assert appel(base, "GET", "/item/abc")[0] == 404, "un id non numérique n'est pas une page"
+    assert get_json(base, "/api/item/abc") == (404, {"error": "route inconnue : /api/item/abc"}), \
+        "un id non numérique n'est pas une route JSON non plus"
     status, _, body = appel(base, "POST", "/nope", b"", JSON)
     assert (status, json.loads(body)) == (404, {"ok": False, "message": "introuvable"})
     status, _, body = appel(base, "POST", "/nope", b"")
