@@ -11,6 +11,8 @@ survivait : la règle existait, rien ne la tenait.
      variantes passent, neuf sont refusées, et quatre variantes répétées
      deux fois passent
   4. `execution.silence_s` suit la même borne stricte
+  5. une variante posée sur la config : un objet fusionne avec un objet, un
+     scalaire remplace, une clé neuve s'ajoute, le reste est hérité
 
 Usage : uv run python tests/validation_edges_test.py
 """
@@ -20,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import graph  # noqa: E402
+from graphatom import bundle as forme, graph  # noqa: E402
 
 PROMPT = "fais le travail"
 
@@ -84,7 +86,28 @@ def variantes_sans_repeat() -> None:
     refused(bundle(fanout=fanout(9)), "9 variantes × 1 = 9 candidats")
     graph.validate(bundle(fanout=fanout(4, repeat=2)))
     refused(bundle(fanout=fanout(3, repeat=3)), "3 variantes × 3 = 9 candidats")
+    # l'énumération des candidats suit la même arithmétique, sans repeat comme avec
+    spec = bundle(fanout=fanout(8))["nodes"]["travail"]
+    assert len(forme.fanout_variants(spec)) == 8
+    spec = bundle(fanout=fanout(4, repeat=2))["nodes"]["travail"]
+    assert [v["label"] for v in forme.fanout_variants(spec)] == \
+        ["v0", "v0", "v1", "v1", "v2", "v2", "v3", "v3"]
     print("3. sans repeat, une variante = un candidat : 8 passent, 9 sont refusés ✓")
+
+
+def overlay_objets() -> None:
+    """Une variante fusionne un objet avec un objet, et remplace tout le reste."""
+    spec = bundle(fanout={"variants": [{"agent": {"model": "gros"}, "label": "a"},
+                                       {"execution": "brut", "nouveau": {"k": 1}}],
+                          "reduce": "first_pass"})["nodes"]["travail"]
+    premier = forme.candidate_node(spec, 0)["config"]
+    assert premier["agent"] == {"prompt": PROMPT, "model": "gros"}, premier
+    assert premier["execution"] == {"kind": "agent"} and premier["label"] == "a"
+    second = forme.candidate_node(spec, 1)["config"]
+    assert second["execution"] == "brut", "un scalaire posé sur un objet le remplace"
+    assert second["nouveau"] == {"k": 1}, "un objet posé sur une clé absente est pris tel quel"
+    assert second["agent"] == {"prompt": PROMPT}, "ce que la variante tait est hérité"
+    print("5. overlay : objet sur objet fusionne, scalaire remplace, clé neuve s'ajoute ✓")
 
 
 def silence_strict() -> None:
@@ -101,6 +124,7 @@ def main() -> None:
     borne_stricte()
     variantes_sans_repeat()
     silence_strict()
+    overlay_objets()
     print("\nbornes de validation : OK — chaque seuil tient sa preuve")
 
 

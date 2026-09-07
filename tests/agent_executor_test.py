@@ -344,8 +344,32 @@ def variantes() -> None:
     print("6. les variantes produisent deux commandes sans contamination ✓")
 
 
+def defauts_et_environnement() -> None:
+    """La passation vaut par défaut ; l'environnement ne porte que ce qui existe.
+
+    Un adaptateur sans variable d'effort (claude) reçoit un effort sans le
+    transmettre, et jamais sous une clé None ; un réglage absent n'apparaît
+    pas. Une passation tue se lit `False`, et rien d'autre ne l'éteint.
+    """
+    sans = executors.resolve(bundle({"cli": "claude"}), node({"prompt": "p"}))
+    assert sans.handoff is True, sans
+    coupee = executors.resolve(bundle({"cli": "claude"}),
+                               node({"prompt": "p", "passation": False}))
+    assert coupee.handoff is False, coupee
+    env = executors.environment(executors.Executor(
+        cli="claude", model="opus", cmd=None, effort="high", timeout_s=None))
+    assert env == {"CLAUDE_MODEL": "opus", "GRAPHATOM_AGENT_CLI": "claude"}, env
+    env = executors.environment(executors.Executor(
+        cli="codex", model=None, cmd=None, effort="high", timeout_s=30))
+    assert env == {"CODEX_REASONING_EFFORT": "high", "CODEX_TIMEOUT_S": "30",
+                   "GRAPHATOM_AGENT_CLI": "codex"}, env
+    print("passation vraie par défaut, fausse sur demande ; environnement sans clé "
+          "vide ni None ✓")
+
+
 def main() -> None:
     resolution()
+    defauts_et_environnement()
     tmp = Path(tempfile.mkdtemp(prefix="graphatom-executor-"))
     bureau.DATA_DIR = tmp / "data"
     os.environ.pop("GRAPHATOM_REPO_DIR", None)

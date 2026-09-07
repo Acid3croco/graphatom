@@ -2,3 +2,4 @@
 # Sans raison, le runner refuse la ligne. La ligne et la colonne sont celles
 # du source à la révision courante : un module qui bouge invalide l'entrée,
 # et c'est voulu — une équivalence se rejustifie.
+validation:423:19:int  # couleur « fini » du parcours : toute valeur autre que 1 (« en cours ») joue le même rôle, la valeur n'est jamais relue
