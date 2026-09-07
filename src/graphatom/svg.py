@@ -14,7 +14,7 @@ def layers(bundle: dict) -> list[list[str]]:
         queue.append((target, 0))
     while queue:
         n, d = queue.pop(0)
-        if n in depth and depth[n] <= d:
+        if n in depth:  # file FIFO : la première visite est la moins profonde
             continue
         depth[n] = d
         for t in (nodes[n].get("edges") or {}).values():

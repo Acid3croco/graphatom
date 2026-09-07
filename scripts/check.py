@@ -40,7 +40,7 @@ CORE_PY = (
     "mutants_test.py", "orphans_test.py", "passation_test.py", "policy_test.py",
     "prompt_edges_test.py", "prompt_reprise_test.py", "scheduler_loop_test.py",
     "split_deps_test.py",
-    "starved_test.py", "test_harness_test.py", "timeout_test.py",
+    "starved_test.py", "svg_test.py", "test_harness_test.py", "timeout_test.py",
     "validate_test.py", "validation_edges_test.py", "validation_refusals_test.py",
     "worktree_test.py",
 )

@@ -18,8 +18,6 @@ réponse, un passé par un fan-out — et les pages rendues dessus :
   5. le fan-out : le candidat accolé à sa tentative, le run recalé, et le
      prix du jugement face à celui des candidats
   6. les rendus purs : durées, tokens, résultat, battement, release cassée
-  7. le SVG : arêtes fusionnées, retours en voies séparées, étiquettes
-     décalées, couleurs des nœuds, escalade en pointillé
 
 Usage : uv run python tests/web_pages_test.py
 """
@@ -273,80 +271,6 @@ def preuve_release_cassee(conn, item_id: int) -> None:
     print("   release.json cassé : dit en page, None en JSON ✓")
 
 
-BUNDLE_SVG = {
-    "name": "svg", "entry": "a", "on_kernel": {"escalate_to": "b"},
-    "nodes": {
-        "a": {"block": "ACT", "edges": {"ok": "c", "ko": "c", "far": "d"}},
-        "b": {"block": "JUDGE&", "edges": {"ok": "c"}},
-        "c": {"block": "CHECK", "edges": {"done": "e", "back": "a"}},
-        "d": {"block": "WAIT", "escalade": True, "edges": {"retry": "b", "expired": "e"}},
-        "e": {"terminal": True},
-    },
-}
-
-
-def preuve_svg() -> None:
-    """7. le SVG : placement, arêtes, étiquettes, couleurs."""
-    assert svg.layers(BUNDLE_SVG) == [["a", "b"], ["c", "d"], ["e"]], "la cible on_kernel en couche 0"
-    dessin = svg.graph_svg(BUNDLE_SVG, "c")
-    assert dessin.startswith("<svg viewBox='0 0 567 178' ") and dessin.endswith("</svg>")
-    assert "<path d='M144,29.0 C184,29.0 157,29.0 197,29.0' fill='none'" in dessin, "a → c en avant"
-    assert "y='24.0' font-size='9' fill='#777' text-anchor='middle'>ok, ko</text>" in dessin, \
-        "deux issues vers la même cible, un seul trait"
-    assert dessin.count("x='170.5' y='56.0'") == 1 and dessin.count("x='170.5' y='46.0'") == 1, \
-        "a → d et b → c ont le même milieu : la seconde étiquette est décalée, pas empilée"
-    assert "<path d='M197,29.0 C137,172 204,172 144,29.0'" in dessin, "c → a contourne par le bas"
-    assert "<path d='M197,93.0 C137,158 204,158 144,93.0'" in dessin, "d → b, une voie plus haut"
-    assert "y='168'" in dessin and "y='154'" in dessin, "une étiquette par voie"
-    assert dessin.count("marker-end='url(#arr)'") == 7, "sept couples (source, cible)"
-    assert ("<rect x='197' y='12' width='132' height='34' rx='7' fill='#ffb74d' stroke='#888'/>"
-            "<text x='263.0' y='33.0' font-size='11' text-anchor='middle'>c · CHECK</text>") in dessin
-    assert dessin.count("fill='#ffb74d'") == 1, "un seul état courant"
-    assert "fill='#e3ecf7' stroke='#888'/><text x='78.0' y='33.0' font-size='11' " \
-           "text-anchor='middle'>a · ACT</text>" in dessin
-    assert "fill='#e3ecf7' stroke='#888' stroke-dasharray='4 2'/>" in dessin, "l'escalade en pointillé"
-    assert "fill='#eee' stroke='#888'/><text x='448.0' y='33.0' font-size='11' " \
-           "text-anchor='middle'>e</text>" in dessin, "un terminal : gris, sans bloc"
-    assert ">b · JUDGE&amp;</text>" in dessin, "les libellés sont échappés"
-    print("7. SVG : couches, arêtes fusionnées, voies de retour, étiquettes décalées, couleurs ✓")
-
-
-def preuve_partage(conn, fanout: int) -> None:
-    """5b. le prix du jugement face à celui des candidats — et le graph qui le permet."""
-    bundle = {"name": "juge", "entry": "gen", "on_kernel": {}, "agent": {"cli": "codex"},
-              "nodes": {"gen": {"block": "ACT", "config": {"fanout": {
-                            "variants": [{"label": "x"}], "reduce": "keep_n", "n": 1}}},
-                        "juge": {"block": "JUDGE", "config": {"finalists_from": "gen"}}}}
-    tentative = {"cycle": 1, "attempt": 1, "status": "applied", "finished_at": now()}
-    lot = [{"id": 3, "node": "juge", "candidate": None, "outcome": "chosen",
-            "result": {"usage": {"a": 1}, "elu": "A", "summary": "x l'emporte"}} | tentative,
-           {"id": 2, "node": "gen", "candidate": 0, "outcome": "ok",
-            "result": {"usage": {"b": 2, "modele": "x"}}} | tentative,
-           {"id": 1, "node": "gen", "candidate": None, "outcome": "ok",
-            "result": {"usage": {"c": 3.5}}} | tentative]
-    assert views.cost_split(bundle, lot) == {"judgement": {"a": 1}, "candidates": {"b": 2},
-                                             "other": {"c": 3.5}}, "trois parts disjointes"
-    decision = views.decision(999, bundle, lot)
-    assert decision["finalists"] == [{"letter": "A", "candidate": 0}], "un seul candidat, lettre A"
-    assert decision["selected"] == {"letter": "A", "candidate": 0} and decision["verdict"] is None
-    assert (decision["summary"], decision["judge"]["cli"]) == ("x l'emporte", "codex"), decision
-    seul = views.decision(999, bundle, [lot[0] | {"outcome": "sole", "result": {}}, *lot[1:]])
-    assert seul["selected"] == {"letter": "A", "candidate": 0} and seul["judge"] is None, \
-        "un finaliste unique passe sans juge : la lettre A, aucun modèle appelé"
-    aucun = views.decision(999, bundle, [lot[0] | {"outcome": "none", "result": {}}, lot[2]])
-    assert aucun["finalists"] == [] and aucun["selected"] is None, aucun
-    assert pages.split_line(bundle, lot) == ("<p class='meta' id='cout-jugement'>"
-                                             "jugement 1 a · candidats 2 b</p>")
-    noeuds = {n["name"]: n for n in api.graph(bundle, "juge")["nodes"]}
-    assert noeuds["juge"]["finalists_from"] == "gen" and "fanout" not in noeuds["juge"]
-    assert noeuds["gen"]["fanout"] == {"reduce": "keep_n", "repeat": 1, "candidates": [
-        {"variant": {"label": "x"}, "agent": {"cli": "codex"}, "cmd": None}]}
-    assert views.totals(lot) == {"a": 1, "b": 2, "c": 3.5}, "les textes d'usage ne s'additionnent pas"
-    assert api.item(conn, fanout)["item"]["usage_split"] == {
-        "judgement": {}, "candidates": {"input_tokens": 5}, "other": {}}, "l'API porte le partage"
-    print("   partage : jugement, candidats, autres ; le graph nomme fanout et source ✓")
-
-
 def main() -> None:
     db.init_db(drop=True)
     with db.connect() as conn:
@@ -365,7 +289,6 @@ def main() -> None:
         preuve_partage(conn, fanout)
         preuve_rendus_purs()
         preuve_release_cassee(conn, termine)
-        preuve_svg()
     print("\npages : OK — chaque cellule vient de la base, rien n'est inventé")
 
 

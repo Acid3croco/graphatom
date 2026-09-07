@@ -73,7 +73,7 @@ def effect(ctx: Context) -> dict:
     outbox = workspace.DATA_DIR / OUTBOX_NAME
     outbox.parent.mkdir(parents=True, exist_ok=True)
     outbox.touch()
-    applied = {line.split("\t", 1)[0] for line in outbox.read_text().splitlines()}
+    applied = {line.partition("\t")[0] for line in outbox.read_text().splitlines()}
     if logical_key not in applied:
         ctx.simulate_work()
         with outbox.open("a") as f:
