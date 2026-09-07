@@ -143,21 +143,36 @@ def init_db(drop: bool = False) -> list[str]:
                 "work_item, subject, graph_revision, heartbeat, "
                 "database_incarnation CASCADE"
             )
-        for essai in range(1, DDL_ESSAIS + 1):
-            try:
-                before = _shape(conn)
-                conn.execute(_schema().read_text())
-                after = _shape(conn)
-                break
-            except psycopg.errors.LockNotAvailable:
-                if essai == DDL_ESSAIS:
-                    raise RuntimeError(
-                        f"migration abandonnée après {DDL_ESSAIS} essais — "
-                        f"verrou tenu par {_bloqueurs(conn)}"
-                    ) from None
-                time.sleep(DDL_ATTENTE_S)
+        before, after = _migrate(conn)
     return ([f"+ {t}.{c} ({d})" for t, c, d in sorted(after - before)]
             + [f"- {t}.{c} ({d})" for t, c, d in sorted(before - after)])
+
+
+def _replay(conn: psycopg.Connection) -> tuple[set, set]:
+    """Rejoue le schéma une fois ; rend la forme des tables avant et après."""
+    before = _shape(conn)
+    conn.execute(_schema().read_text())
+    return before, _shape(conn)
+
+
+def _migrate(conn: psycopg.Connection) -> tuple[set, set]:
+    """Le schéma rejoué, `DDL_ESSAIS` fois au plus quand le verrou est tenu.
+
+    Les reprises attendent `DDL_ATTENTE_S` ; le dernier essai lève en nommant
+    le bloqueur, plutôt que d'attendre sans limite derrière lui.
+    """
+    for _ in range(DDL_ESSAIS - 1):
+        try:
+            return _replay(conn)
+        except psycopg.errors.LockNotAvailable:
+            time.sleep(DDL_ATTENTE_S)
+    try:
+        return _replay(conn)
+    except psycopg.errors.LockNotAvailable:
+        raise RuntimeError(
+            f"migration abandonnée après {DDL_ESSAIS} essais — "
+            f"verrou tenu par {_bloqueurs(conn)}"
+        ) from None
 
 
 def _bloqueurs(conn: psycopg.Connection) -> str:

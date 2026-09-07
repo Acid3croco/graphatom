@@ -255,6 +255,7 @@ def apply(conn: psycopg.Connection, run_id: int, submitted: dict) -> str:
         item, run = _locked(conn, run_id)
         rejected = _rejected(conn, item, run, submitted)
         if rejected is not None:
+            CLAIMED.discard(run_id)  # classé sans avancer : il ne vole plus non plus
             return rejected
         bundle = load_bundle(conn, item["revision"])
         node = bundle["nodes"][run["node"]]

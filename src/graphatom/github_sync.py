@@ -161,13 +161,13 @@ def _journal(events: list[dict]) -> str:
         f"{(' [' + e['outcome'] + ']') if e['outcome'] else ''}" for e in events)
 
 
-def _redraw(conn: Connection, gh: GitHub, item: dict) -> None:
-    """Réécrit l'accusé avec le journal à jour — s'il est déjà posté."""
+def _redraw(conn: Connection, gh: GitHub, item: dict) -> bool:
+    """Réécrit l'accusé avec le journal à jour. Faux tant qu'il n'est pas posté."""
     number = issue_number(item["subject_key"])
     mark = marker(ack_key(item))
     comment = next((c for c in gh.comments(number) if mark in c["body"]), None)
     if comment is None:
-        return  # l'accusé n'est pas encore posté — au prochain tick
+        return False  # l'accusé n'est pas encore posté — au prochain tick
     events = _events(conn, item["id"])
     retry = _ack_retry(item, comment["body"])
     body = (f"{mark}\n{ack_body(item, retry)}\n\n"
@@ -176,6 +176,7 @@ def _redraw(conn: Connection, gh: GitHub, item: dict) -> None:
     if comment["body"] != body:
         gh.edit_comment(comment["id"], body)
         print(f"#{number} ✎ trajectoire v{item['version']}", flush=True)
+    return True
 
 
 def paint_trajectories(conn: Connection, gh: GitHub, drawn: dict[int, int]) -> None:
@@ -183,19 +184,20 @@ def paint_trajectories(conn: Connection, gh: GitHub, drawn: dict[int, int]) -> N
 
     Une projection, comme les labels : le corps est reconstruit depuis la
     base. `drawn` retient la version déjà peinte pour ne rien faire quand
-    rien n'a bougé ; un PATCH raté n'y entre pas et se retente au tick
-    suivant, sans bloquer le rail.
+    rien n'a bougé ; un PATCH raté, ou un accusé pas encore visible, n'y
+    entre pas et se retente au tick suivant, sans bloquer le rail.
     """
     for item in gh_items(conn, gh):
         if drawn.get(item["id"]) == item["version"]:
             continue
         try:
-            _redraw(conn, gh, item)
+            painted = _redraw(conn, gh, item)
         except (urllib.error.URLError, OSError) as exc:
             print(f"#{issue_number(item['subject_key'])} trajectoire non éditée : "
                   f"{exc} — on réessaie", flush=True)
             continue
-        drawn[item["id"]] = item["version"]
+        if painted:
+            drawn[item["id"]] = item["version"]
 
 
 def report_terminals(conn: Connection, gh: GitHub) -> None:
