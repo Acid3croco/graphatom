@@ -33,3 +33,9 @@ kernel:325:61:int  # le run synthétique d'apply_item ne passe jamais par une is
 kernel:164:52:int  # sans fan-out, la tentative est au complet dès le premier candidat : le second numéro de la plage n'est jamais tiré
 reaper:36:19:compare:0:Lt  # instant d'expiration du bail : < et <= sont indistinguables sur une horloge
 reaper:56:7:compare:0:Lt  # idem, relu sous les verrous
+scheduler:60:46:boolop:Or  # taille par défaut de la machine : cpu_count() rend un entier ou None, 'or 4' n'est qu'un repli hors contrat
+scheduler:60:64:int  # diviseur de la taille par défaut : la moitié des cœurs est un choix, le plancher FANOUT_MAX_CANDIDATES est le contrat
+scheduler:60:70:int  # repli quand cpu_count() est inconnu : un choix de machine
+scheduler:65:66:int  # diviseur du plafond par item par défaut : idem, le plancher est le contrat
+scheduler:340:11:compare:0:LtE  # libre vaut 0 exactement quand le rail est plein : la suite ne réserve rien de plus (place 0, rail non vide), < et <= se rejoignent
+scheduler:156:37:int  # longueur d'affichage d'une révision dans un message d'arrêt
