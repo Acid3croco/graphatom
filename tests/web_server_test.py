@@ -17,17 +17,22 @@ Sur un Postgres jetable et le vrai serveur, dans un fil :
      formes invalides → 400, l'item ou le run étranger → 404, un décalage
      au-delà du fichier → contenu vide, et les octets nouveaux qui suivent
   7. les fichiers du workspace : PNG en image/png, JSON en application/json,
-     et aucune traversée — ni `..`, ni un sous-répertoire
+     et aucune traversée — ni `..`, ni un sous-répertoire, ni un lien
+     symbolique qui sort du workspace
   8. la base qui tombe : 500 en JSON sous `/api`, 500 en page ailleurs
   9. `notify_once` pousse le JSON de la question sur stdin de la commande,
      ne la marque dite que si la commande sort en 0 ; `notify_loop`
      survit à une base absente, et `serve --notify-cmd` dit chaque
      question ouverte en une passe
+ 10. N réponses valides et contraires, au même instant, sur la même question :
+     une seule est prise, les autres refusées « déjà réglée », la base porte
+     une ligne `answered` et une seule réponse
 
 Usage : uv run python tests/web_server_test.py
 """
 
 import json
+import threading
 import time
 from urllib.parse import quote, unquote
 
@@ -45,6 +50,7 @@ JSON = {"Accept": "application/json", "Content-Type": "application/json"}
 FORM = {"Content-Type": "application/x-www-form-urlencoded"}
 NOTIF = TMP / "notifications.jsonl"
 BY = "web-test"
+COUREURS = 6  # les réponses lâchées au même instant sur une même question
 
 
 def post_answer(base: str, fields, headers: dict = JSON) -> tuple[int, dict, bytes]:
@@ -260,17 +266,53 @@ def preuve_fichiers(base: str, item_id: int, autre_item: int) -> None:
     (atelier / "c0" / "dedans.txt").write_text("sous-répertoire\n")
     ailleurs.mkdir(exist_ok=True)
     (ailleurs / "secret.md").write_text("l'autre item\n")
+    (atelier / "lien.md").symlink_to(ailleurs / "secret.md")
+    assert (atelier / "lien.md").read_text() == "l'autre item\n", "le lien lui-même se lit"
     for nom, ctype in (("shot.png", "image/png"), ("release.json", "application/json"),
                        ("notes.md", "text/plain")):
         status, en_tetes, body = appel(base, "GET", f"/item/{item_id}/file/{nom}")
         assert status == 200 and en_tetes["Content-Type"] == f"{ctype}; charset=utf-8", en_tetes
         assert body == (atelier / nom).read_bytes(), nom
-    for nom in ("absent.md", f"..%2Fitem-{autre_item}%2Fsecret.md", "c0%2Fdedans.txt"):
+    for nom in ("absent.md", f"..%2Fitem-{autre_item}%2Fsecret.md", "c0%2Fdedans.txt",
+                "lien.md"):
         status, _, body = appel(base, "GET", f"/item/{item_id}/file/{nom}")
         assert (status, body) == (404, b"introuvable"), (nom, status)
     assert appel(base, "GET", f"/item/{item_id}/file/c0/dedans.txt")[0] == 404, \
         "un chemin à cinq segments n'est même pas une route de fichier"
-    print("7. fichiers : png, json, texte par suffixe ; .. et sous-répertoire → 404 ✓")
+    print("7. fichiers : png, json, texte par suffixe ; .., sous-répertoire et lien "
+          "vers l'extérieur → 404 ✓")
+
+
+def preuve_course(conn, base: str, token: str, item_id: int, qid: int) -> None:
+    """10. N réponses valides et contraires au même instant : une seule est prise."""
+    depart, issues, fautes = threading.Barrier(COUREURS), [], []
+
+    def repond(option: str) -> None:
+        try:
+            depart.wait(5)
+            issues.append(reponse_json(base, {"question_id": qid, "option": option,
+                                              "token": token}))
+        except BaseException as exc:  # noqa: BLE001 — relevée par la preuve
+            fautes.append(exc)
+
+    fils = [threading.Thread(target=repond, args=(OPTIONS[i % len(OPTIONS)],))
+            for i in range(COUREURS)]
+    for fil in fils:
+        fil.start()
+    for fil in fils:
+        fil.join(10)
+    if fautes:
+        raise fautes[0]
+    assert len(issues) == COUREURS and {s for s, _ in issues} == {200}, issues
+    lignes = conn.execute("SELECT state, answer FROM question WHERE item_id = %s",
+                          (item_id,)).fetchall()
+    assert len(lignes) == 1 and lignes[0]["state"] == "answered", lignes
+    prises = [p["message"] for _, p in issues if p["ok"]]
+    assert prises == [f"réponse « {lignes[0]['answer']} » enregistrée — le rail reprend"]
+    refusees = [p["message"] for _, p in issues if not p["ok"]]
+    assert refusees == ["question déjà réglée (answered)"] * (COUREURS - 1), refusees
+    print(f"10. {COUREURS} réponses contraires au même instant : une prise, "
+          f"{COUREURS - 1} refusées « déjà réglée », une ligne answered ✓")
 
 
 def preuve_panne(base: str) -> None:
@@ -393,6 +435,8 @@ def main() -> None:
         preuve_trace_identite(base, item_1, run["id"], item_2,
                               run_de(conn, item_2, "travail")["id"])
         preuve_fichiers(base, item_1, item_2)
+        item_3 = vitrine(conn)
+        preuve_course(conn, base, token, item_3, question_de(conn, item_3)["id"])
         preuve_panne(base)
     web.NOTIFY_POLL_S = 3600  # la boucle de notification s'endort avant que la base parte
     time.sleep(0.3)

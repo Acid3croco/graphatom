@@ -2,22 +2,26 @@
 
 Sur un Postgres jetable, `quota.run` joué dans ce processus — le preneur pose
 des gestionnaires de signaux, donc il vit dans le fil principal ; le test
-tient ou coupe les verrous depuis un fil d'à côté :
+tient ou coupe les verrous depuis un fil d'à côté, dont toute faute remonte
+à la preuve au `join`. Aucun lancement ne se fie à une pause : chaque fil et
+chaque commande disent quand ils sont prêts.
 
   1. sans DSN, sans identité d'item, sans commande : refus nommé, jamais
-     une place prise ; un workspace nomme l'item ou lui vaut une identité stable
+     une place prise ; un workspace nomme l'item ou lui vaut une identité
+     stable — la même d'un processus python à l'autre, distincte d'un chemin
+     à l'autre
   2. sans workspace, aucun marqueur d'attente n'est écrit ni retiré, et le
      code de la commande est rendu tel quel
   3. la place globale occupée : le preneur attend, redit son attente après
      `REPORT_S`, touche son marqueur, puis prend la place libérée
   4. `_stop` : une commande déjà finie n'est pas touchée ; une famille qui
-     ignore SIGTERM tombe au SIGKILL ; un groupe qui disparaît sous le coup
-     est absorbé, le chef récolté
+     ignore SIGTERM tombe au SIGKILL, le chef comme son enfant ; un groupe
+     qui disparaît sous le coup est absorbé, le chef récolté
   5. la session PostgreSQL du preneur meurt en pleine commande : la commande
-     est arrêtée, le code 75 rendu, la perte imprimée
+     et son enfant sont arrêtés, le code 75 rendu, la perte imprimée
   6. une base injoignable : 75 sans rien lancer
-  7. SIGTERM pendant la commande : elle est arrêtée, la sortie vaut 128+15,
-     le gestionnaire d'avant est remis
+  7. SIGTERM pendant la commande : elle et son enfant sont arrêtés, la sortie
+     vaut 128+15, le gestionnaire d'avant est remis
   8. SIGTERM pendant l'attente d'une place : sortie 128+15, marqueur retiré
 
 Usage : uv run python tests/quota_edges_test.py
@@ -48,7 +52,30 @@ from bords_outils import attend, patche, sortie_capturee  # noqa: E402
 
 INJOIGNABLE = "postgresql://graphatom:x@127.0.0.1:1/graphatom"
 DSN_VARS = ("GRAPHATOM_QUOTA_DSN", "GRAPHATOM_AGENT_DSN", "GRAPHATOM_DSN")
-TETU = "trap '' TERM; echo pret > {temoin}; sleep 30"
+# le chef écrit son PID et celui de son enfant, puis l'attend : c'est
+# l'enfant — le fils du fils — qui doit mourir avec lui
+FAMILLE = "sleep 30 & echo $$ $! > {temoin}; wait"
+TETU = "trap '' TERM; " + FAMILLE
+IDENTITE = "from graphatom import quota; print(quota._item_id())"
+
+
+class Fil(threading.Thread):
+    """Un fil démon dont la faute remonte à la preuve principale, au `join`."""
+
+    def __init__(self, cible):
+        super().__init__(target=cible, daemon=True)
+        self.faute: BaseException | None = None
+
+    def run(self) -> None:
+        try:
+            super().run()
+        except BaseException as exc:  # noqa: BLE001 — relevée au join
+            self.faute = exc
+
+    def join(self, timeout: float | None = None) -> None:
+        super().join(timeout)
+        if self.faute is not None:
+            raise self.faute
 
 
 @contextlib.contextmanager
@@ -79,6 +106,21 @@ def refuse(appel, erreur: type, motif: str) -> None:
         raise AssertionError(f"aucun refus : {motif}")
 
 
+def famille(temoin: Path) -> list[int]:
+    """Les PID du chef et de son enfant, tels que la commande les a écrits."""
+    return [int(pid) for pid in temoin.read_text().split()] if temoin.exists() else []
+
+
+def famille_prete(temoin: Path) -> bool:
+    return len(famille(temoin)) == 2
+
+
+def famille_morte(temoin: Path) -> bool:
+    """Ni le chef ni son enfant ne figurent plus dans /proc."""
+    pids = famille(temoin)
+    return len(pids) == 2 and not any(Path(f"/proc/{pid}").exists() for pid in pids)
+
+
 def refus() -> None:
     """1. sans DSN, sans item, sans commande : refusé avant toute place."""
     with environnement(**{nom: None for nom in DSN_VARS}):
@@ -87,17 +129,56 @@ def refus() -> None:
         refuse(quota._item_id, RuntimeError, "GRAPHATOM_WORKSPACE absents")
     with environnement(GRAPHATOM_ITEM_ID=None, GRAPHATOM_WORKSPACE="/data/item-12/c1"):
         assert quota._item_id() == 12
-    with environnement(GRAPHATOM_ITEM_ID=None, GRAPHATOM_WORKSPACE="/tmp/ailleurs"):
-        assert quota._item_id() == quota._item_id() != 12, "identité instable"
     refuse(lambda: quota.run([]), ValueError, "demande une commande")
     print("1. DSN, identité d'item ou commande absente : refus nommé ; un "
-          "workspace item-N vaut N, un autre une identité stable ✓")
+          "workspace item-N vaut N ✓")
+
+
+def identite_ailleurs(workspace: Path) -> int:
+    """`_item_id()` lu par un autre processus python, pour ce workspace."""
+    env = {**os.environ, "GRAPHATOM_WORKSPACE": str(workspace),
+           "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
+    env.pop("GRAPHATOM_ITEM_ID", None)
+    sortie = subprocess.run([sys.executable, "-c", IDENTITE], env=env,
+                            capture_output=True, text=True, check=True)
+    return int(sortie.stdout)
+
+
+def identite_stable(tmp: Path) -> None:
+    """1 bis. un workspace sans item-N : une identité au chemin, la même partout."""
+    ici, la = tmp / "ailleurs", tmp / "encore-ailleurs"
+    with environnement(GRAPHATOM_ITEM_ID=None, GRAPHATOM_WORKSPACE=str(ici)):
+        identite = quota._item_id()
+    assert identite != 7 and identite == identite_ailleurs(ici) == identite_ailleurs(ici), \
+        "l'identité change d'un processus à l'autre"
+    assert identite_ailleurs(la) != identite, "deux chemins, une seule identité"
+    print("1 bis. identité d'un workspace : la même d'un processus python à l'autre, "
+          "distincte d'un chemin à l'autre ✓")
+
+
+def tenant(duree_s: float) -> Fil:
+    """Un fil qui tient la seule place globale pendant `duree_s` — rendu une
+    fois la place prise, jamais avant."""
+    pret = threading.Event()
+
+    def tient():
+        with psycopg.connect(db.DSN, autocommit=True) as conn:
+            assert conn.execute("SELECT pg_try_advisory_lock(%s, 0)",
+                                (quota.BUILD_LOCK_NAMESPACE,)).fetchone()[0]
+            pret.set()
+            time.sleep(duree_s)
+
+    fil = Fil(tient)
+    fil.start()
+    if not pret.wait(5):
+        fil.join()  # sa faute, s'il en a une, avant la nôtre
+        raise AssertionError("la place n'est jamais tenue")
+    return fil
 
 
 def sans_workspace() -> None:
     """2. sans workspace : aucun marqueur, même en attendant, et le code tel quel."""
     fil = tenant(0.4)
-    time.sleep(0.1)
     with environnement(GRAPHATOM_WORKSPACE=None), patche(quota, "LEASE_REFRESH_S", 0.1), \
             sortie_capturee() as sortie:
         assert quota.run(["sh", "-c", "exit 4"]) == 4
@@ -106,25 +187,10 @@ def sans_workspace() -> None:
     print("2. sans workspace : attente sans marqueur, place prise, code 4 tel quel ✓")
 
 
-def tenant(duree_s: float, pret: threading.Event | None = None) -> threading.Thread:
-    """Un fil qui tient la seule place globale pendant `duree_s`."""
-    def tient():
-        with psycopg.connect(db.DSN, autocommit=True) as conn:
-            assert conn.execute("SELECT pg_try_advisory_lock(%s, 0)",
-                                (quota.BUILD_LOCK_NAMESPACE,)).fetchone()[0]
-            if pret is not None:
-                pret.set()
-            time.sleep(duree_s)
-    fil = threading.Thread(target=tient, daemon=True)
-    fil.start()
-    return fil
-
-
 def place_occupee(workspace: Path) -> None:
     """3. la place occupée : attente dite, marqueur touché, puis place prise."""
     marqueur = workspace / quota.WAIT_FILE
     fil = tenant(0.8)
-    time.sleep(0.2)
     with patche(quota, "REPORT_S", 0.1), patche(quota, "LEASE_REFRESH_S", 0.1), \
             sortie_capturee() as sortie:
         depart = time.monotonic()
@@ -149,14 +215,15 @@ def arret(tmp: Path) -> None:
     temoin = tmp / "tetu.txt"
     tetu = subprocess.Popen(["sh", "-c", TETU.format(temoin=temoin)],
                             start_new_session=True)
-    assert attend(temoin.exists), "le piège TERM n'est jamais armé"
+    assert attend(lambda: famille_prete(temoin)), "le piège TERM n'est jamais armé"
     depart = time.monotonic()
     quota._stop(tetu)
     duree = time.monotonic() - depart
     assert tetu.returncode == -signal.SIGKILL, tetu.returncode
     assert duree >= 5, duree
+    assert attend(lambda: famille_morte(temoin)), "l'enfant de la famille têtue survit"
     print(f"4. commande finie : intouchée ; famille têtue : SIGKILL après "
-          f"{duree:.1f} s ✓")
+          f"{duree:.1f} s, chef et enfant partis ✓")
 
 
 def groupe_evanoui() -> None:
@@ -186,20 +253,20 @@ def session_coupee(tmp: Path) -> None:
                        "AND granted AND classid = %s AND objsubid = 2")
             assert attend(lambda: conn.execute(
                 requete, (quota.BUILD_LOCK_NAMESPACE,)).fetchone() is not None)
-            assert attend(pid_txt.exists)
+            assert attend(lambda: famille_prete(pid_txt)), "la commande n'a pas démarré"
             pid = conn.execute(requete, (quota.BUILD_LOCK_NAMESPACE,)).fetchone()[0]
             conn.execute("SELECT pg_terminate_backend(%s)", (pid,))
 
-    fil = threading.Thread(target=coupe, daemon=True)
+    fil = Fil(coupe)
     fil.start()
     with sortie_capturee() as sortie:
-        code = quota.run(["sh", "-c", f"echo $$ > {pid_txt}; exec sleep 30"])
+        code = quota.run(["sh", "-c", FAMILLE.format(temoin=pid_txt)])
     fil.join()
     assert code == 75, code
     assert "quota de constructions perdu" in sortie.getvalue(), sortie.getvalue()
-    enfant = int(pid_txt.read_text())
-    assert attend(lambda: not Path(f"/proc/{enfant}").exists()), "la commande survit"
-    print("5. session PostgreSQL coupée : commande arrêtée, code 75, perte dite ✓")
+    assert attend(lambda: famille_morte(pid_txt)), "la commande ou son enfant survit"
+    print("5. session PostgreSQL coupée : commande et enfant arrêtés, code 75, "
+          "perte dite ✓")
 
 
 def base_injoignable(tmp: Path) -> None:
@@ -210,12 +277,12 @@ def base_injoignable(tmp: Path) -> None:
     print("6. base injoignable : 75, commande jamais lancée ✓")
 
 
-def signal_differe(quand, sig: int = signal.SIGTERM) -> threading.Thread:
+def signal_differe(quand, sig: int = signal.SIGTERM) -> Fil:
     """Un fil qui envoie `sig` au processus dès que `quand` devient vrai."""
     def envoie():
         assert attend(quand), "le moment du signal n'est jamais venu"
         os.kill(os.getpid(), sig)
-    fil = threading.Thread(target=envoie, daemon=True)
+    fil = Fil(envoie)
     fil.start()
     return fil
 
@@ -233,28 +300,25 @@ def sigterm_en_commande(tmp: Path) -> None:
     """7. SIGTERM pendant la commande : arrêtée, sortie 143, gestionnaire remis."""
     pid_txt = tmp / "pid-terme.txt"
     avant = signal.getsignal(signal.SIGTERM)
-    fil = signal_differe(pid_txt.exists)
+    fil = signal_differe(lambda: famille_prete(pid_txt))
     with sortie_capturee():
-        code = interrompu(lambda: quota.run(
-            ["sh", "-c", f"echo $$ > {pid_txt}; exec sleep 30"]))
+        code = interrompu(lambda: quota.run(["sh", "-c", FAMILLE.format(temoin=pid_txt)]))
     fil.join()
     assert code == 128 + signal.SIGTERM, code
-    enfant = int(pid_txt.read_text())
-    assert attend(lambda: not Path(f"/proc/{enfant}").exists()), "la commande survit"
+    assert attend(lambda: famille_morte(pid_txt)), "la commande ou son enfant survit"
     assert signal.getsignal(signal.SIGTERM) is avant, "gestionnaire non remis"
-    print("7. SIGTERM en pleine commande : commande arrêtée, sortie 143, "
+    print("7. SIGTERM en pleine commande : commande et enfant arrêtés, sortie 143, "
           "gestionnaire d'avant remis ✓")
 
 
 def sigterm_en_attente(workspace: Path) -> None:
     """8. SIGTERM pendant l'attente d'une place : sortie 143, marqueur retiré."""
     marqueur = workspace / quota.WAIT_FILE
-    pret = threading.Event()
-    fil = tenant(3.0, pret)
-    assert pret.wait(5), "la place n'est jamais tenue"
-    signal_differe(marqueur.exists)
+    fil = tenant(3.0)
+    tireur = signal_differe(marqueur.exists)
     with sortie_capturee():
         code = interrompu(lambda: quota.run(["touch", str(workspace / "jamais.txt")]))
+    tireur.join()
     fil.join()
     assert code == 128 + signal.SIGTERM, code
     assert not marqueur.exists(), "marqueur d'attente laissé"
@@ -275,6 +339,7 @@ def main() -> None:
         os.environ.pop(nom, None)
     try:
         refus()
+        identite_stable(tmp)
         sans_workspace()
         place_occupee(workspace)
         arret(tmp)

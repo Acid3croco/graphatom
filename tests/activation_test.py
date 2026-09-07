@@ -12,7 +12,9 @@ un docker qui rend les étiquettes qu'on lui pose, un gh absent :
      porte — ou qu'il ne porte rien —, aucun redémarrage
   4. tout concorde : l'état `pending` est en base AVANT l'appel de systemctl,
      appelé une fois ; le tick suivant n'appelle pas dans le délai de reprise
-  5. un `attempted_at` illisible vaut une tentative périmée : reprise permise
+  5. un `attempted_at` illisible vaut une tentative périmée : reprise permise ;
+     puis le worker revenu sur le SHA voulu règle la MÊME demande en `active`,
+     sans un appel de plus à systemctl
   6. systemctl qui refuse : erreur visible, en base et au rapport
   7. systemctl absent : l'OSError est notée, pas cachée
   8. verrou tenu par une autre session : en attente, rien d'écrit ; libéré,
@@ -21,6 +23,9 @@ un docker qui rend les étiquettes qu'on lui pose, un gh absent :
  10. checkout qui bouge sous le verrou : plus en attente, rien d'écrit
  11. `cksum` indisponible ou illisible : erreur notée, imprimée, en attente
  12. rapport inaccessible : la ligne est imprimée, l'état reste en base
+
+Après chaque chemin qui échoue — 2, 3, 6, 7, 11 — une autre session prend le
+verrou d'activation sur-le-champ : `reconcile` l'a rendu, ou ne l'a jamais pris.
 
 Usage : uv run python tests/activation_test.py
 """
@@ -73,6 +78,7 @@ class Banc:
         self.labels.mkdir()
         self.systemctl = tmp / "systemctl"
         self.tentatives = 0
+        self.cle = activation._lock_key(self.repo)
         self._outils(tmp)
         self.item = self._item()
         bureau.item_workspace(self.item).mkdir(parents=True)
@@ -141,6 +147,14 @@ class Banc:
     def redemarrages(self) -> list[str]:
         return lignes(self.journal)
 
+    def verrou_libre(self) -> bool:
+        """Une autre session prend-elle le verrou d'activation sur-le-champ ?"""
+        with psycopg.connect(db.DSN) as autre:
+            pris = autre.execute("SELECT pg_try_advisory_lock(%s)", (self.cle,)).fetchone()[0]
+            if pris:
+                autre.execute("SELECT pg_advisory_unlock(%s)", (self.cle,))
+        return pris
+
 
 def deja_actif(banc: Banc) -> None:
     """1. le worker porte déjà le SHA voulu : `active`, dit une fois."""
@@ -168,7 +182,9 @@ def checkout_different(banc: Banc) -> None:
                                    f"activation en attente - checkout {banc.wanted} différent"]
     assert len(banc.rapport()) == 3, banc.rapport()
     assert banc.redemarrages() == [], "redémarrage sur un checkout étranger"
-    print("2. checkout différent : erreur notée une fois sur deux ticks, aucun restart ✓")
+    assert banc.verrou_libre(), "verrou gardé après un checkout différent"
+    print("2. checkout différent : erreur notée une fois sur deux ticks, aucun restart, "
+          "verrou libre ✓")
 
 
 def services_discordants(banc: Banc) -> None:
@@ -186,7 +202,9 @@ def services_discordants(banc: Banc) -> None:
     assert rapport[-1] == "activation en attente - services discordants : web, front"
     assert rapport.count(rapport[-1]) == 1, "l'attente a été redite"
     assert banc.redemarrages() == [], "redémarrage malgré des services discordants"
-    print("3. web sur un autre SHA, front sans étiquette : nommés, aucun restart ✓")
+    assert banc.verrou_libre(), "verrou gardé après des services discordants"
+    print("3. web sur un autre SHA, front sans étiquette : nommés, aucun restart, "
+          "verrou rendu ✓")
 
 
 def concordance(banc: Banc) -> int:
@@ -219,6 +237,20 @@ def tentative_perimee(banc: Banc, run: int) -> None:
     print("5. attempted_at illisible : tentative périmée, redémarrage redemandé ✓")
 
 
+def worker_revenu(banc: Banc, run: int) -> None:
+    """5 bis. redémarré sur le SHA voulu : la même demande passe à `active`, sans systemctl."""
+    avant = banc.redemarrages()
+    actif = f"worker actif sur le SHA voulu {banc.wanted}"
+    with patche(activation, "WORKER_SHA", banc.wanted):
+        assert activation.reconcile(banc.conn) is False
+        assert banc.etat(run) == {"status": "active", "worker_sha": banc.wanted}, banc.etat(run)
+        assert activation.reconcile(banc.conn) is False
+    assert banc.redemarrages() == avant, "systemctl rappelé après l'activation"
+    assert banc.rapport()[-1] == actif and banc.rapport()[-2] != actif, banc.rapport()[-2:]
+    print("5 bis. worker revenu sur le SHA voulu : la demande pending devient active, "
+          "dite une fois, aucun appel de plus à systemctl ✓")
+
+
 def refus_de_systemctl(banc: Banc) -> None:
     """6 et 7. systemctl qui refuse, puis systemctl absent : l'erreur est visible."""
     os.environ["GRAPHATOM_ACTIVATION_RETRY_S"] = "0"
@@ -228,7 +260,8 @@ def refus_de_systemctl(banc: Banc) -> None:
     etat = banc.etat(run)
     assert etat["status"] == "error" and etat["error"] == "systemctl code 1", etat
     assert banc.rapport()[-1] == "activation du worker échouée - systemctl code 1"
-    print("6. systemctl code 1 : état error en base, ligne au rapport ✓")
+    assert banc.verrou_libre(), "verrou gardé après un refus de systemctl"
+    print("6. systemctl code 1 : état error en base, ligne au rapport, verrou rendu ✓")
 
     banc.code.write_text("0")
     os.environ["GRAPHATOM_SYSTEMCTL"] = str(banc.systemctl.with_name("absent"))
@@ -237,13 +270,14 @@ def refus_de_systemctl(banc: Banc) -> None:
     etat = banc.etat(run)
     assert etat["status"] == "error" and "absent" in etat["error"], etat
     assert banc.rapport()[-1].startswith("activation du worker échouée - [Errno")
+    assert banc.verrou_libre(), "verrou gardé après un systemctl absent"
     os.environ["GRAPHATOM_SYSTEMCTL"] = str(banc.systemctl)
-    print("7. systemctl absent : l'OSError est l'erreur notée ✓")
+    print("7. systemctl absent : l'OSError est l'erreur notée, verrou rendu ✓")
 
 
 def verrou_tenu(banc: Banc) -> None:
     """8. une autre session tient le verrou : en attente, rien d'écrit."""
-    cle = activation._lock_key(banc.repo)
+    cle = banc.cle
     run = banc.demande(banc.wanted)
     avant = banc.redemarrages(), banc.rapport()
     with psycopg.connect(db.DSN) as tenant:
@@ -308,7 +342,9 @@ def sans_cksum(banc: Banc) -> None:
         assert banc.etat(run)["error"] == "cksum indisponible", banc.etat(run)
         assert banc.rapport()[-1] == "activation du worker échouée - cksum indisponible"
         assert banc.redemarrages() == avant
-    print("11. cksum en échec ou illisible : erreur en base, imprimée, en attente ✓")
+        assert banc.verrou_libre(), "verrou gardé sans cksum"
+    print("11. cksum en échec ou illisible : erreur en base, imprimée, en attente, "
+          "verrou libre ✓")
 
 
 def rapport_inaccessible(banc: Banc) -> None:
@@ -342,6 +378,7 @@ def main() -> None:
             services_discordants(banc)
             run = concordance(banc)
             tentative_perimee(banc, run)
+            worker_revenu(banc, run)
             refus_de_systemctl(banc)
             verrou_tenu(banc)
             remplacee_sous_le_verrou(banc)

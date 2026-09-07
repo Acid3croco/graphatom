@@ -12,10 +12,14 @@ Sur un Postgres jetable, noyau seul, aucun processus :
   4. `claim` ne réserve rien sur un WAIT, sur un item terminal ni sur un
      item inconnu — et n'écrit aucune ligne
   5. barrière poussée pendant le vol : le résultat est classé `superseded`,
-     archivé, daté ; l'item ne bouge pas et son journal non plus
+     archivé, daté ; l'item ne bouge pas et son journal non plus — le run,
+     dans `CLAIMED` depuis `claim`, en sort une fois classé
   6. version attendue dépassée : classé `stale`, même contrat
   7. `apply_item` sur un item terminal ne fait rien
   8. `apply_item` exige d'ouvrir la transaction de plus haut niveau
+  9. la transaction d'`apply` qui n'aboutit pas laisse le run en vol — en
+     base ET dans `CLAIMED`, pour que le faucheur y lise un bail expiré, pas
+     un redémarrage ; le vrai `apply` le classe ensuite
 
 Usage : uv run python tests/kernel_guards_test.py
 """
@@ -36,6 +40,9 @@ os.environ.pop("GRAPHATOM_REPO_DIR", None)  # le noyau seul, sans git
 os.environ.pop("GRAPHATOM_AGENT_DSN", None)
 
 from graphatom import db, graph, kernel  # noqa: E402
+from graphatom.policy import CLAIMED  # noqa: E402
+
+from bords_outils import patche  # noqa: E402
 
 BUNDLE = bundle_epreuve("noyau-gardes", {
     "travail": {"block": "ACT", "config": {}, "edges": {"ok": "fini"}},
@@ -143,14 +150,36 @@ def resultat_rejete(conn, rev: str, colonne: str, statut: str) -> None:
     """Le run vole, `colonne` bouge sous lui : son résultat est classé `statut`."""
     item_id = admettre(conn, rev, sujet())
     run = kernel.claim(conn, item_id)
+    assert run["id"] in CLAIMED, "réservé, mais pas dans la mémoire du processus"
     conn.execute(f"UPDATE work_item SET {colonne} = {colonne} + 1 WHERE id = %s",
                  (item_id,))
     avant = photo(conn, item_id)
     assert kernel.apply(conn, run["id"], {"outcome": "ok", "summary": "tard"}) == statut
+    assert run["id"] not in CLAIMED, "un run classé vole encore pour le faucheur"
     assert photo(conn, item_id) == avant, "un résultat rejeté a routé"
     ligne = runs_de(conn, item_id)[0]
     assert ligne["status"] == statut and ligne["outcome"] is None, ligne
     assert ligne["result"]["summary"] == "tard" and ligne["finished_at"] is not None
+
+
+def transaction_avortee(conn, rev: str) -> None:
+    """9. la transaction d'`apply` n'aboutit pas : le run reste en vol, partout."""
+    item_id = admettre(conn, rev, sujet())
+    run = kernel.claim(conn, item_id)
+    avant = photo(conn, item_id)
+
+    def panne(*_args):
+        raise RuntimeError("commit impossible")
+
+    with patche(kernel, "_advance", panne):
+        refuse(lambda: kernel.apply(conn, run["id"], {"outcome": "ok"}), "commit impossible")
+    assert run["id"] in CLAIMED, "un run non commis a quitté la mémoire du processus"
+    assert runs_de(conn, item_id)[0]["status"] == "running", "classé sans commit"
+    assert photo(conn, item_id) == avant, "l'item a bougé sans commit"
+    assert kernel.apply(conn, run["id"], {"outcome": "ok"}) == "applied"
+    assert run["id"] not in CLAIMED and etat(conn, item_id)["state"] == "fini"
+    print("9. transaction avortée : le run reste en vol, en base et dans CLAIMED ; "
+          "le vrai apply le classe ensuite ✓")
 
 
 def transitions_sans_run(conn, fini: int) -> None:
@@ -176,10 +205,12 @@ def main() -> None:
         preparation(conn, rev)
         fini = rien_a_reserver(conn, rev)
         resultat_rejete(conn, rev, "fence", "superseded")
-        print("5. barrière poussée : superseded, archivé, item et journal intacts ✓")
+        print("5. barrière poussée : superseded, archivé, item et journal intacts, "
+              "run sorti de CLAIMED ✓")
         resultat_rejete(conn, rev, "version", "stale")
         print("6. version dépassée : stale, même contrat ✓")
         transitions_sans_run(conn, fini)
+        transaction_avortee(conn, rev)
     print("\nkernel_guards : OK")
 
 

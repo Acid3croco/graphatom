@@ -14,3 +14,8 @@ signature:22:23:int  # SIGNATURE_BYTES, idem (second facteur du produit 64 * 102
 signature:23:16:int  # GIT_TIMEOUT_S : le délai d'un git de prompt, un réglage de patience sans contrat
 gates:28:16:int  # GIT_TIMEOUT_S : délai du rev-parse local, réglage de patience
 gates:29:25:int  # DEPLOY_PROBE_TIMEOUT_S : délai des sondes gh et docker, réglage de patience
+process:57:10:compare:0:Lt  # borne d'une attente en temps réel : l'instant exact de la limite n'est pas observable, < et <= sont indistinguables
+process:192:10:compare:0:Lt  # idem, la même attente bornée dans revoke_orphan
+prompt:31:12:int  # GIT_CHARS : la borne de l'état git cité, réglage de taille ; la coupe stricte est prouvée sur le symbole
+prompt:32:16:int  # GIT_TIMEOUT_S : délai d'un git de prompt, réglage de patience
+prompt:37:18:int  # PASSATION_CHARS : la borne d'une passation, mesurée sur les prompts rendus ; la coupe stricte est prouvée sur le symbole

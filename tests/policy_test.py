@@ -7,20 +7,25 @@ sur des configs de nœud :
   2. `agent.timeout_s` déclaré, sans `execution` : honoré aussi
   3. sans couperet déclaré, il descend du bail — `lease_s` moins la marge du
      faucheur, pour que le process soit coupé AVANT que le bail n'expire
-  4. sans bail non plus, le défaut historique — ou celui que l'appelant donne
-  5. l'horloge du noyau est en UTC, jamais naïve
+  4. sans bail non plus, le défaut historique — 570 s, la valeur documentée,
+     pas seulement le symbole importé — ou celui que l'appelant donne
+  5. l'horloge du noyau est en UTC, jamais naïve, et elle avance : chaque
+     lecture tombe entre deux lectures indépendantes de l'horloge système
 
 Usage : uv run python tests/policy_test.py
 """
 
 import datetime as dt
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import policy  # noqa: E402
-from graphatom.policy import AGENT_LEASE_MARGIN_S, AGENT_TIMEOUT_S  # noqa: E402
+from graphatom.policy import AGENT_LEASE_MARGIN_S  # noqa: E402
+
+DEFAUT_DOCUMENTE_S = 570  # le budget historique d'une tentative d'agent
 
 
 def execution_declaree() -> None:
@@ -46,16 +51,22 @@ def descend_du_bail() -> None:
 
 
 def defaut() -> None:
-    assert policy.agent_timeout_s({}) == AGENT_TIMEOUT_S
+    assert policy.AGENT_TIMEOUT_S == DEFAUT_DOCUMENTE_S, policy.AGENT_TIMEOUT_S
+    assert policy.agent_timeout_s({}) == DEFAUT_DOCUMENTE_S
     assert policy.agent_timeout_s({"agent": {}}, default=7.0) == 7.0
-    print(f"4. sans bail : le défaut, {AGENT_TIMEOUT_S}s ou celui donné ✓")
+    print(f"4. sans bail : le défaut documenté, {DEFAUT_DOCUMENTE_S}s, ou celui donné ✓")
 
 
 def horloge_utc() -> None:
+    avant = dt.datetime.now(dt.timezone.utc)
     instant = policy.now()
+    apres = dt.datetime.now(dt.timezone.utc)
     assert instant.tzinfo is not None, "horloge naïve"
     assert instant.utcoffset() == dt.timedelta(0), instant.utcoffset()
-    print("5. now() est consciente du fuseau, et en UTC ✓")
+    assert avant <= instant <= apres, (avant, instant, apres)
+    time.sleep(0.002)
+    assert policy.now() > instant, "l'horloge est figée"
+    print("5. now() en UTC, bornée par deux lectures système, et elle avance ✓")
 
 
 def main() -> None:
