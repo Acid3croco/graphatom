@@ -334,6 +334,44 @@ def checkout_mouvant(banc: Banc) -> None:
     print("10. checkout mouvant sous le verrou : False, rien d'écrit ✓")
 
 
+def sha_du_module(banc: Banc) -> None:
+    """13. Le worker lit son propre SHA dans le dépôt qui porte le module,
+    et « inconnu » sans git ; sans GRAPHATOM_REPO_DIR, c'est ce dépôt-là que
+    reconcile relit comme checkout."""
+    depot = Path(activation.__file__).resolve().parents[2]
+    tete = subprocess.run(["git", "-C", str(depot), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    assert activation._worker_sha() == tete, (activation._worker_sha(), tete)
+    reel = subprocess.run
+
+    def sans_git(args, **kwargs):
+        if args[:1] == ["git"]:
+            raise OSError("git introuvable")
+        return reel(args, **kwargs)
+
+    def git_en_echec(args, **kwargs):
+        if args[:1] == ["git"]:
+            return subprocess.CompletedProcess(args, 128, stdout="", stderr="fatal")
+        return reel(args, **kwargs)
+
+    for casse in (sans_git, git_en_echec):
+        with patche(activation.subprocess, "run", casse):
+            assert activation._worker_sha() == "inconnu"
+    # sans GRAPHATOM_REPO_DIR, le checkout relu est celui du dépôt du module :
+    # une demande qui veut sa tête ne bute pas sur le checkout
+    run = banc.demande(tete)
+    repo_dir = os.environ.pop("GRAPHATOM_REPO_DIR")
+    try:
+        with patche(activation, "WORKER_SHA", "0" * 40), sortie_capturee():
+            activation.reconcile(banc.conn)
+    finally:
+        os.environ["GRAPHATOM_REPO_DIR"] = repo_dir
+    erreur = (banc.etat(run) or {}).get("error", "")
+    assert not erreur.startswith("checkout"), erreur
+    print("13. SHA du module lu dans son dépôt, « inconnu » sans git ; sans "
+          "GRAPHATOM_REPO_DIR, le checkout est ce dépôt ✓")
+
+
 def sans_cksum(banc: Banc) -> None:
     """11. la clé du verrou est le `cksum` du chemin du dépôt ; `cksum` en échec,
     muet ou illisible : erreur notée, imprimée, en attente."""
@@ -342,14 +380,16 @@ def sans_cksum(banc: Banc) -> None:
     assert banc.cle == int(cksum.stdout.split()[0]), (banc.cle, cksum.stdout)
     reel = subprocess.run
     for reponse in (dict(returncode=1, stdout=""), dict(returncode=0, stdout=""),
-                    dict(returncode=0, stdout="pas un nombre")):
+                    dict(returncode=0, stdout="pas un nombre"), None):
         run = banc.demande(banc.wanted)
         avant = banc.redemarrages()
 
         def cksum_casse(args, **kwargs):
-            if args == ["cksum"]:
-                return subprocess.CompletedProcess(args, stderr="", **reponse)
-            return reel(args, **kwargs)
+            if args != ["cksum"]:
+                return reel(args, **kwargs)
+            if reponse is None:  # cksum absent de la machine
+                raise OSError("cksum introuvable")
+            return subprocess.CompletedProcess(args, stderr="", **reponse)
 
         with patche(activation.subprocess, "run", cksum_casse), sortie_capturee() as sortie:
             assert activation.reconcile(banc.conn) is True
@@ -358,8 +398,8 @@ def sans_cksum(banc: Banc) -> None:
         assert banc.rapport()[-1] == "activation du worker échouée - cksum indisponible"
         assert banc.redemarrages() == avant
         assert banc.verrou_libre(), "verrou gardé sans cksum"
-    print("11. clé = cksum du dépôt ; cksum en échec, muet ou illisible : erreur en base, "
-          "imprimée, en attente, verrou libre ✓")
+    print("11. clé = cksum du dépôt ; cksum absent, en échec, muet ou illisible : erreur "
+          "en base, imprimée, en attente, verrou libre ✓")
 
 
 def rapport_inaccessible(banc: Banc) -> None:
@@ -400,6 +440,7 @@ def main() -> None:
             checkout_mouvant(banc)
             sans_cksum(banc)
             rapport_inaccessible(banc)
+            sha_du_module(banc)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         shutil.rmtree(workdir, ignore_errors=True)

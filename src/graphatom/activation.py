@@ -94,13 +94,17 @@ def _checkout(repo: Path) -> str:
 
 
 def _lock_key(repo: Path) -> int | None:
-    """Une clé d'advisory lock stable par dépôt — `cksum` de son chemin."""
-    checksum = subprocess.run(
-        ["cksum"], input=str(repo), capture_output=True, text=True, check=False,
-    )
+    """Une clé d'advisory lock stable par dépôt — `cksum` de son chemin.
+
+    Un `cksum` absent, en échec, muet ou illisible rend None : l'appelant
+    le dit et attend, il ne tombe pas.
+    """
     try:
+        checksum = subprocess.run(
+            ["cksum"], input=str(repo), capture_output=True, text=True, check=False,
+        )
         return int(checksum.stdout.split()[0]) if checksum.returncode == 0 else None
-    except (IndexError, ValueError):
+    except (OSError, IndexError, ValueError):
         return None
 
 

@@ -62,3 +62,6 @@ github_admission:229:19:bool  # free n'est qu'un raccourci : le verrou de voie d
 github_admission:237:15:bool  # idem après une voie déjà occupée
 github_questions:29:17:int  # CRITERIA_LINES : combien de lignes de critères on cite, un réglage de lecture ; la coupe est prouvée sur le symbole
 github_sync:262:65:int  # longueur d'affichage de la révision dans la ligne de démarrage du canal
+quota:142:15:compare:0:Is  # place de la pause dans la boucle d'attente d'une place d'item : dormir après la prise au lieu de pendant l'attente rend le même verdict
+quota:158:15:compare:0:Is  # idem pour la boucle des places globales
+quota:137:15:compare:0:GtE  # instant du renouvellement du bail dans la boucle d'item : >= et > se rejoignent
