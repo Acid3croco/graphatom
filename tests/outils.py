@@ -311,3 +311,19 @@ def route(conn, item_id: int, outcome: str, attempt: int) -> str:
     with conn.transaction():
         routing.route(conn, item, paquet, run, outcome, kind="result")
     return etat(conn, item_id)["state"]
+
+
+def dernier_event(conn, item_id: int) -> dict:
+    """La dernière transition de l'item, telle que le journal la porte."""
+    return conn.execute(
+        "SELECT * FROM event WHERE item_id = %s ORDER BY item_version DESC LIMIT 1",
+        (item_id,),
+    ).fetchone()
+
+
+def runs_du_noeud(conn, item_id: int, node: str) -> int:
+    """Combien de runs ce nœud a réservés sur cet item, tous passages confondus."""
+    return conn.execute(
+        "SELECT count(*) AS n FROM node_run WHERE item_id = %s AND node = %s",
+        (item_id, node),
+    ).fetchone()["n"]

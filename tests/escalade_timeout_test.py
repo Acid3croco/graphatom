@@ -44,7 +44,7 @@ from graphatom import github_client, github_questions  # noqa: E402
 from graphatom import context, failure, process, reaper, routing, workspace  # noqa: E402
 from graphatom.policy import MAX_ATTEMPTS  # noqa: E402
 
-from outils import etat, item_neuf, route  # noqa: E402
+from outils import dernier_event, etat, item_neuf, route, runs_du_noeud  # noqa: E402
 
 # hermétisme : pas d'instance jetable dans l'environnement, donc aucun bloc
 # d'ici ne dérive la base d'un item qui existe pour de vrai
@@ -142,22 +142,6 @@ def survivants(pgid: int, secondes: float = 3.0) -> list[int]:
     while time.time() < echeance and groupe_vivant(pgid):
         time.sleep(0.1)
     return groupe_vivant(pgid)
-
-
-def dernier_event(conn, item_id: int) -> dict:
-    return conn.execute(
-        "SELECT * FROM event WHERE item_id = %s ORDER BY item_version DESC LIMIT 1",
-        (item_id,),
-    ).fetchone()
-
-
-
-
-def runs_du_noeud(conn, item_id: int, node: str) -> int:
-    return conn.execute(
-        "SELECT count(*) AS n FROM node_run WHERE item_id = %s AND node = %s",
-        (item_id, node),
-    ).fetchone()["n"]
 
 
 def en_vol(conn, revision: str, prefixe: str) -> tuple[int, dict]:
