@@ -25,10 +25,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import blocks  # noqa: E402
 from graphatom import github_questions  # noqa: E402
 from graphatom import workspace as bureau  # noqa: E402
-from graphatom import github_sync as gs  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 ITEM_ID = 44
@@ -74,7 +72,7 @@ class FakeConn:
     def __enter__(self):
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *_exc):
         return False
 
     def execute(self, sql: str, params: tuple = ()):
@@ -123,10 +121,8 @@ def question_body(gh: FakeGitHub | None = None) -> str:
     return gh.posted[0][1]
 
 
-def main() -> None:
-    # 1. le graph : scope sort par `unclear` sur un WAIT borné
-    bundle = json.loads((ROOT / "examples" / "code-task.json").read_text())
-    nodes = bundle["nodes"]
+def scope_vers_clarify(nodes: dict) -> None:
+    """1. Le graph : scope sort par `unclear` sur un WAIT borné."""
     assert nodes["scope"]["edges"]["unclear"] == "clarify", nodes["scope"]["edges"]
     clarify = nodes["clarify"]
     assert clarify["block"] == "WAIT", clarify["block"]
@@ -137,7 +133,9 @@ def main() -> None:
     assert clarify["config"]["owner"] and clarify["config"]["deadline_minutes"]
     print("1. scope → clarify : `go` / `reformuler`, retour borné par `escalade` ✓")
 
-    # le prompt de scope porte les trois règles nouvelles
+
+def prompt_de_scope(nodes: dict) -> None:
+    """2. Le prompt de scope porte les trois règles nouvelles."""
     prompt = nodes["scope"]["config"]["agent"]["prompt"]
     for regle in ("`unclear` est l'exception",
                   "**Le corps de l'issue n'est jamais édité**",
@@ -145,60 +143,83 @@ def main() -> None:
         assert regle in prompt, regle
     print("2. le prompt de scope : l'exception, le corps intouché, la spec ✓")
 
+
+def sans_criteria(workspace: Path) -> None:
+    """3. Pas de criteria.md : rien n'est dit, et la question ne bouge pas."""
+    nue = question_body()
+    assert "criteria.md" not in nue, nue
+    gh = FakeGitHub()
+    github_questions.publish_criteria(FakeConn([ITEM]), gh)
+    assert gh.posted == [], gh.posted
+    workspace.mkdir()
+    (workspace / "criteria.md").write_text("")
+    github_questions.publish_criteria(FakeConn([ITEM]), gh)
+    assert gh.posted == [], "un criteria.md vide ne dit rien"
+    assert question_body() == nue, "et la question reste mot pour mot la même"
+    print("3. sans criteria.md : aucun commentaire, question inchangée ✓")
+
+
+def criteres_publies(workspace: Path) -> tuple[FakeGitHub, FakeConn]:
+    """4. Les critères figés partent sur l'issue, sous leur clé."""
+    (workspace / "criteria.md").write_text(CRITERIA)
+    gh, conn = FakeGitHub(), FakeConn([ITEM])
+    github_questions.publish_criteria(conn, gh)
+    assert len(gh.posted) == 1, gh.posted
+    number, body = gh.posted[0]
+    assert number == 87, number
+    for line in CRITERIA.splitlines():
+        assert f"> {line}".rstrip() in body, line
+    assert f"/item/{ITEM_ID}/file/criteria.md" in body, body
+    key = next(k for _, k in conn.effects if "criteria" in k)
+    assert key.startswith("code-task-g1-criteria-"), key
+    print("4. les critères de `scope` publiés sur l'issue, clé graph+génération ✓")
+    return gh, conn
+
+
+def un_seul_commentaire(gh: FakeGitHub, conn: FakeConn) -> None:
+    """5. Deux ticks, un seul commentaire — par l'effet, puis par le marqueur."""
+    github_questions.publish_criteria(conn, gh)
+    assert len(gh.posted) == 1, gh.posted
+    oublieuse = FakeConn([ITEM], amnesique=True)
+    github_questions.publish_criteria(oublieuse, gh)
+    github_questions.publish_criteria(oublieuse, gh)
+    assert len(gh.posted) == 1, gh.posted
+    print("5. deux ticks, un seul commentaire de critères ✓")
+
+
+def question_porte_la_lecture() -> None:
+    """6. La question de clarification embarque ce que le rail a compris."""
+    body = question_body()
+    for line in CRITERIA.splitlines():
+        assert f"> {line}".rstrip() in body, line
+    assert "Options : `go` / `reformuler`" in body, body
+    print("6. la question de `clarify` porte la lecture du rail ✓")
+
+
+def citation_bornee(workspace: Path) -> None:
+    """Un fichier long est cité borné, et le dit."""
+    long = "\n".join(f"{n}. critère — preuve" for n in range(200))
+    (workspace / "criteria.md").write_text(long)
+    github_questions.publish_criteria(FakeConn([ITEM]), gh := FakeGitHub())
+    body = gh.posted[0][1]
+    assert f"> {github_questions.CRITERIA_LINES - 1}. critère — preuve" in body, body
+    assert f"… {200 - github_questions.CRITERIA_LINES} lignes de plus" in body, body
+
+
+def main() -> None:
+    bundle = json.loads((ROOT / "examples" / "code-task.json").read_text())
+    nodes = bundle["nodes"]
+    scope_vers_clarify(nodes)
+    prompt_de_scope(nodes)
+
     with tempfile.TemporaryDirectory() as tmp:
         bureau.DATA_DIR = Path(tmp)
         workspace = bureau.item_workspace(ITEM_ID)
-
-        # 3. pas de criteria.md : rien n'est dit, et la question ne bouge pas
-        nue = question_body()
-        assert "criteria.md" not in nue, nue
-        gh = FakeGitHub()
-        github_questions.publish_criteria(FakeConn([ITEM]), gh)
-        assert gh.posted == [], gh.posted
-        workspace.mkdir()
-        (workspace / "criteria.md").write_text("")
-        github_questions.publish_criteria(FakeConn([ITEM]), gh)
-        assert gh.posted == [], "un criteria.md vide ne dit rien"
-        assert question_body() == nue, "et la question reste mot pour mot la même"
-        print("3. sans criteria.md : aucun commentaire, question inchangée ✓")
-
-        # 4. les critères figés partent sur l'issue, sous leur clé
-        (workspace / "criteria.md").write_text(CRITERIA)
-        gh, conn = FakeGitHub(), FakeConn([ITEM])
-        github_questions.publish_criteria(conn, gh)
-        assert len(gh.posted) == 1, gh.posted
-        number, body = gh.posted[0]
-        assert number == 87, number
-        for line in CRITERIA.splitlines():
-            assert f"> {line}".rstrip() in body, line
-        assert f"/item/{ITEM_ID}/file/criteria.md" in body, body
-        key = next(k for _, k in conn.effects if "criteria" in k)
-        assert key.startswith("code-task-g1-criteria-"), key
-        print("4. les critères de `scope` publiés sur l'issue, clé graph+génération ✓")
-
-        # 5. deux ticks, un seul commentaire — par l'effet, puis par le marqueur
-        github_questions.publish_criteria(conn, gh)
-        assert len(gh.posted) == 1, gh.posted
-        oublieuse = FakeConn([ITEM], amnesique=True)
-        github_questions.publish_criteria(oublieuse, gh)
-        github_questions.publish_criteria(oublieuse, gh)
-        assert len(gh.posted) == 1, gh.posted
-        print("5. deux ticks, un seul commentaire de critères ✓")
-
-        # 6. la question de clarification embarque ce que le rail a compris
-        body = question_body()
-        for line in CRITERIA.splitlines():
-            assert f"> {line}".rstrip() in body, line
-        assert "Options : `go` / `reformuler`" in body, body
-        print("6. la question de `clarify` porte la lecture du rail ✓")
-
-        # un fichier long est cité borné, et le dit
-        long = "\n".join(f"{n}. critère — preuve" for n in range(200))
-        (workspace / "criteria.md").write_text(long)
-        github_questions.publish_criteria(FakeConn([ITEM]), gh := FakeGitHub())
-        body = gh.posted[0][1]
-        assert f"> {github_questions.CRITERIA_LINES - 1}. critère — preuve" in body, body
-        assert f"… {200 - github_questions.CRITERIA_LINES} lignes de plus" in body, body
+        sans_criteria(workspace)
+        gh, conn = criteres_publies(workspace)
+        un_seul_commentaire(gh, conn)
+        question_porte_la_lecture()
+        citation_bornee(workspace)
 
     print("\ncritères : OK — le rail dit sa lecture avant d'écrire une ligne")
 

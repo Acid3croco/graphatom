@@ -51,7 +51,7 @@ class FakeConn:
     def __init__(self):
         self.rows: list[tuple] = []
 
-    def execute(self, sql: str, params: tuple = ()):
+    def execute(self, _sql: str, params: tuple = ()):
         self.rows.append(params)
         return None
 
@@ -93,8 +93,8 @@ def refuse(quoi: str, bundle: dict, *attendus: str) -> str:
     sys.exit(f"ÉCHEC : {quoi} a passé la validation")
 
 
-def main() -> None:
-    # 1. un fan-out bien formé sur un ACT se publie
+def bien_forme_publie() -> None:
+    """1. Un fan-out bien formé sur un ACT se publie."""
     bundle = avec_fanout("implement", BON)
     graph.validate(bundle)
     conn = FakeConn()
@@ -103,13 +103,17 @@ def main() -> None:
     assert len(rev) == 64 and len(conn.rows) == 1, (rev, conn.rows)
     print(f"1. fan-out bien formé sur `implement` publié : révision {rev[:12]}… ✓")
 
-    # 2. un WAIT ne peut pas être en fan-out
+
+def wait_refuse() -> None:
+    """2. Un WAIT ne peut pas être en fan-out."""
     e = refuse("un fan-out sur le WAIT `clarify`",
                avec_fanout("clarify", BON), "clarify", "WAIT")
     print(f"2. fan-out sur un WAIT refusé : {e} ✓")
 
-    # 3. la table des réductions est explicite, et chacune n'est permise que
-    #    là où elle a un sens : `first_pass` partout, `keep_n` sur un ACT seul
+
+def table_des_reductions() -> None:
+    """3. La table des réductions est explicite, et chacune n'est permise que
+    là où elle a un sens : `first_pass` partout, `keep_n` sur un ACT seul."""
     table = graph.FANOUT_REDUCERS
     assert set(table) == graph.BLOCK_KINDS, set(table) ^ graph.BLOCK_KINDS
     assert table["WAIT"] == set(), table["WAIT"]
@@ -133,7 +137,9 @@ def main() -> None:
                    node, "keep_n", kind, "first_pass")
         print(f"   keep_n sur un {kind} refusée : {e} ✓")
 
-    # 4. la limite dure borne variantes × repeat
+
+def limite_dure() -> None:
+    """4. La limite dure borne variantes × repeat."""
     limite = graph.FANOUT_MAX_CANDIDATES
     assert isinstance(limite, int) and limite >= 1, limite
     e = refuse("cinq répétitions de deux variantes",
@@ -145,7 +151,9 @@ def main() -> None:
     graph.validate(avec_fanout("implement", BON | {"repeat": limite // 2}))
     print(f"   {limite} candidats pile passent ✓")
 
-    # 5. les formes malades, une par une
+
+def formes_malades() -> None:
+    """5. Les formes malades, une par une."""
     malades = {
         "variants absent": {"repeat": 2, "reduce": "first_pass"},
         "variants vide": BON | {"variants": []},
@@ -166,10 +174,12 @@ def main() -> None:
     graph.validate(avec_fanout("implement", {k: v for k, v in BON.items() if k != "repeat"}))
     print("   repeat absent vaut une fois ✓")
 
-    # 6. sans fan-out, rien ne change — l'exemple en déclare un sur `implement`
-    # depuis que la course y est en production, et `bundle_nu` le retire déjà
-    # pour retrouver un bundle nu, plutôt que de faire semblant qu'il n'y en a
-    # jamais eu. Le constat reste dit ici, sur le bundle livré.
+
+def sans_fanout_rien_ne_change() -> None:
+    """6. Sans fan-out, rien ne change — l'exemple en déclare un sur `implement`
+    depuis que la course y est en production, et `bundle_nu` le retire déjà
+    pour retrouver un bundle nu, plutôt que de faire semblant qu'il n'y en a
+    jamais eu. Le constat reste dit ici, sur le bundle livré."""
     assert bundle_livre()["nodes"]["implement"]["config"].get("fanout"), \
         "`implement` ne déclare plus de fan-out dans l'exemple"
     nu = bundle_nu()
@@ -180,26 +190,30 @@ def main() -> None:
         graph.validate(json.loads(path.read_text()))
     print("6. les bundles d'examples/ se valident et se publient comme avant ✓")
 
-    # 7. le `n` de keep_n : obligatoire, entier, et dans une borne dure
+
+def borne_de_keep_n() -> None:
+    """7. Le `n` de keep_n : obligatoire, entier, et dans une borne dure."""
     borne = (graph.FANOUT_KEEP_MIN, graph.FANOUT_KEEP_MAX)
     assert borne == (2, 3), borne
-    KEEP = BON | {"reduce": "keep_n"}
-    graph.validate(avec_fanout("implement", KEEP | {"n": 2}))
-    graph.validate(avec_fanout("implement", KEEP | {"n": 3}))
+    keep = BON | {"reduce": "keep_n"}
+    graph.validate(avec_fanout("implement", keep | {"n": 2}))
+    graph.validate(avec_fanout("implement", keep | {"n": 3}))
     print(f"7. keep_n avec n = {borne[0]}..{borne[1]} passe ✓")
 
     for quoi, n in (("n absent", None), ("n = 1", 1), ("n = 4", 4), ("n = 0", 0),
                     ("n négatif", -2), ("n non entier", "2"), ("n booléen", True)):
-        fanout = KEEP if n is None else KEEP | {"n": n}
+        fanout = keep if n is None else keep | {"n": n}
         e = refuse(f"keep_n avec {quoi}", avec_fanout("implement", fanout),
                    "implement", str(borne[0]), str(borne[1]))
         print(f"   keep_n, {quoi} → {e} ✓")
 
-    # 8. le nœud arbitre : son bloc, sa source, ses trois issues
+
+def arbitre() -> None:
+    """8. Le nœud arbitre : son bloc, sa source, ses trois issues."""
     graph.validate(bundle_livre())
-    arbitre = bundle_livre()["nodes"]["judge"]
-    assert graph.judge_source(arbitre) == "implement", arbitre
-    assert set(graph.JUDGE_OUTCOMES) <= set(arbitre["edges"]), arbitre["edges"]
+    juge = bundle_livre()["nodes"]["judge"]
+    assert graph.judge_source(juge) == "implement", juge
+    assert set(graph.JUDGE_OUTCOMES) <= set(juge["edges"]), juge["edges"]
     print("8. l'exemple livré porte son arbitre : JUDGE, source `implement`, "
           f"issues {list(graph.JUDGE_OUTCOMES)} ✓")
 
@@ -223,6 +237,16 @@ def main() -> None:
         e = refuse(quoi, bundle, *attendus)
         print(f"   {quoi} → {e} ✓")
 
+
+def main() -> None:
+    bien_forme_publie()
+    wait_refuse()
+    table_des_reductions()
+    limite_dure()
+    formes_malades()
+    sans_fanout_rien_ne_change()
+    borne_de_keep_n()
+    arbitre()
     print("\nfan-out : OK — la déclaration existe, et une config fautive ne se publie pas")
 
 

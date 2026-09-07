@@ -22,34 +22,18 @@ Usage : uv run python tests/passage_test.py
 """
 
 import sys
-import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import db, graph, kernel  # noqa: E402
+from graphatom import db, kernel  # noqa: E402
 from graphatom.policy import MAX_ATTEMPTS  # noqa: E402
 
-from outils import etat  # noqa: E402
+from outils import admettre, bundle_epreuve, etat  # noqa: E402
 
-BUNDLE = {
-    "name": "passage-test",
-    "entry": "travail",
-    "budgets": {"escalations": 3, "wall_deadline_hours": 1},
-    "on_kernel": {"escalate_to": "escalate", "exhausted_to": "abandon"},
-    "nodes": {
-        "travail": {"block": "ACT", "config": {}, "edges": {"ok": "fini"}},
-        "escalate": {
-            "block": "WAIT",
-            "escalade": True,
-            "config": {"question": "On retente ?", "options": ["retry"],
-                       "owner": "test", "deadline_minutes": 60},
-            "edges": {"retry": "travail", "expired": "abandon"},
-        },
-        "fini": {"terminal": True},
-        "abandon": {"terminal": True},
-    },
-}
+BUNDLE = bundle_epreuve("passage-test", {
+    "travail": {"block": "ACT", "config": {}, "edges": {"ok": "fini"}},
+}, escalations=3)
 
 
 def bundle_nominal(escalations: int) -> dict:
@@ -59,26 +43,11 @@ def bundle_nominal(escalations: int) -> dict:
     `verif → travail → verif` — exactement la forme du `validate` de
     `code-task`. Le traverser une fois n'est pas boucler.
     """
-    return {
-        "name": "passage-test-nominal",
-        "entry": "travail",
-        "budgets": {"escalations": escalations, "wall_deadline_hours": 1},
-        "on_kernel": {"escalate_to": "escalate", "exhausted_to": "abandon"},
-        "nodes": {
-            "travail": {"block": "ACT", "config": {}, "edges": {"ok": "verif"}},
-            "verif": {"block": "JUDGE", "escalade": True, "config": {},
-                      "edges": {"pass": "fini", "fail": "travail"}},
-            "escalate": {
-                "block": "WAIT",
-                "escalade": True,
-                "config": {"question": "On retente ?", "options": ["retry"],
-                           "owner": "test", "deadline_minutes": 60},
-                "edges": {"retry": "travail", "expired": "abandon"},
-            },
-            "fini": {"terminal": True},
-            "abandon": {"terminal": True},
-        },
-    }
+    return bundle_epreuve("passage-test-nominal", {
+        "travail": {"block": "ACT", "config": {}, "edges": {"ok": "verif"}},
+        "verif": {"block": "JUDGE", "escalade": True, "config": {},
+                  "edges": {"pass": "fini", "fail": "travail"}},
+    }, escalations=escalations)
 
 
 def brule_le_passage(conn, item_id: int, cycle: int) -> None:
@@ -109,10 +78,7 @@ def derniere_issue(conn, item_id: int) -> str:
 def chemin_nominal(conn) -> None:
     """Le budget paie les tours de boucle, pas la traversée du chemin."""
     # 6-7. budget zéro : la traversée passe, la boucle non
-    rev = graph.publish(conn, bundle_nominal(escalations=0))
-    item_id = kernel.admit(
-        conn, rev, f"nominal-0:{uuid.uuid4().hex[:8]}", _allow_parallel_for_test=True
-    )
+    item_id = admettre(conn, bundle_nominal(escalations=0), "nominal-0")
     item = avance(conn, item_id, "ok")
     assert item["state"] == "verif", item["state"]
     assert item["escalations"] == 0, item["escalations"]
@@ -127,10 +93,7 @@ def chemin_nominal(conn) -> None:
           "budget_exhausted → abandon ✓")
 
     # 8. avec du budget, c'est bien la re-entrée qui débite
-    rev = graph.publish(conn, bundle_nominal(escalations=1))
-    item_id = kernel.admit(
-        conn, rev, f"nominal-1:{uuid.uuid4().hex[:8]}", _allow_parallel_for_test=True
-    )
+    item_id = admettre(conn, bundle_nominal(escalations=1), "nominal-1")
     item = avance(conn, item_id, "ok")
     assert item["escalations"] == 1, "la première visite est gratuite"
     avance(conn, item_id, "fail")
@@ -144,11 +107,8 @@ def chemin_nominal(conn) -> None:
 def main() -> None:
     db.init_db()  # idempotent : ne détruit rien, rattrape juste le schéma
     with db.connect() as conn:
-        rev = graph.publish(conn, BUNDLE)
-        item_id = kernel.admit(
-            conn, rev, f"passage:{uuid.uuid4().hex[:8]}", _allow_parallel_for_test=True
-        )
-        print(f"révision {rev[:12]}…, item {item_id}")
+        item_id = admettre(conn, BUNDLE, "passage")
+        print(f"révision {etat(conn, item_id)['revision'][:12]}…, item {item_id}")
 
         # 1. le premier passage brûle sa marge, puis escalade
         brule_le_passage(conn, item_id, cycle=1)

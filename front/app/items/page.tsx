@@ -11,23 +11,17 @@
  * La page pose la première liste, le tableau vit ensuite tout seul.
  */
 import { getItems } from "@/lib/api";
-import { ApiDown } from "@/components/api-down";
+import { load } from "@/lib/load";
+import { shown } from "@/components/api-down";
 import { ItemsTable } from "@/components/items-table";
 
 export const dynamic = "force-dynamic";
 
 export default async function ItemsPage() {
-  let items;
-  try {
-    items = await getItems();
-  } catch (err) {
-    return <ApiDown error={err} />;
-  }
-
-  return (
+  return shown(await load(getItems), (items) => (
     <div className="flex flex-col gap-4">
       <h1 className="text-lg font-semibold sm:text-xl">items</h1>
       <ItemsTable initial={items} />
     </div>
-  );
+  ));
 }

@@ -23,12 +23,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from outils import kill_group, provision_postgres, sh  # noqa: E402
+from outils import attendre, etat, kill_group, provision_postgres, sh  # noqa: E402
 
 # une base à lui, détruite avec lui : jamais celle que GRAPHATOM_DSN désigne
 os.environ["GRAPHATOM_DSN"] = provision_postgres("graphatom-crash")
 
-from graphatom import blocks, db, kernel  # noqa: E402
+from graphatom import db  # noqa: E402
 from graphatom import reaper, workspace as bureau  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -93,26 +93,31 @@ def scheduler() -> subprocess.Popen:
     )
 
 
-def main() -> None:
+def preparer() -> int:
+    """La base, le graph publié, l'item admis."""
     sh("init-db", "--drop")
     spec = WORK / "crash-test.json"
     spec.write_text(json.dumps(bundle()))
     rev = sh("publish", str(spec))
     item_id = int(sh("admit", rev, "pipeline-x:oom"))
     print(f"révision {rev[:12]}…, item {item_id}")
+    return item_id
 
-    # phase 1 : les trois agents volent sous un bail long
-    proc = scheduler()
-    workspace = WORK / "data" / f"item-{item_id}"
+
+def trois_agents_en_vol(workspace: Path) -> list[Path]:
+    """Phase 1 : les trois agents volent sous un bail long — leurs traces."""
     deadline = time.time() + 15
     while time.time() < deadline:
         traces = sorted(workspace.glob("c*/agent.pgid"))
         if len(traces) == 3:
-            break
+            return traces
         time.sleep(0.1)
-    else:
-        sys.exit("ÉCHEC : les trois agents n'ont pas démarré")
+    sys.exit("ÉCHEC : les trois agents n'ont pas démarré")
 
+
+def identites_conservees(item_id: int, proc: subprocess.Popen) -> list[dict]:
+    """L'ordonnanceur tué, le reaper ne prend aucun groupe vivant pour un
+    orphelin : les trois runs restent `running`. Rend ces trois runs."""
     with db.connect() as conn:
         anciens = conn.execute(
             "SELECT id, lease_expires_at, "
@@ -132,11 +137,81 @@ def main() -> None:
         ).fetchone()["n"]
         assert encore == 3, encore
     print("trois identités vivantes conservées avant le bail ✓")
+    return anciens
 
+
+def tuer_les_groupes(traces: list[Path], workspace: Path) -> None:
+    """Les trois groupes d'agents tués ; à la reprise, l'agent finira."""
     for path in traces:
         os.killpg(json.loads(path.read_text())["pgid"], signal.SIGKILL)
     (workspace / "repris").touch()
     print("ordonnanceur et trois groupes tués sous un bail de 600 s", flush=True)
+
+
+def classes_sans_bail(conn, ids: list[int], reprise: float) -> None:
+    """1. Les trois orphelins sont classés en quelques ticks, bail non échu."""
+    while time.monotonic() - reprise < REAP_S:
+        classes = conn.execute(
+            "SELECT count(*) AS n FROM node_run WHERE id = ANY(%s) "
+            "AND status = 'faulted'", (ids,),
+        ).fetchone()["n"]
+        if classes == 3:
+            break
+        time.sleep(0.1)
+    else:
+        sys.exit("ÉCHEC : les trois orphelins attendent encore leur bail")
+    print(f"1. trois runs classés en {time.monotonic() - reprise:.1f}s, "
+          f"bail restant supérieur à {LEASE_S - 20}s ✓")
+
+
+def item_terminal(conn, item_id: int, deadline: float) -> dict:
+    """2. L'item atteint un état terminal dans les temps : `close`."""
+    fini = attendre(lambda: etat(conn, item_id)["terminal_at"] is not None,
+                    deadline - time.time())
+    if not fini:
+        sys.exit("ÉCHEC : l'item n'a pas terminé dans les temps")
+    item = etat(conn, item_id)
+    assert item["state"] == "close", item["state"]
+    print(f"2. terminal : {item['state']} ✓")
+    return item
+
+
+def journal_contigu(conn, item: dict) -> None:
+    """3. Le journal est une chaîne contiguë v1..vN."""
+    versions = [r["item_version"] for r in conn.execute(
+        "SELECT item_version FROM event WHERE item_id = %s ORDER BY item_version",
+        (item["id"],),
+    )]
+    assert versions == list(range(1, len(versions) + 1)), versions
+    assert versions[-1] == item["version"]
+    print(f"3. journal contigu v1..v{versions[-1]} ✓")
+
+
+def effet_unique() -> None:
+    """4. L'effet est exécuté exactement une fois."""
+    outbox = (WORK / "data" / "effects_outbox.log").read_text()
+    key = "crash-test:pipeline-x:oom:commit"
+    assert outbox.count(key) == 1, f"{outbox.count(key)} exécutions"
+    print("4. effet exécuté exactement une fois ✓")
+
+
+def tous_classes(conn, ids: list[int]) -> None:
+    """Les trois runs de la première tentative sont tous classés."""
+    statuses = [r["status"] for r in conn.execute(
+        "SELECT status FROM node_run WHERE id = ANY(%s)", (ids,)
+    )]
+    assert statuses == ["faulted"] * 3, statuses
+
+
+def main() -> None:
+    item_id = preparer()
+
+    # phase 1 : les trois agents volent sous un bail long
+    proc = scheduler()
+    workspace = WORK / "data" / f"item-{item_id}"
+    traces = trois_agents_en_vol(workspace)
+    anciens = identites_conservees(item_id, proc)
+    tuer_les_groupes(traces, workspace)
 
     # phase 2 : relancer tout de suite, sans attendre le bail
     reprise = time.monotonic()
@@ -145,53 +220,11 @@ def main() -> None:
     try:
         with db.connect() as conn:
             ids = [run["id"] for run in anciens]
-            while time.monotonic() - reprise < REAP_S:
-                classes = conn.execute(
-                    "SELECT count(*) AS n FROM node_run WHERE id = ANY(%s) "
-                    "AND status = 'faulted'", (ids,),
-                ).fetchone()["n"]
-                if classes == 3:
-                    break
-                time.sleep(0.1)
-            else:
-                sys.exit("ÉCHEC : les trois orphelins attendent encore leur bail")
-            print(f"1. trois runs classés en {time.monotonic() - reprise:.1f}s, "
-                  f"bail restant supérieur à {LEASE_S - 20}s ✓")
-
-            while time.time() < deadline:
-                item = conn.execute(
-                    "SELECT * FROM work_item WHERE id = %s", (item_id,)
-                ).fetchone()
-                if item["terminal_at"] is not None:
-                    break
-                time.sleep(0.5)
-            else:
-                sys.exit("ÉCHEC : l'item n'a pas terminé dans les temps")
-
-            # 1. terminal
-            assert item["state"] == "close", item["state"]
-            print(f"2. terminal : {item['state']} ✓")
-
-            # 2. journal contigu v1..vN
-            versions = [r["item_version"] for r in conn.execute(
-                "SELECT item_version FROM event WHERE item_id = %s ORDER BY item_version",
-                (item_id,),
-            )]
-            assert versions == list(range(1, len(versions) + 1)), versions
-            assert versions[-1] == item["version"]
-            print(f"3. journal contigu v1..v{versions[-1]} ✓")
-
-            # 3. effet exactement une fois
-            outbox = (WORK / "data" / "effects_outbox.log").read_text()
-            key = "crash-test:pipeline-x:oom:commit"
-            assert outbox.count(key) == 1, f"{outbox.count(key)} exécutions"
-            print("4. effet exécuté exactement une fois ✓")
-
-            # les trois runs de la première tentative sont tous classés
-            statuses = [r["status"] for r in conn.execute(
-                "SELECT status FROM node_run WHERE id = ANY(%s)", (ids,)
-            )]
-            assert statuses == ["faulted"] * 3, statuses
+            classes_sans_bail(conn, ids, reprise)
+            item = item_terminal(conn, item_id, deadline)
+            journal_contigu(conn, item)
+            effet_unique()
+            tous_classes(conn, ids)
     finally:
         kill_group(proc, signal.SIGTERM)
         shutil.rmtree(WORK, ignore_errors=True)

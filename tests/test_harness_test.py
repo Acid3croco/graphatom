@@ -11,7 +11,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import blocks  # noqa: E402
 from graphatom.gates import elected_failures  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]

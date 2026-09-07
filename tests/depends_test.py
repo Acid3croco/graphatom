@@ -20,7 +20,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import blocks, github_sync as gs  # noqa: E402
 from graphatom import github_admission, github_client, github_questions, github_sync as sync  # noqa: E402
 from graphatom import workspace as bureau  # noqa: E402
 
@@ -29,10 +28,10 @@ class FakeCursor:
     def __init__(self, rows: list):
         self.rows = rows
 
-    def fetchone(self):
+    def fetchone(self):  # noqa — le contrat du curseur, lu par le canal
         return self.rows[0] if self.rows else None
 
-    def fetchall(self):
+    def fetchall(self):  # noqa — idem
         return self.rows
 
 
@@ -49,7 +48,7 @@ class FakeConn:
         self.items = items or []
         self.events = events or []
 
-    def execute(self, sql: str, params: tuple = ()):
+    def execute(self, sql: str, params: tuple = ()):  # noqa — le contrat de la base
         if "FROM subject s JOIN work_item" in sql:
             return FakeCursor([{"?column?": 1}] if params[1] in self.known else [])
         if "UPDATE subject SET title" in sql:
@@ -66,9 +65,11 @@ class FakeConn:
 
 
 class FakeGitHub:
-    """GitHub : des issues ouvertes, des états par numéro, et ce qu'on lui écrit."""
+    """GitHub : des issues ouvertes, des états par numéro, et ce qu'on lui écrit.
 
-    repo = "o/r"
+    Ses méthodes sont le contrat que le canal appelle — jamais ce test."""
+
+    repo = "o/r"  # noqa — lu par le canal
 
     def __init__(self, issues: list[dict], states: dict[int, str]):
         self.issues, self.states = issues, states
@@ -76,13 +77,13 @@ class FakeGitHub:
         self.labels: list[tuple[str, int, str]] = []
         self.reads = 0
 
-    def labeled_issues(self) -> list[dict]:
+    def labeled_issues(self) -> list[dict]:  # noqa
         return self.issues
 
-    def issue(self, number: int) -> dict | None:
+    def issue(self, number: int) -> dict | None:  # noqa
         return {"state": self.states[number]} if number in self.states else None
 
-    def comments(self, number: int) -> list[dict]:
+    def comments(self, number: int) -> list[dict]:  # noqa
         self.reads += 1
         return [{"id": index, "body": body}
                 for index, (n, body) in enumerate(self.posted, start=1)
@@ -91,22 +92,22 @@ class FakeGitHub:
     def post_comment(self, number: int, body: str) -> None:
         self.posted.append((number, body))
 
-    def edit_comment(self, comment_id: int, body: str) -> None:
+    def edit_comment(self, comment_id: int, body: str) -> None:  # noqa
         number, _ = self.posted[comment_id - 1]
         self.posted[comment_id - 1] = (number, body)
 
-    def create_label(self, name: str) -> None:
+    def create_label(self, _name: str) -> None:  # noqa
         pass
 
-    def add_label(self, number: int, name: str) -> None:
+    def add_label(self, number: int, name: str) -> None:  # noqa
         self.labels.append(("+", number, name))
 
-    def remove_label(self, number: int, name: str) -> None:
+    def remove_label(self, number: int, name: str) -> None:  # noqa
         self.labels.append(("-", number, name))
 
 
 class FakeGraph:
-    def load_bundle(self, conn, revision: str) -> dict:
+    def load_bundle(self, _conn, _revision: str) -> dict:  # noqa — appelé par le canal
         return {"name": "code-task"}
 
 
@@ -115,7 +116,7 @@ class FakeKernel:
         self.admitted: list[str] = []
         self.titles: list[str | None] = []
 
-    def admit(self, conn, revision: str, subject_key: str,
+    def admit(self, _conn, _revision: str, subject_key: str,  # noqa — appelé par le canal
               title: str | None = None, prepare=None) -> int:
         self.admitted.append(subject_key)
         self.titles.append(title)
@@ -133,8 +134,11 @@ def deps(body, number=1, states=None, gh=None, said=None):
     return gh, github_admission.pending_deps(gh, issue, "code-task", {}, said)
 
 
-def main() -> None:
-    # 1. grammaire fermée : la ligne au mot, le reste du corps n'existe pas
+# -------------------------------------------------------------------- preuves
+
+
+def preuve_grammaire() -> None:
+    """1. grammaire fermée : la ligne au mot, le reste du corps n'existe pas."""
     assert github_admission.depends_on("Depends-on: #29") == ["#29"]
     assert github_admission.depends_on("- [ ] #29\ndepends-on: #30\nvoir #31") == []
     assert github_admission.depends_on(None) == [] and github_admission.depends_on("") == []
@@ -147,7 +151,9 @@ def main() -> None:
     assert waiting == [], waiting
     print("1. `Depends-on: #N` lu, task list et prose ignorées ✓")
 
-    # 2. les déclarations invalides : ignorées, dites une fois
+
+def preuve_invalide() -> None:
+    """2. les déclarations invalides : ignorées, dites une fois."""
     for body, said_word in (("Depends-on: #1", "elle-même"),
                             ("Depends-on: #99", "n'existe pas"),
                             ("Depends-on: bientôt", "attendu")):
@@ -163,8 +169,11 @@ def main() -> None:
     assert len(gh.posted) == 1, gh.posted
     print("2. dépendance invalide : ignorée, dite une fois ✓")
 
+
+def preuve_dependance_ouverte() -> tuple[FakeConn, FakeGitHub, list[dict], set]:
+    """3. tick 1 : #41 attend, #42 part — un commentaire, un label."""
     # les doublures prennent la place du kernel et du graph dans le canal
-    github_admission.graph, github_admission.kernel = FakeGraph(), FakeKernel()
+    github_admission.graph, github_admission.kernel = FakeGraph(), FakeKernel()  # noqa
     kernel = github_admission.kernel
     issues = [{"number": 41, "body": "Depends-on: #29", "labels": [],
                "title": "Le titre de #41"},
@@ -173,7 +182,6 @@ def main() -> None:
     gh = FakeGitHub(issues, {29: "open"})
     conn, said = FakeConn(), set()
 
-    # 3. tick 1 : #41 attend, #42 part — un commentaire, un label
     blocked, queued = github_admission.admit_labeled(conn, gh, "rev", said)
     assert blocked == {41} and queued == set(), (blocked, queued)
     assert kernel.admitted == ["gh:o/r#42"], kernel.admitted
@@ -186,8 +194,13 @@ def main() -> None:
     sync.paint_states(conn, gh, blocked, queued, stalled=False)
     assert gh.labels == [("+", 41, github_client.BLOCKED)], gh.labels
     print("3. dépendance ouverte : pas d'item, `rail:blocked`, un commentaire ✓")
+    return conn, gh, issues, said
 
-    # 4. tick 2 : rien de neuf, rien de dit
+
+def preuve_dependance_fermee(conn: FakeConn, gh: FakeGitHub, issues: list[dict],
+                             said: set) -> None:
+    """4. tick 2 : rien de neuf, rien de dit ; tick 3 : la dépendance ferme."""
+    kernel = github_admission.kernel
     conn.known.add("gh:o/r#42")
     issues[0]["labels"] = [{"name": github_client.BLOCKED}]
     gh.labels.clear()
@@ -196,7 +209,7 @@ def main() -> None:
     sync.paint_states(conn, gh, {41}, set(), stalled=False)
     assert gh.labels == [], gh.labels
 
-    # 4. tick 3 : la dépendance ferme → admission normale, le label s'en va
+    # tick 3 : la dépendance ferme → admission normale, le label s'en va
     gh.states[29] = "closed"
     blocked, queued = github_admission.admit_labeled(conn, gh, "rev", said)
     assert blocked == queued == set(), (blocked, queued)
@@ -205,10 +218,10 @@ def main() -> None:
     assert gh.labels == [("-", 41, github_client.BLOCKED)], gh.labels
     print("4. dépendance fermée : admission au tick suivant, label retiré ✓")
 
-    # 5. reprise valide : dernier item terminal, trois noms fermés, accusé lisible
-    temporary = tempfile.TemporaryDirectory(prefix="graphatom-retry-")
-    workspace = Path(temporary.name)
-    bureau.DATA_DIR = workspace
+
+def preuve_reprise_valide(workspace: Path) -> None:
+    """5. reprise valide : dernier item terminal, trois noms fermés, accusé lisible."""
+    bureau.DATA_DIR = workspace  # noqa — les workspaces du test
     old = bureau.item_workspace(7)
     old.mkdir(parents=True)
     (old / "echec.md").write_text("trace de #40\n")
@@ -252,7 +265,9 @@ def main() -> None:
     assert "reprise de #40 (item 7)" in gh.posted[-1][1], gh.posted[-1]
     print("5. reprise valide : pièces existantes copiées, filiation dans l'accusé ✓")
 
-    # 6. cible absente, sans terminal ou soi-même : commentaire et admission normale
+
+def preuve_reprise_invalide() -> None:
+    """6. cible absente, sans terminal ou soi-même : commentaire et admission normale."""
     for body, states, terminals, word in (
         ("Retry-of: #99", {}, {}, "n'existe pas"),
         ("Retry-of: #40", {40: "closed"}, {}, "aucun item terminal"),
@@ -274,7 +289,16 @@ def main() -> None:
         assert word in gh.posted[0][1], (body, gh.posted)
         assert "graphatom:code-task-retry-invalid" in gh.posted[0][1]
     print("6. reprise invalide : commentaire à clé logique, admission normale ✓")
-    temporary.cleanup()
+
+
+def main() -> None:
+    preuve_grammaire()
+    preuve_invalide()
+    conn, gh, issues, said = preuve_dependance_ouverte()
+    preuve_dependance_fermee(conn, gh, issues, said)
+    with tempfile.TemporaryDirectory(prefix="graphatom-retry-") as temporary:
+        preuve_reprise_valide(Path(temporary))
+        preuve_reprise_invalide()
 
     print("\ndépendances : OK — l'admission attend, puis part toute seule")
 

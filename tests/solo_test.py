@@ -11,14 +11,13 @@ Usage : uv run python tests/solo_test.py
 import os
 import shutil
 import sys
-import tempfile
-import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import blocks, db, graph, kernel, scheduler  # noqa: E402
-from graphatom import workspace  # noqa: E402
+from graphatom import db, kernel, scheduler  # noqa: E402
+
+from outils import admettre, bundle_epreuve, data_dir_jetable, runs_de  # noqa: E402
 
 INSTANCE = os.environ.get("GRAPHATOM_AGENT_DSN") or db.DSN
 os.environ["GRAPHATOM_AGENT_DSN"] = INSTANCE
@@ -27,41 +26,18 @@ ITEM_ID = 940000 + os.getpid() % 10000
 
 def bundle(solo: bool) -> dict:
     """Un ACT qui garde son run en vol jusqu'à ce que le test le rende."""
-    return {
-        "name": f"solo-{solo}",
-        "entry": "travail",
-        "budgets": {"escalations": 2, "wall_deadline_hours": 1},
-        "on_kernel": {"escalate_to": "escalate", "exhausted_to": "abandon"},
-        "nodes": {
-            "travail": {
-                "block": "ACT",
-                "config": {"duration_s": 0, "lease_s": 600, "solo": solo},
-                "edges": {"ok": "fini"},
-            },
-            "escalate": {
-                "block": "WAIT",
-                "escalade": True,
-                "config": {"question": "On retente ?", "options": ["retry"],
-                           "owner": "test", "deadline_minutes": 60},
-                "edges": {"retry": "travail", "expired": "abandon"},
-            },
-            "fini": {"terminal": True},
-            "abandon": {"terminal": True},
+    return bundle_epreuve(f"solo-{solo}", {
+        "travail": {
+            "block": "ACT",
+            "config": {"duration_s": 0, "lease_s": 600, "solo": solo},
+            "edges": {"ok": "fini"},
         },
-    }
+    })
 
 
 def seme(conn, solo: bool) -> int:
-    revision = graph.publish(conn, bundle(solo))
-    return kernel.admit(
-        conn, revision, f"solo:{uuid.uuid4().hex[:8]}", _allow_parallel_for_test=True
-    )
-
-
-def runs(conn, item_id: int) -> list[dict]:
-    return conn.execute(
-        "SELECT * FROM node_run WHERE item_id = %s ORDER BY id", (item_id,)
-    ).fetchall()
+    """Un item de plus sur la voie, solo ou non."""
+    return admettre(conn, bundle(solo), "solo")
 
 
 def rendre(conn, item_id: int) -> None:
@@ -74,8 +50,7 @@ def rendre(conn, item_id: int) -> None:
 
 
 def main() -> None:
-    workdir = Path(tempfile.mkdtemp(prefix="graphatom-solo-"))
-    workspace.DATA_DIR = workdir
+    workdir = data_dir_jetable("graphatom-solo-")
     os.environ["GRAPHATOM_REPO_DIR"] = str(workdir / "sans-depot")
     garde = (db.DSN, scheduler.MAX_RUNS, scheduler.MAX_RUNS_PER_ITEM,
              scheduler.MAX_ACTIVE_ITEMS, scheduler._execute)
@@ -92,29 +67,29 @@ def main() -> None:
             seul = seme(conn, True)
 
             scheduler.tick(conn)
-            assert len(runs(conn, ordinaire)) == 1
-            assert runs(conn, seul) == [], \
+            assert len(runs_de(conn, ordinaire)) == 1
+            assert runs_de(conn, seul) == [], \
                 "le solo attendu ne doit avoir ni bail ni tentative"
             assert scheduler.etat_solo(conn) == {"running": 0, "waiting": 1}
             print("1. un run ordinaire vole : le solo attend sans node_run ✓")
 
             rendre(conn, ordinaire)
             scheduler.tick(conn)
-            solo_runs = runs(conn, seul)
+            solo_runs = runs_de(conn, seul)
             assert len(solo_runs) == 1 and solo_runs[0]["attempt"] == 1
             assert scheduler.etat_solo(conn) == {"running": 1, "waiting": 0}
             print("2. voie vide : le solo part à sa première tentative ✓")
 
             voisin = seme(conn, False)
             scheduler.tick(conn)
-            assert runs(conn, voisin) == [], \
+            assert runs_de(conn, voisin) == [], \
                 "un voisin ne doit avoir ni bail ni tentative sous un solo"
             assert scheduler.en_vol(conn) == 1
             print("3. le solo vole : aucun voisin n'est réservé ✓")
 
             rendre(conn, seul)
             scheduler.tick(conn)
-            voisin_runs = runs(conn, voisin)
+            voisin_runs = runs_de(conn, voisin)
             assert len(voisin_runs) == 1 and voisin_runs[0]["attempt"] == 1
             print("4. le solo rendu : le voisin part à sa première tentative ✓")
     finally:

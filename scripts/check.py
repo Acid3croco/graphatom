@@ -8,6 +8,7 @@ Usage :
     uv run python scripts/check.py ui            # build Next.js + portes DOM
     uv run python scripts/check.py full          # base, crash, concurrence
     uv run python scripts/check.py live          # le vrai fournisseur gratuit
+    uv run python scripts/check.py rules         # les seuils de qualité, couverture comprise
     uv run python scripts/check.py train core ui full   # composables
 
 La liste est volontairement explicite. L'inventaire refuse tout nouveau test
@@ -36,16 +37,19 @@ CORE_PY = (
     "heartbeat_test.py", "links_test.py", "live_test.py", "orphans_test.py",
     "passation_test.py", "split_deps_test.py", "starved_test.py",
     "test_harness_test.py", "timeout_test.py", "validate_test.py",
+    "validation_edges_test.py",
 )
 
 FULL_PY = (
     "crash_test.py", "cycle_test.py", "deterministic_retry_test.py",
-    "escalade_timeout_test.py", "fanout_opencode_test.py", "fanout_test.py",
-    "fanout_worktree_test.py", "hermetic_test.py", "item_lane_test.py",
+    "escalade_timeout_test.py", "fanout_course_test.py", "fanout_isolation_test.py",
+    "fanout_opencode_test.py", "fanout_promotion_test.py",
+    "fanout_reduction_test.py", "hermetic_test.py", "item_lane_test.py",
     "judge_test.py", "migration_test.py", "passage_test.py",
     "plafond_test.py", "portes_test.py", "preflight_test.py", "quota_test.py",
-    "reconnect_test.py", "shell_test.py", "silence_test.py", "solo_test.py",
-    "verrou_test.py",
+    "reconnect_test.py", "shell_activation_test.py", "shell_deploy_test.py",
+    "shell_release_test.py", "shell_worktree_test.py", "silence_test.py",
+    "solo_test.py", "verrou_test.py",
 )
 
 LIVE_PY = ("opencode_test.py",)
@@ -59,7 +63,10 @@ NODE_ENTRY = {
     "front_run_trace_test.cjs",
 }
 
-TIERS = ("train", "core", "ui", "full", "live")
+# La porte des règles : les seuils de qualité, mesurés par `scripts/rules.py` —
+# la statique en quelques secondes, puis toutes les preuves Python sous
+# coverage pour exiger 100 % et un CRAP tenu.
+TIERS = ("train", "core", "ui", "full", "live", "rules")
 
 
 def _inventory() -> None:
@@ -139,6 +146,8 @@ def main() -> None:
             _shell(FULL_SH)
         elif tier == "live":
             _python(LIVE_PY)
+        elif tier == "rules":
+            _run(["uv", "run", "python", "scripts/rules.py"])
 
     print(f"\nCHECK {'+'.join(t.upper() for t in TIERS if t in tiers)} OK "
           "— toutes les preuves classées ont passé")

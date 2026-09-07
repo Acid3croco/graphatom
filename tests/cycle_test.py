@@ -45,7 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import channel, db, graph, kernel  # noqa: E402
 
-from outils import etat, git  # noqa: E402
+from outils import etat, git, kill_group  # noqa: E402
 
 # La base mère ne porte que la création de l'instance jetable. Les agents du
 # cycle, eux, sont des scripts shell et ne reçoivent pas cette capacité.
@@ -203,7 +203,7 @@ def ordonnanceur(work: Path) -> subprocess.Popen:
                             cwd=work, start_new_session=True)
 
 
-def services_deployes(tmp: Path, sha: str) -> tuple[Path, Path]:
+def services_deployes(tmp: Path) -> tuple[Path, Path]:
     """Deux outils étroits qui exposent quatre services sur le SHA du test."""
     docker = tmp / "docker"
     docker.write_text(
@@ -218,14 +218,6 @@ def services_deployes(tmp: Path, sha: str) -> tuple[Path, Path]:
     gh.write_text("#!/bin/sh\nprintf 'jeton-de-test\\n'\n")
     gh.chmod(0o755)
     return docker, gh
-
-
-def tuer(proc: subprocess.Popen) -> None:
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    proc.wait()
 
 
 def attendre(predicat, seconds: float = TIMEOUT_S):
@@ -250,6 +242,14 @@ def repondre(conn, item_id: int, option: str) -> None:
     print(f"   revue : question [{question['id']}] répondue « {option} » ✓")
 
 
+def restaurer(nom: str, valeur: str | None) -> None:
+    """Remet une variable d'environnement telle qu'elle était — ou l'efface."""
+    if valeur is None:
+        os.environ.pop(nom, None)
+    else:
+        os.environ[nom] = valeur
+
+
 # -------------------------------------------------------------------- épreuve
 
 
@@ -262,7 +262,7 @@ def main() -> None:
     saved_worker_sha = os.environ.get("GRAPHATOM_WORKER_SHA")
     worker_sha = git(repo, "rev-parse", "HEAD")
     os.environ["GRAPHATOM_WORKER_SHA"] = worker_sha
-    docker, gh = services_deployes(tmp, worker_sha)
+    docker, gh = services_deployes(tmp)
     saved_deploy_env = {
         name: os.environ.get(name) for name in
         ("GRAPHATOM_DOCKER", "GRAPHATOM_GH", "GRAPHATOM_TEST_SHA")
@@ -290,54 +290,58 @@ def main() -> None:
 
             proc = ordonnanceur(work)
             repondre(conn, item_id, "merger")
-
-            fini = attendre(lambda: etat(conn, item_id)["terminal_at"] is not None)
-            item = etat(conn, item_id)
-            if not fini:
-                sys.exit(f"ÉCHEC : l'item est resté sur « {item['state']} » "
-                         f"après {TIMEOUT_S} s")
-            if item["state"] != "close":
-                sys.exit(f"ÉCHEC : terminal sur « {item['state']} », attendu « close »")
-            # `escalations` est un reste, pas un compte : le budget d'origine
-            # intact dit qu'un cycle nominal ne paie aucune escalade
-            budget = graph.load_bundle(conn, item["revision"])["budgets"]["escalations"]
-            assert item["escalations"] == budget, item["escalations"]
-            print(f"2. item terminal sur « close » en v{item['version']}, "
-                  f"passage {item['cycle']}, budget d'escalade intact "
-                  f"({budget}) ✓")
-
+            terminal(conn, item_id)
             verifier(conn, item_id, work)
     finally:
         if proc is not None:
-            tuer(proc)
+            kill_group(proc, signal.SIGTERM)
         os.environ["GRAPHATOM_AGENT_DSN"] = AGENT_INSTANCE
         db.drop_agent_db()
         db.DSN = saved_dsn
-        if saved_dsn_env is None:
-            os.environ.pop("GRAPHATOM_DSN", None)
-        else:
-            os.environ["GRAPHATOM_DSN"] = saved_dsn_env
-        if ORIGINAL_AGENT_DSN is None:
-            os.environ.pop("GRAPHATOM_AGENT_DSN", None)
-        else:
-            os.environ["GRAPHATOM_AGENT_DSN"] = ORIGINAL_AGENT_DSN
-        if saved_worker_sha is None:
-            os.environ.pop("GRAPHATOM_WORKER_SHA", None)
-        else:
-            os.environ["GRAPHATOM_WORKER_SHA"] = saved_worker_sha
+        restaurer("GRAPHATOM_DSN", saved_dsn_env)
+        restaurer("GRAPHATOM_AGENT_DSN", ORIGINAL_AGENT_DSN)
+        restaurer("GRAPHATOM_WORKER_SHA", saved_worker_sha)
         for name, value in saved_deploy_env.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
+            restaurer(name, value)
         shutil.rmtree(tmp, ignore_errors=True)
 
     print("\ncycle : OK — le profil code-task traverse keep_n et judge, "
           "et l'item atteint close")
 
 
+def terminal(conn, item_id: int) -> None:
+    """2. l'item atteint `close`, et son budget d'escalade est intact."""
+    fini = attendre(lambda: etat(conn, item_id)["terminal_at"] is not None)
+    item = etat(conn, item_id)
+    if not fini:
+        sys.exit(f"ÉCHEC : l'item est resté sur « {item['state']} » "
+                 f"après {TIMEOUT_S} s")
+    if item["state"] != "close":
+        sys.exit(f"ÉCHEC : terminal sur « {item['state']} », attendu « close »")
+    # `escalations` est un reste, pas un compte : le budget d'origine
+    # intact dit qu'un cycle nominal ne paie aucune escalade
+    budget = graph.load_bundle(conn, item["revision"])["budgets"]["escalations"]
+    assert item["escalations"] == budget, item["escalations"]
+    print(f"2. item terminal sur « close » en v{item['version']}, "
+          f"passage {item['cycle']}, budget d'escalade intact "
+          f"({budget}) ✓")
+
+
 def verifier(conn, item_id: int, work: Path) -> None:
     """Le chemin parcouru, les finalistes, et le prix du jugement à part."""
+    verifier_chemin(conn, item_id)
+    runs = conn.execute(
+        "SELECT node, candidate, status, outcome, result FROM node_run "
+        "WHERE item_id = %s ORDER BY id", (item_id,)).fetchall()
+    candidats = verifier_candidats(runs)
+    verifier_arbitre(runs)
+    verifier_deploiement(runs)
+    verifier_passations(work / "data" / f"item-{item_id}")
+    verifier_prix(conn, item_id, candidats)
+
+
+def verifier_chemin(conn, item_id: int) -> None:
+    """3. le chemin d'origine, nœud par nœud."""
     chemin = [e["to_state"] for e in conn.execute(
         "SELECT to_state FROM event WHERE item_id = %s ORDER BY item_version",
         (item_id,))]
@@ -346,9 +350,9 @@ def verifier(conn, item_id: int, work: Path) -> None:
     print(f"3. chemin d'origine tenu, {len(chemin)} nœuds : "
           f"{' → '.join(chemin)} ✓")
 
-    runs = conn.execute(
-        "SELECT node, candidate, status, outcome, result FROM node_run "
-        "WHERE item_id = %s ORDER BY id", (item_id,)).fetchall()
+
+def verifier_candidats(runs: list[dict]) -> list[dict]:
+    """4. tous les candidats ont couru, `keep_n` en a transmis deux."""
     candidats = [r for r in runs if r["node"] == "implement"]
     finalistes = [r for r in candidats if r["status"] == "applied"]
     recales = [r for r in candidats if r["status"] == "superseded"]
@@ -357,11 +361,16 @@ def verifier(conn, item_id: int, work: Path) -> None:
     assert len(recales) == CANDIDATS - 2, recales
     print(f"4. {len(candidats)} candidats courus, {len(finalistes)} finalistes "
           f"transmis, {len(recales)} recalé{'s' if len(recales) > 1 else ''} ✓")
+    return candidats
 
+
+def verifier_arbitre(runs: list[dict]) -> None:
     arbitre = [r for r in runs if r["node"] == "judge"]
     assert len(arbitre) == 1 and arbitre[0]["outcome"] == "chosen", arbitre
     print("   l'arbitre a couru une fois et a élu ✓")
 
+
+def verifier_deploiement(runs: list[dict]) -> None:
     deploy = [r for r in runs if r["node"] == "deploy"]
     assert len(deploy) == 1, deploy
     deploy_result = deploy[0]["result"]
@@ -372,7 +381,8 @@ def verifier(conn, item_id: int, work: Path) -> None:
     print("   le vrai lecteur du bloc conserve deploy_sha jusqu'au résultat "
           "appliqué et à l'acquittement du worker ✓")
 
-    workspace = work / "data" / f"item-{item_id}"
+
+def verifier_passations(workspace: Path) -> None:
     passations = [workspace / "passation-scope.md",
                   workspace / "passation-judge.md",
                   workspace / "passation-test_backend.md",
@@ -385,8 +395,11 @@ def verifier(conn, item_id: int, work: Path) -> None:
     print("   passations fraîches de scope, implement, judge, test_backend et "
           "validate, toutes à trois sections ✓")
 
-    # le prix du jugement, à part de celui de la génération : c'est ce que la
-    # page de l'item montre, et c'est mesurable ici sur les mêmes lignes
+
+def verifier_prix(conn, item_id: int, candidats: list[dict]) -> None:
+    """5. le prix du jugement, à part de celui de la génération."""
+    # c'est ce que la page de l'item montre, et c'est mesurable ici sur
+    # les mêmes lignes
     prix = {r["part"]: r["cout"] for r in conn.execute(
         "SELECT CASE WHEN node = 'judge' THEN 'jugement' ELSE 'candidats' END AS part, "
         "sum((result->'usage'->>'total_cost_usd')::float) AS cout FROM node_run "

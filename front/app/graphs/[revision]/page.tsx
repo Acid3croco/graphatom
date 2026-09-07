@@ -9,11 +9,11 @@
  * noyau — puis le graph lui-même et la config de chaque nœud.
  */
 import Link from "next/link";
-import { notFound } from "next/navigation";
 
 import { getGraph } from "@/lib/api";
 import { moment } from "@/lib/format";
-import { ApiDown } from "@/components/api-down";
+import { find } from "@/lib/load";
+import { shown } from "@/components/api-down";
 import { GraphView } from "@/components/graph-view";
 
 export const dynamic = "force-dynamic";
@@ -24,17 +24,7 @@ export default async function GraphPage({
   params: Promise<{ revision: string }>;
 }) {
   const { revision } = await params;
-  let bundle;
-  try {
-    bundle = await getGraph(revision);
-  } catch (err) {
-    if (String(err).includes("404")) {
-      notFound();
-    }
-    return <ApiDown error={err} />;
-  }
-
-  return (
+  return shown(await find(() => getGraph(revision)), (bundle) => (
     <div className="flex flex-col gap-6">
       <section className="flex flex-col gap-2">
         <h1 className="text-lg font-semibold break-words sm:text-xl">
@@ -71,5 +61,5 @@ export default async function GraphPage({
         </Link>
       </p>
     </div>
-  );
+  ));
 }

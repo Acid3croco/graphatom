@@ -7,23 +7,17 @@
  * La page pose la première liste, les cartes vivent ensuite toutes seules.
  */
 import { getQuestions } from "@/lib/api";
-import { ApiDown } from "@/components/api-down";
+import { load } from "@/lib/load";
+import { shown } from "@/components/api-down";
 import { QuestionsList } from "@/components/questions-list";
 
 export const dynamic = "force-dynamic";
 
 export default async function QuestionsPage() {
-  let open;
-  try {
-    open = await getQuestions();
-  } catch (err) {
-    return <ApiDown error={err} />;
-  }
-
-  return (
+  return shown(await load(getQuestions), (open) => (
     <div className="flex flex-col gap-4">
       <h1 className="text-lg font-semibold sm:text-xl">questions</h1>
       <QuestionsList initial={open.questions} />
     </div>
-  );
+  ));
 }

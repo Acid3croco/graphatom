@@ -48,6 +48,27 @@ def changed(repo: Path) -> list[str]:
     return list(dict.fromkeys(path for path in paths if path))
 
 
+def _tests_for(path: str) -> list[str]:
+    """Les tests qu'un chemin du diff convoque, dans l'ordre versionné."""
+    tests: list[str] = []
+    if path in ("scripts/test_harness.py", "tests/test_harness_test.py"):
+        tests.append("tests/test_harness_test.py")
+    if path.startswith("src/graphatom/blocks.py"):
+        tests += ["tests/passation_test.py", "tests/orphans_test.py"]
+    if path.startswith(("src/graphatom/scheduler.py", "src/graphatom/kernel.py",
+                        "src/graphatom/db.py", "schema.sql")):
+        tests += ["tests/crash_test.py", "tests/reconnect_test.py"]
+    if path.startswith("src/graphatom/web.py"):
+        tests.append("tests/api_test.py")
+    if path == "examples/code-task.json":
+        tests += ["tests/validate_test.py", "tests/checklist_test.py",
+                  "tests/shell_worktree_test.py", "tests/shell_release_test.py",
+                  "tests/shell_deploy_test.py", "tests/shell_activation_test.py"]
+    if path.startswith("tests/") and path.endswith(("_test.py", "_test.sh")):
+        tests.append(path)
+    return tests
+
+
 def backend_gates(paths: list[str]) -> list[tuple[str, list[str]]]:
     """Sélection mécanique, ordonnée et bornée des tests backend."""
     if not any(path.startswith(BACKEND_PREFIXES) for path in paths):
@@ -56,29 +77,8 @@ def backend_gates(paths: list[str]) -> list[tuple[str, list[str]]]:
         "uv", "run", "python", "-c",
         "import graphatom.blocks, graphatom.kernel, graphatom.scheduler, graphatom.web",
     ])]
-    names: list[str] = []
-
-    def add(*tests: str) -> None:
-        for test in tests:
-            if test not in names:
-                names.append(test)
-
-    for path in paths:
-        if path == "scripts/test_harness.py" or path == "tests/test_harness_test.py":
-            add("tests/test_harness_test.py")
-        if path.startswith("src/graphatom/blocks.py"):
-            add("tests/passation_test.py", "tests/orphans_test.py")
-        if path.startswith(("src/graphatom/scheduler.py", "src/graphatom/kernel.py",
-                            "src/graphatom/db.py", "schema.sql")):
-            add("tests/crash_test.py", "tests/reconnect_test.py")
-        if path.startswith("src/graphatom/web.py"):
-            add("tests/api_test.py")
-        if path == "examples/code-task.json":
-            add("tests/validate_test.py", "tests/checklist_test.py",
-                "tests/shell_test.py")
-        if (path.startswith("tests/")
-                and (path.endswith("_test.py") or path.endswith("_test.sh"))):
-            add(path)
+    # un test par nom, à sa première convocation : l'ordre du diff est gardé
+    names = dict.fromkeys(test for path in paths for test in _tests_for(path))
     return gates + [
         (Path(test).name, (["bash", test] if test.endswith(".sh")
                            else ["uv", "run", "python", test]))
@@ -128,6 +128,23 @@ def _descendants(pid: int) -> list[int]:
     return found
 
 
+def _signal_pid(pid: int, sig: int) -> None:
+    """Signale un processus ; un processus déjà parti ne fait pas d'erreur."""
+    try:
+        os.kill(pid, sig)
+    except ProcessLookupError:
+        pass
+
+
+def _signal_group(pgid: int, sig: int) -> bool:
+    """Signale un groupe entier ; faux si le groupe n'existe plus."""
+    try:
+        os.killpg(pgid, sig)
+        return True
+    except ProcessLookupError:
+        return False
+
+
 def _signal_tree(process: subprocess.Popen, sig: signal.Signals) -> list[int]:
     descendants = _descendants(process.pid)
     try:
@@ -137,10 +154,7 @@ def _signal_tree(process: subprocess.Popen, sig: signal.Signals) -> list[int]:
     except ProcessLookupError:
         return descendants
     for pid in descendants:
-        try:
-            os.kill(pid, sig)
-        except ProcessLookupError:
-            pass
+        _signal_pid(pid, sig)
     try:
         process.send_signal(sig)
     except ProcessLookupError:
@@ -148,48 +162,57 @@ def _signal_tree(process: subprocess.Popen, sig: signal.Signals) -> list[int]:
     return descendants
 
 
-def _stop(processes: list[subprocess.Popen]) -> None:
-    descendants = []
-    groups = []
+def _terminate(processes: list[subprocess.Popen]) -> tuple[list[int], list[int]]:
+    """SIGTERM à chaque groupe, ou à l'arbre d'un processus sans groupe.
+
+    Rend les descendants signalés un à un, et les groupes qui existaient.
+    """
+    descendants: list[int] = []
+    groups: list[int] = []
     for process in reversed(processes):
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
+        if _signal_group(process.pid, signal.SIGTERM):
             groups.append(process.pid)
-        except ProcessLookupError:
-            pass
         if process.poll() is None and process.pid not in groups:
             descendants.extend(_signal_tree(process, signal.SIGTERM))
-    deadline = time.monotonic() + 3
+    return descendants, groups
+
+
+def _wait_all(processes: list[subprocess.Popen], deadline: float) -> None:
+    """Attend chaque processus jusqu'à l'échéance ; au-delà, SIGKILL à l'arbre."""
     for process in reversed(processes):
         try:
             process.wait(timeout=max(0.1, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
             _signal_tree(process, signal.SIGKILL)
             process.wait()
+
+
+def _survivors(descendants: list[int], groups: list[int],
+               deadline: float) -> tuple[list[int], list[int]]:
+    """Attend, jusqu'à l'échéance, la fin des descendants et des groupes.
+
+    Rend ceux qui restent — tous, si l'échéance était déjà passée.
+    """
     alive = descendants
     active_groups = groups
     while time.monotonic() < deadline:
         alive = [pid for pid in descendants if Path(f"/proc/{pid}").exists()]
-        active_groups = []
-        for pgid in groups:
-            try:
-                os.killpg(pgid, 0)
-                active_groups.append(pgid)
-            except ProcessLookupError:
-                pass
+        active_groups = [pgid for pgid in groups if _signal_group(pgid, 0)]
         if not alive and not active_groups:
-            return
+            break
         time.sleep(0.05)
+    return alive, active_groups
+
+
+def _stop(processes: list[subprocess.Popen]) -> None:
+    descendants, groups = _terminate(processes)
+    deadline = time.monotonic() + 3
+    _wait_all(processes, deadline)
+    alive, active_groups = _survivors(descendants, groups, deadline)
     for pgid in active_groups:
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        _signal_group(pgid, signal.SIGKILL)
     for pid in alive:
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        _signal_pid(pid, signal.SIGKILL)
 
 
 def front_gate(repo: Path, workspace: Path, deadline: float) -> tuple[int, str]:

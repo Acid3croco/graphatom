@@ -247,8 +247,22 @@ def composed_command(tmp: Path) -> None:
     print("4 bis. commande composée : exécuteur, effort et interpolation tracés ✓")
 
 
-def validation() -> None:
-    """5 et 7. La publication refuse une CLI inconnue et les secrets."""
+def refuse(paquet: dict, sinon: str, *attendus: str) -> None:
+    """La validation refuse le graph, et son message porte chaque mot attendu.
+
+    `sinon` est le reproche levé si le graph passait.
+    """
+    try:
+        graph.validate(paquet)
+    except graph.GraphError as exc:
+        for attendu in attendus:
+            assert attendu in str(exc), str(exc)
+    else:
+        raise AssertionError(sinon)
+
+
+def cli_inconnue_et_secrets() -> None:
+    """5. La publication refuse une CLI inconnue et les secrets, sans écrire."""
     graph.validate(bundle({"cli": "codex", "model": "gpt"},
                           node({"cmd": "printf explicite"})))
     for mauvais, attendu in (
@@ -263,32 +277,26 @@ def validation() -> None:
             assert attendu in texte, texte
         else:
             raise AssertionError(f"configuration acceptée : {mauvais}")
-    # les clés historiques sont refusées, pas migrées en silence
+    print("5. une CLI inconnue est refusée et nommée ✓")
+
+
+def cles_historiques() -> None:
+    """Les clés historiques sont refusées, pas migrées en silence."""
     for mauvais in ({"cmd": "true"}, {"cmd_uses_executor": True},
                     {"cmd": "true", "cmd_reason": "outillage"}):
-        try:
-            graph.validate(bundle({"cli": "codex", "model": "gpt"},
-                                  legacy_node(mauvais)))
-        except graph.GraphError as exc:
-            assert "inconnu" in str(exc), str(exc)
-        else:
-            raise AssertionError(f"clé historique acceptée : {mauvais}")
+        refuse(bundle({"cli": "codex", "model": "gpt"}, legacy_node(mauvais)),
+               f"clé historique acceptée : {mauvais}", "inconnu")
     # un agent sans execution n'est plus un agent implicite : refus explicite
-    try:
-        graph.validate(bundle({"cli": "codex", "model": "gpt"},
-                              legacy_node({})))
-    except graph.GraphError as exc:
-        assert "sans execution" in str(exc), str(exc)
-    else:
-        raise AssertionError("agent sans execution accepté")
+    refuse(bundle({"cli": "codex", "model": "gpt"}, legacy_node({})),
+           "agent sans execution accepté", "sans execution")
+
+
+def forme_fermee() -> None:
+    """7. `execution` ferme la forme et refuse les réglages ambigus."""
     command = node({"cmd": "true"})
     command["config"]["agent"] = {"prompt": "parasite"}
-    try:
-        graph.validate(bundle({"cli": "codex"}, command))
-    except graph.GraphError as exc:
-        assert "command" in str(exc) and "agent" in str(exc), str(exc)
-    else:
-        raise AssertionError("execution command avec agent acceptée")
+    refuse(bundle({"cli": "codex"}, command),
+           "execution command avec agent acceptée", "command", "agent")
     for execution, attendu in (
         ({}, "kind"),
         ({"kind": "autre"}, "kind"),
@@ -301,30 +309,25 @@ def validation() -> None:
         spec["config"]["execution"] = execution
         if execution.get("kind") == "command":
             spec["config"].pop("agent", None)
-        try:
-            graph.validate(bundle({"cli": "codex"}, spec))
-        except graph.GraphError as exc:
-            assert attendu in str(exc), (execution, exc)
-        else:
-            raise AssertionError(f"execution fautive acceptée : {execution}")
+        refuse(bundle({"cli": "codex"}, spec),
+               f"execution fautive acceptée : {execution}", attendu)
     duplicate = node({"timeout_s": 10})
     duplicate["config"]["agent"]["timeout_s"] = 20
-    try:
-        graph.validate(bundle({"cli": "codex"}, duplicate))
-    except graph.GraphError as exc:
-        assert "inconnu" in str(exc) and "timeout_s" in str(exc), str(exc)
-    else:
-        raise AssertionError("deux timeout_s concurrents acceptés")
+    refuse(bundle({"cli": "codex"}, duplicate),
+           "deux timeout_s concurrents acceptés", "inconnu", "timeout_s")
     variant = node({}, {"variants": [{"agent": {"cmd": "true"}}],
                         "reduce": "first_pass"})
-    try:
-        graph.validate(bundle({"cli": "codex"}, variant))
-    except graph.GraphError as exc:
-        assert "variants[0]" in str(exc) and "cmd" in str(exc), str(exc)
-    else:
-        raise AssertionError("commande historique cachée dans une variante")
-    print("5. une CLI inconnue est refusée et nommée ✓")
+    refuse(bundle({"cli": "codex"}, variant),
+           "commande historique cachée dans une variante", "variants[0]", "cmd")
     print("7. execution ferme la forme et refuse les réglages ambigus ✓")
+
+
+def validation() -> None:
+    """5 et 7. La publication refuse une CLI inconnue, les secrets et les
+    formes ambiguës."""
+    cli_inconnue_et_secrets()
+    cles_historiques()
+    forme_fermee()
 
 
 def variantes() -> None:

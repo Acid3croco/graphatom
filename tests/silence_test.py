@@ -37,12 +37,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import blocks, db, github_sync as gs, graph, kernel  # noqa: E402
+from graphatom import blocks, db, graph, kernel  # noqa: E402
 from graphatom import github_client, github_questions  # noqa: E402
 from graphatom import agent, context, prompt, routing, workspace as bureau  # noqa: E402
 from graphatom.policy import MAX_ATTEMPTS  # noqa: E402
 
-from outils import etat, git  # noqa: E402
+from outils import etat, git, item_neuf, route  # noqa: E402
 
 # hermétisme : pas d'instance jetable dans l'environnement, donc aucun bloc
 # d'ici ne dérive la base d'un item qui existe pour de vrai
@@ -190,20 +190,6 @@ def runs_du_noeud(conn, item_id: int, node: str) -> int:
     ).fetchone()["n"]
 
 
-def item_neuf(conn, revision: str, prefixe: str) -> int:
-    return kernel.admit(
-        conn, revision, f"{prefixe}:{uuid.uuid4().hex[:8]}", _allow_parallel_for_test=True
-    )
-
-
-def route(conn, item_id: int, outcome: str, attempt: int) -> str:
-    """Route une issue noyau sur le nœud courant, à un compteur donné."""
-    item = etat(conn, item_id)
-    paquet = graph.load_bundle(conn, item["revision"])
-    run = {"node": item["state"], "id": None, "attempt": attempt}
-    with conn.transaction():
-        routing.route(conn, item, paquet, run, outcome, kind="result")
-    return etat(conn, item_id)["state"]
 
 
 def post_mortem(post: dict, outcome: str) -> None:

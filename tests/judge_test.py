@@ -27,23 +27,21 @@ Le test ne détruit rien de la production : son dépôt est jetable, et
 Usage : uv run python tests/judge_test.py
 """
 
-import json
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 import threading
-import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import blocks, db, graph, kernel, scheduler, worktree  # noqa: E402
-from graphatom import views  # noqa: E402
+from graphatom import db, kernel, views  # noqa: E402
 from graphatom import workspace as bureau  # noqa: E402
 
-from outils import attendre, etat, git  # noqa: E402
+from outils import admettre, ancetre, atelier_item, attendre  # noqa: E402
+from outils import bundle_epreuve, data_dir_jetable, depot_git, etat  # noqa: E402
+from outils import executer, git, rejoindre, reserver_tout, runs_de  # noqa: E402
 
 # hermétisme : les agents d'ici sont des scripts shell, ils n'ont pas de base
 os.environ.pop("GRAPHATOM_AGENT_DSN", None)
@@ -103,110 +101,55 @@ def bundle(issues: list[str], elu: str = "B", keep: int = 2) -> dict:
          "execution": {"cmd": (CANDIDAT.replace("{marqueur}", MARQUEURS[i])
                                + (REUSSIT if issue == "ok" else RATE))}}
         for i, issue in enumerate(issues)]
-    return {
-        "name": f"judge-{'-'.join(issues)}-{elu}-{keep}",
-        "entry": "travail",
-        "budgets": {"escalations": 3, "wall_deadline_hours": 1},
-        "on_kernel": {"escalate_to": "escalate", "exhausted_to": "abandon"},
-        "nodes": {
-            "travail": {
-                "block": "ACT",
-                "config": {
-                    "lease_s": 300,  # le faucheur n'a rien à faire ici
-                    "execution": {"kind": "agent", "cmd": CANDIDAT + REUSSIT,
-                                  "timeout_s": 60, "silence_s": 60},
-                    "agent": {"prompt": "Angle {label} : {strategy}.",
-                              "cli": "codex"},
-                    "fanout": {"variants": variantes, "reduce": "keep_n", "n": keep},
-                },
-                "edges": {"ok": "juge"},
+    return bundle_epreuve(f"judge-{'-'.join(issues)}-{elu}-{keep}", {
+        "travail": {
+            "block": "ACT",
+            "config": {
+                "lease_s": 300,  # le faucheur n'a rien à faire ici
+                "execution": {"kind": "agent", "cmd": CANDIDAT + REUSSIT,
+                              "timeout_s": 60, "silence_s": 60},
+                "agent": {"prompt": "Angle {label} : {strategy}.",
+                          "cli": "codex"},
+                "fanout": {"variants": variantes, "reduce": "keep_n", "n": keep},
             },
-            "juge": {
-                "block": "JUDGE",
-                "escalade": True,
-                "config": {
-                    "lease_s": 300,
-                    "finalists_from": "travail",
-                    "execution": {
-                        "kind": "agent",
-                        "cmd": (f"# modèle {MODELE}\n"
-                                + JUGE.replace("{elu}", elu).replace("{raison}", RAISON)),
-                        "timeout_s": 60, "silence_s": 60,
-                    },
-                    "agent": {
-                        "prompt": "Départage les finalistes de {subject_key}.",
-                        "cli": "codex",
-                    },
-                },
-                "edges": {"sole": "fini", "chosen": "fini", "none": "travail"},
-            },
-            "escalate": {
-                "block": "WAIT", "escalade": True,
-                "config": {"question": "On retente ?", "options": ["retry"],
-                           "owner": "test", "deadline_minutes": 60},
-                "edges": {"retry": "travail", "expired": "abandon"},
-            },
-            "fini": {"terminal": True},
-            "abandon": {"terminal": True},
+            "edges": {"ok": "juge"},
         },
-    }
+        "juge": {
+            "block": "JUDGE",
+            "escalade": True,
+            "config": {
+                "lease_s": 300,
+                "finalists_from": "travail",
+                "execution": {
+                    "kind": "agent",
+                    "cmd": (f"# modèle {MODELE}\n"
+                            + JUGE.replace("{elu}", elu).replace("{raison}", RAISON)),
+                    "timeout_s": 60, "silence_s": 60,
+                },
+                "agent": {
+                    "prompt": "Départage les finalistes de {subject_key}.",
+                    "cli": "codex",
+                },
+            },
+            "edges": {"sole": "fini", "chosen": "fini", "none": "travail"},
+        },
+    }, escalations=3)
 
 
 # ------------------------------------------------------------------ outillage
 
 
-def depot(tmp: Path) -> Path:
-    """Un dépôt jetable, un commit de socle. `GRAPHATOM_REPO_DIR` y est épinglé."""
-    repo = tmp / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
-    git(repo, "config", "user.email", "judge@test.invalid")
-    git(repo, "config", "user.name", "judge")
-    (repo / "socle.txt").write_text("le commit de départ\n")
-    git(repo, "add", "-A")
-    git(repo, "commit", "-qm", "socle")
-    os.environ["GRAPHATOM_REPO_DIR"] = str(repo)
-    return repo
-
-
-def ancetre(repo: Path, sha: str, branche: str) -> bool:
-    return subprocess.run(["git", "-C", str(repo), "merge-base",
-                           "--is-ancestor", sha, branche]).returncode == 0
-
-
-def runs_de(conn, item_id: int, node: str | None = None) -> list[dict]:
-    sql = "SELECT * FROM node_run WHERE item_id = %s"
-    args: tuple = (item_id,)
-    if node is not None:
-        sql, args = sql + " AND node = %s", (item_id, node)
-    return conn.execute(sql + " ORDER BY id", args).fetchall()
-
-
-def nouvel_item(conn, repo: Path, spec: dict) -> tuple[int, str]:
-    """Un item, son atelier, sa branche — ce que le shell du graph préparerait."""
-    rev = graph.publish(conn, spec)
-    item_id = kernel.admit(
-        conn, rev, f"judge:{uuid.uuid4().hex[:8]}", _allow_parallel_for_test=True
-    )
-    branche = f"rail/issue-{item_id}"
-    git(repo, "worktree", "add", "-q",
-        str(repo / ".worktrees" / f"rail-item-{item_id}"), "-b", branche)
-    return item_id, branche
+def nouvel_item(conn, repo: Path, spec: dict) -> tuple[int, str, Path]:
+    """Un item, sa branche, son atelier — ce que le shell du graph préparerait."""
+    item_id = admettre(conn, spec, "judge")
+    branche, item_wt = atelier_item(repo, item_id)
+    return item_id, branche, item_wt
 
 
 def courir(conn, item_id: int) -> list[dict]:
     """Réserve la tentative entière et la joue jusqu'au bout, comme l'ordonnanceur."""
-    runs = []
-    while (run := kernel.claim(conn, item_id)) is not None:
-        runs.append(run)
-        assert len(runs) <= graph.FANOUT_MAX_CANDIDATES, "claim ne s'arrête plus"
-    fils = [threading.Thread(target=scheduler._execute, args=(r["id"], item_id),
-                             daemon=True) for r in runs]
-    for fil in fils:
-        fil.start()
-    for fil in fils:
-        fil.join(timeout=90)
-        assert not fil.is_alive(), "un candidat n'est jamais revenu"
+    runs = reserver_tout(conn, item_id)
+    rejoindre(executer(runs, item_id), 90)
     return runs
 
 
@@ -219,16 +162,19 @@ def lancer_juge(conn, item_id: int) -> tuple[int, threading.Thread]:
     """
     run = kernel.claim(conn, item_id)
     assert run is not None and run["candidate"] is None, run
-    fil = threading.Thread(target=scheduler._execute, args=(run["id"], item_id),
-                           daemon=True)
-    fil.start()
+    fil, = executer([run], item_id)
     return run["id"], fil
 
 
-def photo(repo: Path, ateliers: dict[int, Path]) -> dict[int, tuple[str, str]]:
+def photo(ateliers: dict[int, Path]) -> dict[int, tuple[str, str]]:
     """L'état de chaque atelier de candidat : sa tête, et ce qui n'est pas commité."""
     return {k: (git(chemin, "rev-parse", "HEAD"), git(chemin, "status", "--porcelain"))
             for k, chemin in ateliers.items() if chemin.is_dir()}
+
+
+def run_du_juge(conn, run_id: int) -> dict:
+    """La ligne du run du juge, telle que la base la garde."""
+    return conn.execute("SELECT * FROM node_run WHERE id = %s", (run_id,)).fetchone()
 
 
 # -------------------------------------------------------------------- épreuves
@@ -236,8 +182,7 @@ def photo(repo: Path, ateliers: dict[int, Path]) -> dict[int, tuple[str, str]]:
 
 def sole(conn, workdir: Path, repo: Path) -> None:
     """1. un finaliste unique : traversé sans un jeton, et promu quand même."""
-    item_id, branche = nouvel_item(conn, repo, bundle(["ok", "crash"]))
-    item_wt = repo / ".worktrees" / f"rail-item-{item_id}"
+    item_id, branche, _ = nouvel_item(conn, repo, bundle(["ok", "crash"]))
     workspace = workdir / f"item-{item_id}"
     courir(conn, item_id)
 
@@ -246,8 +191,7 @@ def sole(conn, workdir: Path, repo: Path) -> None:
 
     juge = courir(conn, item_id)
     assert len(juge) == 1 and juge[0]["candidate"] is None, juge
-    run = conn.execute("SELECT * FROM node_run WHERE id = %s",
-                       (juge[0]["id"],)).fetchone()
+    run = run_du_juge(conn, juge[0]["id"])
     assert run["outcome"] == "sole", run["outcome"]
     assert etat(conn, item_id)["state"] == "fini", etat(conn, item_id)["state"]
 
@@ -256,7 +200,6 @@ def sole(conn, workdir: Path, repo: Path) -> None:
                     if p.name.startswith(("agent-juge", "prompt-juge", "usage-juge")))
     assert not traces, f"le court-circuit a lancé un agent : {traces}"
     assert "usage" not in (run["result"] or {}), run["result"]
-    from graphatom import web
     assert views.totals([run]) == {}, views.totals([run])
     assert views.totals(runs_de(conn, item_id, "juge")) == {}, "le nœud juge coûte zéro"
     print(f"1. item {item_id} : un finaliste → issue « sole », aucune trace d'agent "
@@ -271,47 +214,50 @@ def sole(conn, workdir: Path, repo: Path) -> None:
           "ateliers rangés ✓")
 
 
-def chosen(conn, workdir: Path, repo: Path) -> None:
-    """2 à 4 : deux finalistes, un élu, des ateliers intacts et un prompt aveugle."""
-    item_id, branche = nouvel_item(conn, repo, bundle(["ok", "ok", "ok"], elu="B"))
-    item_wt = repo / ".worktrees" / f"rail-item-{item_id}"
-    workspace = workdir / f"item-{item_id}"
-    courir(conn, item_id)
+def finalistes_de(conn, item_id: int) -> list[int]:
+    """Les finalistes de `keep_n`, dans l'ordre où ils ont fini.
 
-    assert etat(conn, item_id)["state"] == "juge", etat(conn, item_id)["state"]
-    commits = {k: (workspace / f"c{k}" / "commit.txt").read_text().strip()
-               for k in range(3)}
-    # dans l'ordre où ils ont fini : celui de `keep_n`, et donc celui des
-    # lettres que le juge a lues — A au premier terminé, B au second
+    C'est aussi celui des lettres que le juge a lues — A au premier terminé,
+    B au second.
+    """
     finalistes = [r["candidate"] for r in conn.execute(
         "SELECT candidate FROM node_run WHERE item_id = %s AND node = 'travail' "
         "AND status = 'applied' ORDER BY finished_at, id", (item_id,)).fetchall()]
     assert len(finalistes) == 2, f"keep_n devait en laisser deux : {finalistes}"
+    return finalistes
 
-    # 3. le juge ne touche pas aux ateliers des candidats. La comparaison se
-    #    fait pendant son run, avant la promotion : après, l'élu a rejoint la
-    #    branche de l'item et les ateliers sont rangés — c'est le geste voulu.
-    ateliers = {k: item_wt.with_name(f"{item_wt.name}-c{k}") for k in finalistes}
-    avant = photo(repo, ateliers)
+
+def ateliers_intacts(conn, workspace: Path, item_id: int,
+                     ateliers: dict[int, Path]) -> dict:
+    """2 et 3. le juge tranche entre deux finalistes sans toucher à leurs ateliers.
+
+    La comparaison se fait pendant son run, avant la promotion : après,
+    l'élu a rejoint la branche de l'item et les ateliers sont rangés —
+    c'est le geste voulu. Rend le run du juge, une fois rendu.
+    """
+    avant = photo(ateliers)
     assert len(avant) == 2, f"les deux ateliers de finalistes doivent être là : {avant}"
 
     run_id, fil = lancer_juge(conn, item_id)
     vu = workspace / "prompt-vu.md"
     assert attendre(lambda: vu.is_file(), 60.0), "le faux modèle du juge n'a jamais démarré"
-    pendant = photo(repo, ateliers)
+    pendant = photo(ateliers)
     assert pendant == avant, f"le juge a écrit chez un candidat : {avant} → {pendant}"
     (workspace / "go").write_text("")  # le modèle rend son verdict
-    fil.join(timeout=90)
-    assert not fil.is_alive(), "le juge n'est jamais revenu"
+    rejoindre([fil], 90, "le juge n'est jamais revenu")
 
-    run = conn.execute("SELECT * FROM node_run WHERE id = %s", (run_id,)).fetchone()
+    run = run_du_juge(conn, run_id)
     assert run["outcome"] == "chosen", (run["outcome"], run["result"])
     assert etat(conn, item_id)["state"] == "fini", etat(conn, item_id)["state"]
+    finalistes = list(ateliers)
     print(f"2. item {item_id} : deux finalistes c{finalistes[0]} et c{finalistes[1]}, "
           f"ateliers inchangés pendant tout le jugement ({len(avant)} têtes "
           "identiques, aucun fichier modifié) ✓")
+    return run
 
-    # 4. le prompt rendu ne dit rien de qui a produit quoi
+
+def prompt_aveugle(workspace: Path, branche: str, finalistes: list[int]) -> None:
+    """4. le prompt rendu ne dit rien de qui a produit quoi."""
     prompt = (workspace / "prompt-vu.md").read_text()
     interdits = [MODELE, "modèle", "--model", "cp prompt.md",  # modèle et CLI
                  "label", "strategy", f"{branche}-c"]  # variante et branche
@@ -327,8 +273,11 @@ def chosen(conn, workdir: Path, repo: Path) -> None:
           f"deux diffs ({', '.join(MARQUEURS[k] for k in finalistes)}), et aucun de "
           f"{len(interdits)} mots interdits ✓")
 
-    # 2 (suite). le verdict nomme l'élu et la raison, et le travail suit
-    elu = finalistes[1]  # le faux modèle a élu la lettre B, la seconde
+
+def verdict_suivi(repo: Path, workspace: Path, item_wt: Path, branche: str,
+                  run: dict, elu: int, commits: dict[int, str],
+                  ateliers: dict[int, Path]) -> None:
+    """2 (suite). le verdict nomme l'élu et la raison, et le travail suit."""
     verdict = (workspace / bureau.VERDICT_NAME).read_text()
     assert "faux modèle" in verdict, "la comparaison du modèle est gardée"
     assert "Élu : finaliste B" in verdict, verdict
@@ -353,9 +302,27 @@ def chosen(conn, workdir: Path, repo: Path) -> None:
           "atelier ni une branche de candidat ✓")
 
 
+def chosen(conn, workdir: Path, repo: Path) -> None:
+    """2 à 4 : deux finalistes, un élu, des ateliers intacts et un prompt aveugle."""
+    item_id, branche, item_wt = nouvel_item(conn, repo, bundle(["ok", "ok", "ok"], elu="B"))
+    workspace = workdir / f"item-{item_id}"
+    courir(conn, item_id)
+
+    assert etat(conn, item_id)["state"] == "juge", etat(conn, item_id)["state"]
+    commits = {k: (workspace / f"c{k}" / "commit.txt").read_text().strip()
+               for k in range(3)}
+    finalistes = finalistes_de(conn, item_id)
+    ateliers = {k: item_wt.with_name(f"{item_wt.name}-c{k}") for k in finalistes}
+
+    run = ateliers_intacts(conn, workspace, item_id, ateliers)
+    prompt_aveugle(workspace, branche, finalistes)
+    elu = finalistes[1]  # le faux modèle a élu la lettre B, la seconde
+    verdict_suivi(repo, workspace, item_wt, branche, run, elu, commits, ateliers)
+
+
 def none(conn, workdir: Path, repo: Path) -> None:
     """5. zéro finaliste : retour en amont, et le budget d'escalade des règles."""
-    item_id, branche = nouvel_item(conn, repo, bundle(["ok", "ok"]))
+    item_id, _, _ = nouvel_item(conn, repo, bundle(["ok", "ok"]))
     workspace = workdir / f"item-{item_id}"
     courir(conn, item_id)
     assert etat(conn, item_id)["state"] == "juge", etat(conn, item_id)["state"]
@@ -368,9 +335,7 @@ def none(conn, workdir: Path, repo: Path) -> None:
     # il arrive alors sur un dossier vide, et c'est le cas qu'on veut voir
     conn.execute("UPDATE node_run SET status = 'superseded' WHERE item_id = %s "
                  "AND node = 'travail'", (item_id,))
-    run = conn.execute(
-        "SELECT * FROM node_run WHERE id = %s", (courir(conn, item_id)[0]["id"],)
-    ).fetchone()
+    run = run_du_juge(conn, courir(conn, item_id)[0]["id"])
     assert run["outcome"] == "none", (run["outcome"], run["result"])
     assert "usage" not in (run["result"] or {}), "aucun modèle appelé sans finaliste"
     apres = etat(conn, item_id)
@@ -394,10 +359,9 @@ def none(conn, workdir: Path, repo: Path) -> None:
 
 def main() -> None:
     db.init_db()  # idempotent : ne détruit rien, rattrape juste le schéma
-    workdir = Path(tempfile.mkdtemp(prefix="graphatom-judge-"))
+    workdir = data_dir_jetable("graphatom-judge-")
     tmp = Path(tempfile.mkdtemp(prefix="graphatom-judge-repo-"))
-    bureau.DATA_DIR = workdir
-    repo = depot(tmp)
+    repo = depot_git(tmp, "judge")
     try:
         with db.connect() as conn:
             sole(conn, workdir, repo)

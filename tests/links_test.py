@@ -26,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import blocks, web  # noqa: E402
+from graphatom import web  # noqa: E402
 from graphatom import pages  # noqa: E402
 from graphatom import workspace as bureau  # noqa: E402
 
@@ -50,7 +50,7 @@ class FakeConn:
         self.items = items
         self.runs = runs or []
 
-    def execute(self, sql: str, params: tuple = ()):
+    def execute(self, sql: str, _params: tuple = ()):
         if "FROM node_run" in sql:
             return FakeCursor(self.runs)
         return FakeCursor(self.items)
@@ -75,25 +75,31 @@ def question_page(title: str | None = None) -> str:
                                beat_at=dt.datetime.now(dt.timezone.utc))
 
 
-def main() -> None:
-    # 1. le sujet GitHub est un lien, href complet
+def sujet_github() -> None:
+    """1. Le sujet GitHub est un lien, href complet."""
     assert pages.subject("gh:Acid3croco/graphatom#27") == (
         f"<a href='{ISSUE_URL}'>gh:Acid3croco/graphatom#27</a>")
     assert f"href='{ISSUE_URL}'" in question_page()
     print(f"1. sujet gh → {ISSUE_URL} ✓")
 
-    # 2. ce qui n'est pas un sujet GitHub reste du texte brut
+
+def sujet_brut() -> None:
+    """2. Ce qui n'est pas un sujet GitHub reste du texte brut."""
     for plain in ("pipeline-x:oom", "gh:Acid3croco/graphatom#abc",
                   "gh:graphatom#27", "voir gh:a/b#1 plus tard"):
         assert pages.subject(plain) == plain, plain
     assert pages.subject("<b>&") == "&lt;b&gt;&amp;"
     print("2. sujet quelconque : texte brut, échappé ✓")
 
-    # 3. la PR vient de release.json, écrit par le nœud release
-    #    Le répertoire déplacé est celui du résolveur, `bureau.DATA_DIR` — comme
-    #    dans les autres tests. Poser un `web.DATA_DIR` que le module ne définit
-    #    pas fabriquait la constante au lieu de la vérifier : le test passait et
-    #    la page d'item rendait 500 (NameError).
+
+def pr_depuis_release() -> None:
+    """3. La PR vient de release.json, écrit par le nœud release.
+
+    Le répertoire déplacé est celui du résolveur, `bureau.DATA_DIR` — comme
+    dans les autres tests. Poser un `web.DATA_DIR` que le module ne définit
+    pas fabriquait la constante au lieu de la vérifier : le test passait et
+    la page d'item rendait 500 (NameError).
+    """
     assert not hasattr(web, "DATA_DIR"), "web lit le workspace par item_workspace()"
     with tempfile.TemporaryDirectory() as tmp:
         bureau.DATA_DIR = Path(tmp)  # le seul répertoire de données, celui des blocs
@@ -112,8 +118,10 @@ def main() -> None:
         assert "illisible" in pages.pr(14)  # le dire, sans emporter la page
     print(f"3. release.json → {PR_URL} ✓")
 
-    # 4. la table des items, dans le DOM rendu : le numéro vers GitHub, le
-    #    titre vers la page de l'item
+
+def table_items() -> None:
+    """4. La table des items, dans le DOM rendu : le numéro vers GitHub, le
+    titre vers la page de l'item."""
     page = pages.items_page(
         FakeConn(
             [item_row(14, "gh:Acid3croco/graphatom#27", TITRE),
@@ -134,13 +142,22 @@ def main() -> None:
     assert "<td>g1</td><td>—</td>" in page, page
     print("4. /items : #27 → GitHub, titre → /item/14, autre canal → vide ✓")
 
-    # 5. la question dit de quoi il s'agit — le titre, pas seulement le numéro
+
+def question_titre() -> None:
+    """5. La question dit de quoi il s'agit — le titre, pas seulement le numéro."""
     page = question_page(TITRE)
     assert f"« {pages.e(TITRE)} »" in page, page
     assert "item 14" in page and TITRE not in page, page
     assert "« " not in question_page(), "sans titre, la question n'invente rien"
     print("5. question : le titre de l'item à côté de son numéro ✓")
 
+
+def main() -> None:
+    sujet_github()
+    sujet_brut()
+    pr_depuis_release()
+    table_items()
+    question_titre()
     print("\nliens : OK — l'issue, la PR et le titre sont lisibles depuis le frontend")
 
 

@@ -59,6 +59,7 @@ uv run python scripts/check.py train  # la métrique unique : la porte du train
 uv run python scripts/check.py ui     # build Next.js + portes DOM
 uv run python scripts/check.py full   # base, crash, concurrence, image Docker
 uv run python scripts/check.py live   # le vrai fournisseur LLM gratuit
+uv run python scripts/check.py rules  # les seuils de qualité, couverture comprise
 ```
 
 La porte s'arrête au premier échec et imprime la commande exacte. La porte
@@ -67,8 +68,35 @@ son propre Postgres jetable (docker) et prouve le noyau, ses pannes et le
 train entier en une douzaine de secondes. `full` est la preuve locale avant
 publication ; ses tests destructeurs provisionnent chacun leur base jetable
 et ne touchent jamais celle de l'environnement. `live` dépend de `opencode`,
-de son modèle gratuit et du réseau. GitHub Actions rejoue `train`, `core`
-et `ui` en trois jobs séparés sur chaque push et chaque pull request.
+de son modèle gratuit et du réseau. GitHub Actions rejoue `train`, `core`,
+`ui` et `rules` en quatre jobs séparés sur chaque push et chaque pull request.
+
+### Les seuils de qualité
+
+`rules` mesure, et ne devine pas. `scripts/rules.py` tient chaque seuil :
+
+| règle | seuil | mesure |
+|---|---|---|
+| complexité cyclomatique | < 22 par fonction | radon |
+| complexité cognitive | < 22 par fonction | complexipy |
+| difficulté de Halstead | < 80 par fonction et par fichier | radon |
+| lignes par fichier | < 500 | lignes physiques |
+| couverture des tests | 100 % lignes et branches | coverage, sous-processus compris |
+| CRAP | < 25 par fonction | CC² × (1 − couverture)³ + CC |
+| code mort | 0 | vulture (`scripts/vulture_whitelist.py` pour les rappels HTTP) |
+| code redondant | 0 | pylint duplicate-code, six lignes ou plus |
+
+La statique tient en quelques secondes ; la couverture rejoue toutes les
+preuves Python sous coverage, la CLI et les agents lancés en sous-processus
+compris, et exige 100 %. Les mutants, eux, coûtent des heures et non des
+minutes : `scripts/mutants.py` écrit chaque altération d'un module dans une
+copie du dépôt et la juge par les preuves nommées — un survivant est une
+preuve qui manque, ou un mutant équivalent inscrit dans
+`scripts/mutants_equivalents.txt` avec sa ligne et son opérateur.
+
+```sh
+uv run python scripts/mutants.py src/graphatom/validation.py tests/validate_test.py
+```
 
 ## Lancer le squelette (milestone 1)
 

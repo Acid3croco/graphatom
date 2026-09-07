@@ -40,183 +40,22 @@ est réutilisée. Les workspaces vont dans un répertoire temporaire.
 Usage : uv run python tests/train_test.py
 """
 
-import atexit
-import os
-import shutil
 import subprocess
-import sys
-import tempfile
 import threading
 import time
-import uuid
 
-from pathlib import Path
+# train_outils épingle GRAPHATOM_DSN sur la base jetable : il passe avant graphatom
+from train_outils import (  # noqa: E402
+    BUNDLE_TRAIN, admet, attendre, avance, bail_expire, bundle_commande,
+    bundle_kernel, execute_bloc, issue_du_run, journal, journal_contigu,
+    libere_la_voie, termine, sujet, tick_jusqu_a,
+)
+from outils import etat  # noqa: E402
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
-
-from outils import provision_postgres  # noqa: E402
-
-# Jamais la base que GRAPHATOM_DSN désigne : la porte migre, termine les
-# items et libère la voie — sur une production, ce serait un dégât. Seule
-# une base explicitement donnée POUR la porte est réutilisée.
-os.environ["GRAPHATOM_DSN"] = (os.environ.get("GRAPHATOM_TRAIN_DSN")
-                               or provision_postgres("graphatom-train"))
-
-from graphatom import blocks, channel, db, effects, graph, kernel, scheduler  # noqa: E402
+from graphatom import channel, db, effects, graph, kernel  # noqa: E402
 from graphatom import process, reaper, workspace as bureau  # noqa: E402
-from graphatom.context import Context  # noqa: E402
 from graphatom.workspace import PGID_FILE  # noqa: E402
 from graphatom.policy import MAX_ATTEMPTS  # noqa: E402
-
-TMP = Path(tempfile.mkdtemp(prefix="graphatom-train-"))
-bureau.DATA_DIR = TMP  # les workspaces du test, jamais ceux du repo
-atexit.register(shutil.rmtree, TMP, ignore_errors=True)
-
-
-# ----------------------------------------------------------------- outillage
-
-def bundle_kernel(escalations: int = 3) -> dict:
-    """Le graph minimal des transitions : un nœud de travail, une escalade."""
-    return {
-        "name": "train-kernel",
-        "entry": "travail",
-        "budgets": {"escalations": escalations, "wall_deadline_hours": 1},
-        "on_kernel": {"escalate_to": "escalate", "exhausted_to": "abandon"},
-        "nodes": {
-            "travail": {"block": "ACT", "config": {}, "edges": {"ok": "fini"}},
-            "escalate": {
-                "block": "WAIT", "escalade": True,
-                "config": {"question": "On retente ?", "options": ["retry"],
-                           "owner": "train", "deadline_minutes": 60},
-                "edges": {"retry": "travail", "expired": "abandon"},
-            },
-            "fini": {"terminal": True},
-            "abandon": {"terminal": True},
-        },
-    }
-
-
-def bundle_commande(cmd: str, *, timeout_s: float = 30, silence_s: float | None = None,
-                    lease_s: float | None = None) -> dict:
-    """Un graph dont le nœud d'entrée exécute une vraie commande shell."""
-    config: dict = {"execution": {"kind": "command", "cmd": cmd,
-                                  "timeout_s": timeout_s}}
-    if silence_s is not None:
-        config["execution"]["silence_s"] = silence_s
-    if lease_s is not None:
-        config["lease_s"] = lease_s
-    return {
-        "name": "train-commande",
-        "entry": "travail",
-        "budgets": {"escalations": 3, "wall_deadline_hours": 1},
-        "on_kernel": {"escalate_to": "escalate", "exhausted_to": "abandon"},
-        "nodes": {
-            "travail": {"block": "ACT", "config": config,
-                        "edges": {"ok": "fini"}},
-            "escalate": {
-                "block": "WAIT", "escalade": True,
-                "config": {"question": "On retente ?", "options": ["retry"],
-                           "owner": "train", "deadline_minutes": 60},
-                "edges": {"retry": "travail", "expired": "abandon"},
-            },
-            "fini": {"terminal": True},
-            "abandon": {"terminal": True},
-        },
-    }
-
-
-BUNDLE_TRAIN = {
-    "name": "train-complet",
-    "entry": "ingest",
-    "budgets": {"escalations": 3, "wall_deadline_hours": 1},
-    "on_kernel": {"escalate_to": "escalate", "exhausted_to": "abandon"},
-    "nodes": {
-        "ingest": {"block": "FETCH", "config": {"materialize": ["brief"]},
-                   "edges": {"ok": "travail"}},
-        "travail": {"block": "ACT", "config": {"duration_s": 0},
-                    "edges": {"ok": "verif"}},
-        "verif": {"block": "JUDGE", "escalade": True,
-                  "config": {"stub_outcome": "pass"},
-                  "edges": {"pass": "attend", "fail": "travail"}},
-        "attend": {
-            "block": "WAIT",
-            "config": {"question": "On livre ?", "options": ["go", "stop"],
-                       "owner": "train", "deadline_minutes": 60},
-            "edges": {"go": "fini", "stop": "abandon", "expired": "abandon"},
-        },
-        "escalate": {
-            "block": "WAIT", "escalade": True,
-            "config": {"question": "On retente ?", "options": ["retry"],
-                       "owner": "train", "deadline_minutes": 60},
-            "edges": {"retry": "travail", "expired": "abandon"},
-        },
-        "fini": {"terminal": True},
-        "abandon": {"terminal": True},
-    },
-}
-
-
-def sujet() -> str:
-    return f"train:{uuid.uuid4().hex[:10]}"
-
-
-def etat(conn, item_id: int) -> dict:
-    return conn.execute("SELECT * FROM work_item WHERE id = %s",
-                        (item_id,)).fetchone()
-
-
-def journal(conn, item_id: int) -> list[dict]:
-    return conn.execute(
-        "SELECT * FROM event WHERE item_id = %s ORDER BY item_version",
-        (item_id,)).fetchall()
-
-
-def journal_contigu(conn, item_id: int) -> None:
-    versions = [e["item_version"] for e in journal(conn, item_id)]
-    assert versions == list(range(1, len(versions) + 1)), \
-        f"journal troué : {versions}"
-
-
-def avance(conn, item_id: int, submitted: dict) -> dict:
-    run = kernel.claim(conn, item_id)
-    assert run is not None, "plus rien à réserver"
-    kernel.apply(conn, run["id"], submitted)
-    return etat(conn, item_id)
-
-
-def termine(conn, item_id: int) -> None:
-    """Range l'item hors de la voie pour libérer l'admission suivante."""
-    conn.execute(
-        "UPDATE work_item SET terminal_at = now() WHERE id = %s", (item_id,))
-
-
-def admet(conn, bundle: dict) -> int:
-    rev = graph.publish(conn, bundle)
-    return kernel.admit(conn, rev, sujet())
-
-
-def attendre(predicat, seconds: float = 30.0):
-    limite = time.monotonic() + seconds
-    while time.monotonic() < limite:
-        valeur = predicat()
-        if valeur:
-            return valeur
-        time.sleep(0.05)
-    raise AssertionError("attente dépassée")
-
-
-def execute_bloc(conn, item_id: int, run: dict) -> str:
-    """Ce que fait l'ordonnanceur : le bloc, puis apply — sans thread."""
-    item = etat(conn, item_id)
-    bundle = graph.load_bundle(conn, item["revision"])
-    node = bundle["nodes"][run["node"]]
-    ctx = Context(conn, run, item, node, bundle)
-    try:
-        result = blocks.BLOCKS[node["block"]](ctx)
-    except Exception as exc:  # le bloc peut échouer, jamais router
-        result = {"outcome": "crashed", "error": str(exc)}
-    return kernel.apply(conn, run["id"], result)
 
 
 # ------------------------------------------------- partie 1 : les transitions
@@ -290,8 +129,7 @@ def part1_resultat_tardif(conn) -> None:
     statut = kernel.apply(conn, run["id"], {"outcome": "ok", "summary": "tard"})
     assert statut == "superseded", statut
     assert len(journal(conn, item_id)) == evts_avant, "un tardif a routé"
-    ligne = conn.execute("SELECT status, result FROM node_run WHERE id = %s",
-                         (run["id"],)).fetchone()
+    ligne = issue_du_run(conn, run["id"])
     assert ligne["status"] == "superseded"
     assert ligne["result"] is not None, "le résultat tardif n'est pas archivé"
     print(" 5. résultat tardif → superseded, archivé, sans effet ✓")
@@ -375,8 +213,7 @@ def part2_outcome_illisible(conn) -> None:
     item_id = admet(conn, bundle_commande("printf '{\"broken' > outcome.json"))
     run = kernel.claim(conn, item_id)
     execute_bloc(conn, item_id, run)
-    ligne = conn.execute("SELECT outcome FROM node_run WHERE id = %s",
-                         (run["id"],)).fetchone()
+    ligne = issue_du_run(conn, run["id"])
     assert ligne["outcome"] == "crashed", ligne
     assert etat(conn, item_id)["state"] == "travail"
     termine(conn, item_id)
@@ -388,8 +225,7 @@ def part2_issue_hors_contrat(conn) -> None:
         "printf '{\"outcome\": \"banana\", \"summary\": \"?\"}' > outcome.json"))
     run = kernel.claim(conn, item_id)
     execute_bloc(conn, item_id, run)
-    ligne = conn.execute("SELECT outcome FROM node_run WHERE id = %s",
-                         (run["id"],)).fetchone()
+    ligne = issue_du_run(conn, run["id"])
     assert ligne["outcome"] == "invalid_result", ligne
     termine(conn, item_id)
     print("11. issue hors contrat → invalid_result ✓")
@@ -401,8 +237,7 @@ def part2_pendu_muet(conn) -> None:
     debut = time.monotonic()
     execute_bloc(conn, item_id, run)
     duree = time.monotonic() - debut
-    ligne = conn.execute("SELECT outcome FROM node_run WHERE id = %s",
-                         (run["id"],)).fetchone()
+    ligne = issue_du_run(conn, run["id"])
     assert ligne["outcome"] == "stalled", ligne
     assert duree < 15, f"le couperet a trop tardé : {duree:.1f}s"
     assert etat(conn, item_id)["state"] == "travail"
@@ -415,8 +250,7 @@ def part2_pendu_apres_travail(conn) -> None:
         "echo je-travaille; sleep 30", timeout_s=6, silence_s=1))
     run = kernel.claim(conn, item_id)
     execute_bloc(conn, item_id, run)
-    ligne = conn.execute("SELECT outcome FROM node_run WHERE id = %s",
-                         (run["id"],)).fetchone()
+    ligne = issue_du_run(conn, run["id"])
     assert ligne["outcome"] == "timed_out", ligne
     assert etat(conn, item_id)["state"] == "escalate"
     termine(conn, item_id)
@@ -426,14 +260,10 @@ def part2_pendu_apres_travail(conn) -> None:
 def part2_faucheur_mort(conn) -> None:
     item_id = admet(conn, bundle_commande("true", lease_s=1))
     run = kernel.claim(conn, item_id)
-    attendre(lambda: etat(conn, item_id) and
-             conn.execute("SELECT lease_expires_at < now() AS mort "
-                          "FROM node_run WHERE id = %s",
-                          (run["id"],)).fetchone()["mort"], 10)
+    attendre(lambda: etat(conn, item_id) and bail_expire(conn, run["id"]), 10)
     fauches = reaper.reap(conn)
     assert fauches == 1, fauches
-    ligne = conn.execute("SELECT status, outcome FROM node_run WHERE id = %s",
-                         (run["id"],)).fetchone()
+    ligne = issue_du_run(conn, run["id"])
     assert ligne["status"] == "faulted" and ligne["outcome"] == "crashed", ligne
     assert etat(conn, item_id)["state"] == "travail", "crashed doit se retenter"
     termine(conn, item_id)
@@ -447,13 +277,10 @@ def part2_faucheur_vivant(conn) -> None:
     workspace.mkdir(parents=True, exist_ok=True)
     proc = subprocess.Popen(["sleep", "60"], start_new_session=True)
     process.write_pgid(workspace / PGID_FILE, proc, "sleep 60", run["id"])
-    attendre(lambda: conn.execute(
-        "SELECT lease_expires_at < now() AS mort FROM node_run WHERE id = %s",
-        (run["id"],)).fetchone()["mort"], 10)
+    attendre(lambda: bail_expire(conn, run["id"]), 10)
     fauches = reaper.reap(conn)
     assert fauches == 1, fauches
-    ligne = conn.execute("SELECT outcome FROM node_run WHERE id = %s",
-                         (run["id"],)).fetchone()
+    ligne = issue_du_run(conn, run["id"])
     assert ligne["outcome"] == "timed_out", ligne
     assert etat(conn, item_id)["state"] == "escalate"
     # la révocation a deux moitiés : l'autorité, et le processus
@@ -478,23 +305,15 @@ def part2_echec_identique(conn) -> None:
 
 # --------------------------------------- partie 3 : le train entier, en stub
 
-def _tick_jusqu_a(conn, item_id: int, etat_visé: str, seconds: float = 30.0):
-    def _pret():
-        scheduler.tick(conn)
-        item = etat(conn, item_id)
-        return item if item["state"] == etat_visé else None
-    return attendre(_pret, seconds)
-
-
 def part3_train_complet(conn) -> None:
     item_id = admet(conn, BUNDLE_TRAIN)
-    _tick_jusqu_a(conn, item_id, "attend")
+    tick_jusqu_a(conn, item_id, "attend")
     question = conn.execute(
         "SELECT * FROM question WHERE item_id = %s AND state = 'open'",
         (item_id,)).fetchone()
     assert question is not None, "le WAIT n'a pas armé sa question"
     channel.record_answer(conn, question["id"], "go", by="train")
-    _tick_jusqu_a(conn, item_id, "fini")
+    tick_jusqu_a(conn, item_id, "fini")
     journal_contigu(conn, item_id)
     chemin = [e["kind"] for e in journal(conn, item_id)]
     assert chemin[0] == "admitted" and chemin[-1] == "answer", chemin
@@ -503,62 +322,51 @@ def part3_train_complet(conn) -> None:
 
 def part3_echeance_question(conn) -> None:
     item_id = admet(conn, BUNDLE_TRAIN)
-    _tick_jusqu_a(conn, item_id, "attend")
+    tick_jusqu_a(conn, item_id, "attend")
     conn.execute("UPDATE question SET deadline = now() - interval '1 minute' "
                  "WHERE item_id = %s AND state = 'open'", (item_id,))
-    _tick_jusqu_a(conn, item_id, "abandon")
+    tick_jusqu_a(conn, item_id, "abandon")
     assert journal(conn, item_id)[-1]["kind"] == "deadline"
     print("18. question sans réponse → expired → abandon ✓")
 
 
 def part3_wall_deadline(conn) -> None:
     item_id = admet(conn, BUNDLE_TRAIN)
-    _tick_jusqu_a(conn, item_id, "attend")
+    tick_jusqu_a(conn, item_id, "attend")
     conn.execute("UPDATE work_item SET wall_deadline = now() - interval '1 minute' "
                  "WHERE id = %s", (item_id,))
-    _tick_jusqu_a(conn, item_id, "abandon")
+    tick_jusqu_a(conn, item_id, "abandon")
     assert journal(conn, item_id)[-1]["kind"] == "wall"
     journal_contigu(conn, item_id)
     print("19. wall_deadline dépassée → abandon, journal contigu ✓")
+
+
+PARTIES = (
+    ("— partie 1 : les transitions —", (
+        part1_nominal, part1_issue_inconnue, part1_crash_et_repetition,
+        part1_couperets, part1_resultat_tardif, part1_budget,
+        part1_voie_unique, part1_effets)),
+    ("— partie 2 : les processus réels —", (
+        part2_commande_ok, part2_outcome_illisible, part2_issue_hors_contrat,
+        part2_pendu_muet, part2_pendu_apres_travail, part2_faucheur_mort,
+        part2_faucheur_vivant, part2_echec_identique)),
+    ("— partie 3 : le train entier —", (
+        part3_train_complet, part3_echeance_question, part3_wall_deadline)),
+)
 
 
 def main() -> None:
     debut = time.monotonic()
     db.init_db()
     with db.connect() as conn:
-        # une base réutilisée peut garder un item d'un run précédent : la
-        # voie unique doit être libre avant la première admission
-        conn.execute("UPDATE work_item SET terminal_at = now() "
-                     "WHERE terminal_at IS NULL")
-        print("— partie 1 : les transitions —")
-        part1_nominal(conn)
-        part1_issue_inconnue(conn)
-        part1_crash_et_repetition(conn)
-        part1_couperets(conn)
-        part1_resultat_tardif(conn)
-        part1_budget(conn)
-        part1_voie_unique(conn)
-        part1_effets(conn)
-        # on libère la voie entre chaque partie
-        conn.execute("UPDATE work_item SET terminal_at = now() "
-                     "WHERE terminal_at IS NULL")
-
-        print("— partie 2 : les processus réels —")
-        part2_commande_ok(conn)
-        part2_outcome_illisible(conn)
-        part2_issue_hors_contrat(conn)
-        part2_pendu_muet(conn)
-        part2_pendu_apres_travail(conn)
-        part2_faucheur_mort(conn)
-        part2_faucheur_vivant(conn)
-        part2_echec_identique(conn)
-        conn.execute("UPDATE work_item SET terminal_at = now() "
-                     "WHERE terminal_at IS NULL")
-
-        print("— partie 3 : le train entier —")
-        part3_train_complet(conn)
-        part3_echeance_question(conn)
-        part3_wall_deadline(conn)
+        for titre, preuves in PARTIES:
+            # une base réutilisée peut garder un item d'un run précédent, et
+            # chaque partie laisse les siens : la voie unique doit être libre
+            # avant la première admission de la suivante
+            libere_la_voie(conn)
+            print(titre)
+            for preuve in preuves:
+                preuve(conn)
 
     print(f"\ntrain : OK — {time.monotonic() - debut:.1f}s")
 

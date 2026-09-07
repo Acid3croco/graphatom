@@ -1,5 +1,8 @@
 /** L'API injoignable : la page le dit, elle ne tombe pas et n'invente rien. */
+import type { ReactNode } from "react";
 import { TriangleAlert } from "lucide-react";
+
+import type { Loaded } from "@/lib/load";
 
 export function ApiDown({ error }: { error: unknown }) {
   return (
@@ -12,4 +15,12 @@ export function ApiDown({ error }: { error: unknown }) {
       </span>
     </p>
   );
+}
+
+/** La page rendue avec ce qui a été chargé — ou, à sa place, la panne. */
+export function shown<T>(
+  got: Loaded<T>,
+  page: (value: T) => ReactNode,
+): ReactNode {
+  return got.ok ? page(got.value) : <ApiDown error={got.error} />;
 }

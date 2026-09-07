@@ -53,7 +53,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import blocks, db, graph, kernel, scheduler  # noqa: E402
+from graphatom import db, graph, kernel, scheduler  # noqa: E402
 from graphatom import workspace as bureau  # noqa: E402
 
 from outils import git  # noqa: E402
@@ -172,9 +172,8 @@ def runs_de(conn, item_id: int) -> dict[int, dict]:
 # -------------------------------------------------------------------- épreuves
 
 
-def course(conn, workdir: Path, repo: Path) -> None:
-    """1 à 4 : trois candidats, deux recalés par leurs portes, un gagnant."""
-    item_id = nouvel_item(conn, repo)
+def lancer_la_course(conn, item_id: int) -> dict[int, dict]:
+    """Un candidat par variante, réclamés puis joués — les recalés d'abord."""
     runs = {}
     while (run := kernel.claim(conn, item_id)) is not None:
         runs[run["candidate"]] = run
@@ -186,14 +185,12 @@ def course(conn, workdir: Path, repo: Path) -> None:
     # encore en vol, et on veut lire ce que les portes ont fait des leurs
     for k in tous[1:] + [0]:
         scheduler._execute(runs[k]["id"], item_id)
+    return runs
 
-    workspace = workdir / f"item-{item_id}"
-    prompts = {k: (workspace / f"c{k}" / "prompt-implement-1-1.md").read_text()
-               for k in tous}
-    portes = {k: (workspace / f"c{k}" / "portes.md").read_text() for k in tous}
-    finaux = runs_de(conn, item_id)
 
-    # 1. un prompt par candidat, une stratégie chacun, aucun jeton resté littéral
+def prompts_distincts(prompts: dict[int, str]) -> None:
+    """1. Un prompt par candidat, une stratégie chacun, aucun jeton resté littéral."""
+    tous = sorted(prompts)
     assert len(set(prompts.values())) == len(tous), "deux candidats ont reçu le même prompt"
     for k, variante in enumerate(VARIANTES):
         assert variante["strategy"] in prompts[k], \
@@ -209,25 +206,28 @@ def course(conn, workdir: Path, repo: Path) -> None:
     print(f"1. {len(tous)} prompts distincts, chacun avec sa stratégie et son label, "
           f"aucun jeton littéral : {[v['label'] for v in VARIANTES]} ✓")
 
-    # 2 et 3. les recalés : pas d'outcome.json, pas d'issue de succès
-    for point, k, porte, casse in ((2, 1, "import", "src/graphatom/channel.py"),
-                                   (3, 2, "tests/validate_test.py",
-                                    "tests/validate_test.py")):
-        cw = workspace / f"c{k}"
-        assert not (cw / bureau.OUTCOME_NAME).exists(), \
-            f"c{k} garde un outcome.json alors que ses portes ont lâché"
-        assert f"ÉCHEC — porte « {porte} »" in portes[k], portes[k][-600:]
-        run = finaux[k]
-        assert run["outcome"] not in (REEL["edges"] or {}), \
-            f"c{k} a rendu l'issue de succès du nœud : {run['outcome']}"
-        assert run["outcome"] in graph.KERNEL_OUTCOMES, run["outcome"]
-        assert run["outcome"] == "crashed", run["outcome"]
-        assert (run["result"] or {}).get("usage"), "ses jetons comptent quand même"
-        print(f"{point}. c{k} « {VARIANTES[k]['label']} » casse {casse} : porte "
-              f"« {porte} » lâchée, outcome.json retiré, "
-              f"node_run « {run['outcome']} » ✓")
 
-    # 4. le sain passe, garde son issue, et gagne
+def recale(point: int, k: int, porte: str, casse: str, workspace: Path,
+           portes: dict[int, str], finaux: dict[int, dict]) -> None:
+    """2 et 3. Un recalé : pas d'outcome.json, pas d'issue de succès."""
+    cw = workspace / f"c{k}"
+    assert not (cw / bureau.OUTCOME_NAME).exists(), \
+        f"c{k} garde un outcome.json alors que ses portes ont lâché"
+    assert f"ÉCHEC — porte « {porte} »" in portes[k], portes[k][-600:]
+    run = finaux[k]
+    assert run["outcome"] not in (REEL["edges"] or {}), \
+        f"c{k} a rendu l'issue de succès du nœud : {run['outcome']}"
+    assert run["outcome"] in graph.KERNEL_OUTCOMES, run["outcome"]
+    assert run["outcome"] == "crashed", run["outcome"]
+    assert (run["result"] or {}).get("usage"), "ses jetons comptent quand même"
+    print(f"{point}. c{k} « {VARIANTES[k]['label']} » casse {casse} : porte "
+          f"« {porte} » lâchée, outcome.json retiré, "
+          f"node_run « {run['outcome']} » ✓")
+
+
+def gagnant_sain(conn, item_id: int, workspace: Path, portes: dict[int, str],
+                 finaux: dict[int, dict]) -> None:
+    """4. Le sain passe, garde son issue, et gagne."""
     gagnant = finaux[0]
     assert gagnant["status"] == "applied" and gagnant["outcome"] == "done", gagnant
     issue = json.loads((workspace / "c0" / bureau.OUTCOME_NAME).read_text())
@@ -236,9 +236,28 @@ def course(conn, workdir: Path, repo: Path) -> None:
     assert "suite de tests non concernée" in portes[0], portes[0]
     item = conn.execute("SELECT * FROM work_item WHERE id = %s", (item_id,)).fetchone()
     assert item["state"] == "fini", item["state"]
-    assert all(finaux[k]["status"] == "applied" for k in tous), finaux
+    assert all(finaux[k]["status"] == "applied" for k in range(len(VARIANTES))), finaux
     print(f"4. c0 passe ses portes (diff sans code : import seul), garde son "
           f"outcome.json, et l'item part sur « {item['state']} » ✓")
+
+
+def course(conn, workdir: Path, repo: Path) -> None:
+    """1 à 4 : trois candidats, deux recalés par leurs portes, un gagnant."""
+    item_id = nouvel_item(conn, repo)
+    runs = lancer_la_course(conn, item_id)
+    tous = sorted(runs)
+
+    workspace = workdir / f"item-{item_id}"
+    prompts = {k: (workspace / f"c{k}" / "prompt-implement-1-1.md").read_text()
+               for k in tous}
+    portes = {k: (workspace / f"c{k}" / "portes.md").read_text() for k in tous}
+    finaux = runs_de(conn, item_id)
+
+    prompts_distincts(prompts)
+    recale(2, 1, "import", "src/graphatom/channel.py", workspace, portes, finaux)
+    recale(3, 2, "tests/validate_test.py", "tests/validate_test.py",
+           workspace, portes, finaux)
+    gagnant_sain(conn, item_id, workspace, portes, finaux)
 
 
 def portes_sans_base() -> None:

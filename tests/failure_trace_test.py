@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import blocks, kernel  # noqa: E402
+from graphatom import blocks  # noqa: E402
 from graphatom import context as contexte, failure, routing, workspace  # noqa: E402
 
 
@@ -35,7 +35,7 @@ ITEM_ID = 172
 class FakeConn:
     """Le bloc ne demande ici que le sujet et l'absence de tentative passée."""
 
-    def execute(self, sql, *args):
+    def execute(self, sql, *_args):
         self.sql = sql
         return self
 
@@ -48,7 +48,7 @@ class FakeConn:
 class RouteConn:
     """Le routage écrit ses deux mutations ; leur contenu ne sert pas ici."""
 
-    def execute(self, sql, *args):
+    def execute(self, _sql, *_args):
         return self
 
 
@@ -147,11 +147,8 @@ def success_writes_nothing() -> None:
     assert not path.exists(), path
 
 
-def main() -> None:
-    workdir = Path(tempfile.mkdtemp(prefix="graphatom-failure-trace-"))
-    workspace.DATA_DIR = workdir
-    os.environ.pop("GRAPHATOM_REPO_DIR", None)
-
+def echec_codex(workdir: Path) -> Path:
+    """1. L'agent Codex : échec rendu relu, quatre champs bornés."""
     path, codex = rendered_failure(workdir)
     assert set(codex) == {"node", "outcome", "log_tail", "report"}, codex
     assert (codex["node"], codex["outcome"]) == ("codex", "failed"), codex
@@ -161,7 +158,11 @@ def main() -> None:
     assert codex["report"]["content"].endswith("FIN RAPPORT CODEX\n")
     assert len(codex["report"]["content"]) <= failure.REPORT_CHARS
     print(f"1. agent Codex : échec rendu relu dans {path.name}, quatre champs bornés ✓")
+    return path
 
+
+def panne_fournisseur(path: Path) -> None:
+    """2. La panne de fournisseur garde fournisseur et raison exacte."""
     same_path, starved = starved_failure()
     assert same_path == path
     assert starved["outcome"] == "starved", starved
@@ -169,6 +170,9 @@ def main() -> None:
     assert starved["reason"] == "You have 0 weighted tokens left", starved
     print("2. panne fournisseur : failure.json garde fournisseur et raison exacte ✓")
 
+
+def shell_sans_issue(path: Path) -> None:
+    """3. Le shell sans issue : crashed au même chemin, seul le dernier échec."""
     same_path, shell = dead_failure()
     assert same_path == path
     assert set(shell) == {"node", "outcome", "log_tail", "report"}, shell
@@ -179,11 +183,25 @@ def main() -> None:
     assert "codex" not in path.read_text().lower(), "le premier échec s'est accumulé"
     print("3. shell sans issue : crashed au même chemin, qui ne porte que ce dernier échec ✓")
 
+
+def regle_et_reussite() -> None:
+    """4. La règle explicite, puis un item neuf et une réussite sans trace."""
     assert failure.is_failure_outcome("none")
     assert failure.is_failure_outcome("timed_out")
     assert not failure.is_failure_outcome("done")
     success_writes_nothing()
     print("4. règle explicite vérifiée ; item neuf et réussite sans trace inventée ✓")
+
+
+def main() -> None:
+    workdir = Path(tempfile.mkdtemp(prefix="graphatom-failure-trace-"))
+    workspace.DATA_DIR = workdir
+    os.environ.pop("GRAPHATOM_REPO_DIR", None)
+
+    path = echec_codex(workdir)
+    panne_fournisseur(path)
+    shell_sans_issue(path)
+    regle_et_reussite()
 
 
 if __name__ == "__main__":

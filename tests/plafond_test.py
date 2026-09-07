@@ -26,19 +26,18 @@ import os
 import shutil
 import socket
 import sys
-import tempfile
 import threading
 import time
 import urllib.request
-import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import blocks, db, graph, kernel, quota, scheduler, web  # noqa: E402
-from graphatom import workspace  # noqa: E402
+from graphatom import db, graph, kernel, quota, scheduler, web  # noqa: E402
 
-ROOT = Path(__file__).resolve().parents[1]
+from outils import admettre, bundle_epreuve, data_dir_jetable  # noqa: E402
+from outils import fanout_stub, runs_de  # noqa: E402
+
 # l'instance jetable : celle de l'agent qui nous lance, sinon la nôtre
 INSTANCE = os.environ.get("GRAPHATOM_AGENT_DSN") or db.DSN
 os.environ["GRAPHATOM_AGENT_DSN"] = INSTANCE
@@ -57,25 +56,10 @@ def bundle(k: int | None) -> dict:
     """Un ACT stub, en fan-out de k candidats — ou sans fan-out du tout."""
     config: dict = {"duration_s": 0, "lease_s": LEASE_S}
     if k is not None:
-        config["fanout"] = {"variants": [{"label": f"v{i}"} for i in range(k)],
-                            "reduce": "first_pass"}
-    return {
-        "name": f"plafond-{k}",
-        "entry": "travail",
-        "budgets": {"escalations": 2, "wall_deadline_hours": 1},
-        "on_kernel": {"escalate_to": "escalate", "exhausted_to": "abandon"},
-        "nodes": {
-            "travail": {"block": "ACT", "config": config, "edges": {"ok": "fini"}},
-            "escalate": {
-                "block": "WAIT", "escalade": True,
-                "config": {"question": "On retente ?", "options": ["retry"],
-                           "owner": "test", "deadline_minutes": 60},
-                "edges": {"retry": "travail", "expired": "abandon"},
-            },
-            "fini": {"terminal": True},
-            "abandon": {"terminal": True},
-        },
-    }
+        config["fanout"] = fanout_stub(k)
+    return bundle_epreuve(f"plafond-{k}", {
+        "travail": {"block": "ACT", "config": config, "edges": {"ok": "fini"}},
+    })
 
 
 # ------------------------------------------------------------------ outillage
@@ -88,10 +72,7 @@ def fake_execute(run_id: int, item_id: int) -> None:
 
 def seme(conn, k: int | None) -> int:
     """Un item factice de plus pour éprouver les plafonds multi-items."""
-    revision = graph.publish(conn, bundle(k))
-    return kernel.admit(
-        conn, revision, f"plafond:{uuid.uuid4().hex[:8]}", _allow_parallel_for_test=True
-    )
+    return admettre(conn, bundle(k), "plafond")
 
 
 def en_vol(conn) -> int:
@@ -103,12 +84,6 @@ def par_item(conn, item_id: int) -> int:
         "SELECT count(*) AS n FROM node_run WHERE item_id = %s AND status = 'running'",
         (item_id,),
     ).fetchone()["n"]
-
-
-def runs_de(conn, item_id: int) -> list[dict]:
-    return conn.execute(
-        "SELECT * FROM node_run WHERE item_id = %s ORDER BY id", (item_id,)
-    ).fetchall()
 
 
 def actifs(conn, items: list[int]) -> list[int]:
@@ -321,8 +296,7 @@ def api_load(conn) -> None:
 
 
 def main() -> None:
-    workdir = Path(tempfile.mkdtemp(prefix="graphatom-plafond-"))
-    workspace.DATA_DIR = workdir
+    workdir = data_dir_jetable("graphatom-plafond-")
     # aucun dépôt à portée : la promotion et le rangement des ateliers d'un
     # fan-out n'ont alors rien à toucher, et rien de la production ne fuit
     os.environ["GRAPHATOM_REPO_DIR"] = str(workdir / "sans-depot")

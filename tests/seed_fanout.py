@@ -36,6 +36,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphatom import db, graph, kernel  # noqa: E402
 
+from outils import FANOUT_VITRINE, bundle_epreuve  # noqa: E402
+
 # hermétisme : la fixture n'écrit que dans la base qu'on lui donne
 os.environ.pop("GRAPHATOM_AGENT_DSN", None)
 
@@ -44,46 +46,24 @@ UTC = dt.timezone.utc
 # la variante lente hérite du modèle du nœud ; la rapide le surcharge —
 # c'est exactement le pari que le fan-out sert à trancher, et la page doit
 # montrer les deux modèles côte à côte
-BUNDLE = {
-    "name": "fanout-vitrine",
-    "entry": "prepare",
-    "budgets": {"escalations": 2, "wall_deadline_hours": 6},
-    "on_kernel": {"escalate_to": "escalate", "exhausted_to": "abandon"},
-    "nodes": {
-        "prepare": {
-            "block": "FETCH",
-            "config": {"materialize": ["terrain"]},
-            "edges": {"ok": "travail"},
-        },
-        "travail": {
-            "block": "ACT",
-            "config": {
-                "lease_s": 900,
-                "execution": {"kind": "agent", "timeout_s": 1800},
-                "agent": {"cli": "claude", "model": "opus",
-                          "prompt": "Fais le travail. Stratégie : {strategy}."},
-                "fanout": {
-                    "variants": [
-                        {"label": "opus", "strategy": "raisonne longtemps"},
-                        {"label": "haiku", "strategy": "va droit au but",
-                         "agent": {"model": "haiku"}},
-                    ],
-                    "repeat": 2,
-                    "reduce": "first_pass",
-                },
-            },
-            "edges": {"ok": "fini"},
-        },
-        "escalate": {
-            "block": "WAIT", "escalade": True,
-            "config": {"question": "On retente ?", "options": ["retry"],
-                       "owner": "vitrine", "deadline_minutes": 120},
-            "edges": {"retry": "travail", "expired": "abandon"},
-        },
-        "fini": {"terminal": True},
-        "abandon": {"terminal": True},
+BUNDLE = bundle_epreuve("fanout-vitrine", {
+    "prepare": {
+        "block": "FETCH",
+        "config": {"materialize": ["terrain"]},
+        "edges": {"ok": "travail"},
     },
-}
+    "travail": {
+        "block": "ACT",
+        "config": {
+            "lease_s": 900,
+            "execution": {"kind": "agent", "timeout_s": 1800},
+            "agent": {"cli": "claude", "model": "opus",
+                      "prompt": "Fais le travail. Stratégie : {strategy}."},
+            "fanout": FANOUT_VITRINE,
+        },
+        "edges": {"ok": "fini"},
+    },
+}, entry="prepare", wall_deadline_hours=6, owner="vitrine", deadline_minutes=120)
 
 # un candidat par entrée, dans l'ordre de son numéro : son issue, son statut,
 # la seconde où il a fini — comptée depuis le début de l'étape — et ce qu'il

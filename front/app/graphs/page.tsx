@@ -8,9 +8,10 @@
  */
 import Link from "next/link";
 
-import { getGraphs } from "@/lib/api";
+import { getGraphs, type GraphRevision } from "@/lib/api";
 import { moment } from "@/lib/format";
-import { ApiDown } from "@/components/api-down";
+import { load } from "@/lib/load";
+import { shown } from "@/components/api-down";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -24,13 +25,10 @@ import {
 export const dynamic = "force-dynamic";
 
 export default async function GraphsPage() {
-  let graphs;
-  try {
-    graphs = await getGraphs();
-  } catch (err) {
-    return <ApiDown error={err} />;
-  }
+  return shown(await load(getGraphs), (graphs) => <GraphsTable graphs={graphs} />);
+}
 
+function GraphsTable({ graphs }: { graphs: GraphRevision[] }) {
   // l'API rend les révisions par nom, la plus récente d'abord : la première
   // de chaque nom est donc celle qu'une nouvelle admission prendrait
   const seen = new Set<string>();

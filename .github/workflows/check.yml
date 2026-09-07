@@ -57,3 +57,19 @@ jobs:
           enable-cache: true
       - name: Build the front and run its DOM gates
         run: uv run python scripts/check.py ui
+
+  # Les seuils de qualité : complexité, taille, code mort, doublons, puis
+  # toutes les preuves Python sous coverage — 100 % exigé, CRAP tenu.
+  rules:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+      - name: Measure every quality threshold
+        run: uv run python scripts/check.py rules

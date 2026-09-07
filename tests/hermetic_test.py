@@ -43,6 +43,7 @@ os.environ["GRAPHATOM_AGENT_DSN"] = INSTANCE
 # exécutions concurrentes ne se disputent pas la même base
 ITEM_ID = 900000 + os.getpid() % 10000
 PRODUCTION = "postgresql://graphatom:graphatom@127.0.0.1:5432/graphatom"
+NOM = f"{db.AGENT_DB_PREFIX}{ITEM_ID}"
 
 
 def bases() -> list[str]:
@@ -83,27 +84,27 @@ def cleanup(repo: Path, workspace: Path, subject: str) -> dict:
     return json.loads(outcome.read_text())
 
 
-def main() -> None:
-    tmp = Path(tempfile.mkdtemp(prefix="graphatom-hermetic-"))
-    workspace = tmp / "item-42"  # le nom du workspace fait celui du worktree
-    workspace.mkdir()
-    nom = f"{db.AGENT_DB_PREFIX}{ITEM_ID}"
-
-    # 1. la base de l'item est créée à la volée, et le rester est idempotent
+def base_a_la_volee() -> str:
+    """1. La base de l'item est créée à la volée, et le rester est idempotent."""
     dsn = db.agent_dsn(ITEM_ID)
     assert db.agent_dsn(ITEM_ID) == dsn, "deux appels ne rendent pas la même base"
-    assert nom in bases(), nom
-    assert f"dbname={nom}" in dsn, dsn
-    print(f"1. base jetable {nom} créée à la volée, dérivation idempotente ✓")
+    assert NOM in bases(), NOM
+    assert f"dbname={NOM}" in dsn, dsn
+    print(f"1. base jetable {NOM} créée à la volée, dérivation idempotente ✓")
+    return dsn
 
-    # 2. sans instance jetable, rien n'est dérivé : l'agent garde sa DSN
+
+def sans_instance() -> None:
+    """2. Sans instance jetable, rien n'est dérivé : l'agent garde sa DSN."""
     del os.environ["GRAPHATOM_AGENT_DSN"]
     assert db.agent_dsn(ITEM_ID + 1) is None
     assert f"{db.AGENT_DB_PREFIX}{ITEM_ID + 1}" not in bases()
     os.environ["GRAPHATOM_AGENT_DSN"] = INSTANCE
     print("2. sans instance jetable : aucune base dérivée ✓")
 
-    # 3. le drop refuse tout ce qui n'est pas une base jetable
+
+def drop_refuse_puis_droppe(dsn: str) -> None:
+    """3. Le drop refuse tout ce qui n'est pas une base jetable ; 4. et drop la sienne."""
     vrai = db.DSN
     try:
         db.DSN = PRODUCTION
@@ -114,18 +115,16 @@ def main() -> None:
         else:
             sys.exit("ÉCHEC : le drop a accepté une base de production")
 
-        # 4. …et drop la sienne
         db.DSN = dsn
-        assert db.drop_agent_db() == nom
-        assert nom not in bases(), nom
-        print(f"4. base {nom} droppée ✓")
+        assert db.drop_agent_db() == NOM
+        assert NOM not in bases(), NOM
+        print(f"4. base {NOM} droppée ✓")
     finally:
         db.DSN = vrai
 
-    repo = depot(tmp)
-    worktree = repo / ".worktrees" / "rail-item-42"
 
-    # 5. la branche ne correspond pas au sujet : on ne touche à rien
+def branche_etrangere(repo: Path, workspace: Path, worktree: Path) -> None:
+    """5. La branche ne correspond pas au sujet : on ne touche à rien."""
     outcome = cleanup(repo, workspace, "gh:Acid3croco/graphatom#12")
     assert outcome["outcome"] == "done", outcome  # un cleanup ne bloque jamais la sortie
     assert worktree.is_dir(), "un worktree étranger au sujet a été détruit"
@@ -133,7 +132,9 @@ def main() -> None:
     assert "on ne touche à rien" in (workspace / "cleanup.md").read_text()
     print(f"5. branche ≠ sujet : worktree intact, outcome {outcome['outcome']} ✓")
 
-    # 6. le chemin n'est pas enregistré dans ce REPO_DIR-là : idem
+
+def chemin_etranger(tmp: Path, workspace: Path, worktree: Path) -> None:
+    """6. Le chemin n'est pas enregistré dans ce REPO_DIR-là : idem."""
     etranger = tmp / "etranger"
     (etranger / ".worktrees" / "rail-item-42").mkdir(parents=True)
     (etranger / "scripts").mkdir()
@@ -145,19 +146,40 @@ def main() -> None:
     assert worktree.is_dir(), "le worktree du vrai dépôt a été détruit"
     print("6. chemin non enregistré dans le REPO_DIR : rien détruit ✓")
 
-    # 7. sa vraie cible, en revanche, part bien — worktree et branche
+
+def vraie_cible(repo: Path, workspace: Path, worktree: Path) -> None:
+    """7. Sa vraie cible, en revanche, part bien — worktree et branche."""
     outcome = cleanup(repo, workspace, "gh:Acid3croco/graphatom#77")
     assert outcome["outcome"] == "done", outcome
     assert not worktree.exists(), "le worktree de l'item aurait dû partir"
     assert git(repo, "branch", "--list", "rail/issue-77") == ""
     print(f"7. cible à soi : {outcome['summary']} ✓")
 
-    # 8. la barrière du REPO_DIR tient en une ligne par script : facile à
-    # oublier en écrivant un test, et c'est un worktree de production qui paie
+
+def scripts_epingles() -> None:
+    """8. La barrière du REPO_DIR tient en une ligne par script : facile à
+    oublier en écrivant un test, et c'est un worktree de production qui paie."""
     for script in ("crash_test.py", "seed.py", "reconnect_test.py"):
         source = (ROOT / "tests" / script).read_text()
         assert 'os.environ["GRAPHATOM_REPO_DIR"] = str(ROOT)' in source, script
     print("8. les scripts de test épinglent GRAPHATOM_REPO_DIR sur leur dépôt ✓")
+
+
+def main() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="graphatom-hermetic-"))
+    workspace = tmp / "item-42"  # le nom du workspace fait celui du worktree
+    workspace.mkdir()
+
+    dsn = base_a_la_volee()
+    sans_instance()
+    drop_refuse_puis_droppe(dsn)
+
+    repo = depot(tmp)
+    worktree = repo / ".worktrees" / "rail-item-42"
+    branche_etrangere(repo, workspace, worktree)
+    chemin_etranger(tmp, workspace, worktree)
+    vraie_cible(repo, workspace, worktree)
+    scripts_epingles()
 
     shutil.rmtree(tmp, ignore_errors=True)
     print("\nhermétisme : OK — ni la base ni le dépôt de la production ne fuient")

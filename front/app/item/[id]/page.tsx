@@ -16,10 +16,10 @@
  * le graph et les tables glissent chacun dans leur bloc, jamais la page.
  */
 import Link from "next/link";
-import { notFound } from "next/navigation";
 
 import { getItemView } from "@/lib/api";
-import { ApiDown } from "@/components/api-down";
+import { find } from "@/lib/load";
+import { shown } from "@/components/api-down";
 import {
   ItemCriteria,
   ItemEffects,
@@ -39,19 +39,8 @@ export default async function ItemPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  let view;
-  try {
-    view = await getItemView(Number(id));
-  } catch (err) {
-    if (String(err).includes("404")) {
-      notFound();
-    }
-    return <ApiDown error={err} />;
-  }
-
   const item = Number(id);
-
-  return (
+  return shown(await find(() => getItemView(item)), (view) => (
     <div className="flex flex-col gap-6">
       <ItemHeader id={item} initial={view.item} />
       <ItemQuestions id={item} initial={view.questions} />
@@ -79,5 +68,5 @@ export default async function ItemPage({
         </Link>
       </p>
     </div>
-  );
+  ));
 }

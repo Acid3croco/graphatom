@@ -16,9 +16,8 @@ import Link from "next/link";
 import type { Question } from "@/lib/api";
 import { moment } from "@/lib/format";
 import { QUESTIONS_FEED, useQuestions } from "@/lib/live";
-import { AnswerForm } from "@/components/answer-form";
+import { QuestionCard } from "@/components/question-card";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export function QuestionsList({ initial }: { initial: Question[] }) {
   const questions = useQuestions(initial);
@@ -33,31 +32,28 @@ export function QuestionsList({ initial }: { initial: Question[] }) {
   return (
     <>
       {questions.map((question) => (
-        <Card key={question.question_id}>
-          <CardHeader>
-            <CardTitle className="text-sm font-normal break-words text-muted-foreground">
-              [{question.question_id}]{" "}
-              {question.issue_url ? (
-                <a href={question.issue_url} className="underline">
-                  {question.subject_key}
-                </a>
-              ) : (
-                question.subject_key
-              )}{" "}
-              ·{" "}
-              <Link href={`/item/${question.item_id}`} className="underline">
-                item {question.item_id}
-              </Link>
-              {question.item_title ? ` « ${question.item_title} »` : ""} en{" "}
-              <Badge variant="active">{question.item_state}</Badge> · pour{" "}
-              {question.owner} · avant {moment(question.deadline)}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            <p className="whitespace-pre-wrap text-sm">{question.text}</p>
-            <AnswerForm question={question} feed={QUESTIONS_FEED} />
-          </CardContent>
-        </Card>
+        <QuestionCard
+          key={question.question_id}
+          question={question}
+          feed={QUESTIONS_FEED}
+          wrap
+        >
+          [{question.question_id}]{" "}
+          {question.issue_url ? (
+            <a href={question.issue_url} className="underline">
+              {question.subject_key}
+            </a>
+          ) : (
+            question.subject_key
+          )}{" "}
+          ·{" "}
+          <Link href={`/item/${question.item_id}`} className="underline">
+            item {question.item_id}
+          </Link>
+          {question.item_title ? ` « ${question.item_title} »` : ""} en{" "}
+          <Badge variant="active">{question.item_state}</Badge> · pour{" "}
+          {question.owner} · avant {moment(question.deadline)}
+        </QuestionCard>
       ))}
     </>
   );

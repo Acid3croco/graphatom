@@ -26,7 +26,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import github_sync as gs  # noqa: E402
 from graphatom import github_admission  # noqa: E402
 
 ADMIS = "<!-- graphatom:code-task-g1-admitted -->\nPrise en charge par le rail."
@@ -100,18 +99,18 @@ class FakeGitHub:
         self._issue(number)["state"] = "closed"
         self.journal.append(f"close#{number}")
 
-    def create_label(self, name: str) -> None:
+    def create_label(self, _name: str) -> None:
         pass
 
-    def add_label(self, number: int, name: str) -> None:
+    def add_label(self, number: int, _name: str) -> None:
         pass
 
-    def remove_label(self, number: int, name: str) -> None:
+    def remove_label(self, number: int, _name: str) -> None:
         pass
 
 
 class FakeGraph:
-    def load_bundle(self, conn, revision: str) -> dict:
+    def load_bundle(self, conn, _revision: str) -> dict:
         return {"name": "code-task"}
 
 
@@ -119,8 +118,8 @@ class FakeKernel:
     def __init__(self):
         self.admitted: list[str] = []
 
-    def admit(self, conn, revision: str, subject_key: str,
-              title: str | None = None) -> int:
+    def admit(self, conn, _revision: str, subject_key: str,
+              _title: str | None = None) -> int:
         self.admitted.append(subject_key)
         return len(self.admitted)
 
@@ -136,8 +135,8 @@ def reparents(gh: FakeGitHub, mother: int) -> list[tuple[int, str]]:
             if f"graphatom:reparent-{mother}" in b]
 
 
-def main() -> None:
-    # 1. la réécriture ne touche que sa ligne
+def reecriture_locale() -> None:
+    """1. La réécriture ne touche que sa ligne."""
     corps = ("Ce que fait cette fille.\n\n## Critères de succès\n\n"
              "1. voir #10 — preuve : `Depends-on: #10` reste de la prose ici\n\n"
              "Lineage-budget: 2\nDepends-on: #10\n")
@@ -149,10 +148,13 @@ def main() -> None:
     assert github_admission.reparent("aucune ligne", 10, 13) == "aucune ligne"
     print("1. seule la ligne `Depends-on: #<mère>` est réécrite ✓")
 
-    # les doublures prennent la place du kernel et du graph dans le canal
-    github_admission.graph, github_admission.kernel = FakeGraph(), FakeKernel()
 
-    # 2. la mère #10, découpée en #11 → #12 → #13, et ses dépendants
+def decoupe_de_dix() -> tuple[FakeGitHub, FakeConn, set, list[str]]:
+    """La mère #10, découpée en #11 → #12 → #13, avec ses dépendants.
+
+    Un tick est joué au moment même de la fermeture : `pendant` retient ce
+    que le kernel avait admis à cet instant.
+    """
     issues = [issue(10, "La primitive.\n\n## Découpée en\n\n- [ ] #11\n- [ ] #12\n- [ ] #13\n"),
               issue(11, "La première fille.\n"),
               issue(12, "La deuxième.\n\nDepends-on: #11\n"),
@@ -165,13 +167,17 @@ def main() -> None:
     conn = FakeConn({"gh:o/r#10", "gh:o/r#22"})
     kernel, said = github_admission.kernel, set()
 
-    # 3. le tick joué au moment de la fermeture : aucun dépendant admis
     pendant: list[str] = []
     gh.on_close = lambda: (github_admission.admit_labeled(conn, gh, "rev", said),
                            pendant.extend(kernel.admitted))
 
     github_admission.split_close(gh, 10, [11, 12, 13])
+    return gh, conn, said, pendant
 
+
+def dependants_reportes(gh: FakeGitHub) -> None:
+    """2. Les deux dépendants portent la dernière fille, chacun avec son
+    commentaire ; l'issue déjà admise n'est pas touchée."""
     assert gh._issue(20)["body"] == "Le premier dépendant.\n\nDepends-on: #13\n", \
         gh._issue(20)["body"]
     assert gh._issue(21)["body"] == \
@@ -185,7 +191,12 @@ def main() -> None:
     print("2. les deux dépendants portent la dernière fille, chacun avec son "
           "commentaire ✓")
 
-    # l'ordre : tout ce qui touche les dépendants est passé avant la fermeture
+
+def mere_fermee_en_dernier(gh: FakeGitHub, conn: FakeConn, said: set,
+                           pendant: list[str]) -> None:
+    """3. Tout ce qui touche les dépendants est passé avant la fermeture, et
+    aucun tick — pendant, ni après — n'admet un dépendant."""
+    kernel = github_admission.kernel
     assert gh.journal.index("close#10") == len(gh.journal) - 1, gh.journal
     assert gh.journal[:4] == ["edit#20", "comment#20", "edit#21", "comment#21"], \
         gh.journal
@@ -198,7 +209,9 @@ def main() -> None:
     assert gh._issue(10)["state"] == "closed"
     print("3. la mère ne ferme qu'après, et aucun dépendant n'est admis ✓")
 
-    # 4. une mère sans dépendant : la découpe d'aujourd'hui, rien de plus
+
+def mere_sans_dependant() -> None:
+    """4. Une mère sans dépendant : la découpe d'aujourd'hui, rien de plus."""
     issues = [issue(30, "Seule au monde.\n"), issue(31, "Sa fille.\n")]
     gh = FakeGitHub(issues)
     github_admission.split_close(gh, 30, [31])
@@ -207,7 +220,9 @@ def main() -> None:
     assert gh._issue(30)["state"] == "closed"
     print("4. mère sans dépendant : une fermeture, aucune écriture de plus ✓")
 
-    # 5. une réécriture qui échoue : la mère reste ouverte, et on sait laquelle
+
+def reecriture_impossible() -> None:
+    """5. Une réécriture qui échoue : la mère reste ouverte, et on sait laquelle."""
     issues = [issue(40, "La mère.\n"), issue(41, "Sa fille.\n"),
               issue(42, "Dépendant réécrit.\n\nDepends-on: #40\n"),
               issue(43, "Dépendant impossible.\n\nDepends-on: #40\n")]
@@ -220,6 +235,19 @@ def main() -> None:
     assert gh._issue(40)["state"] == "open", gh._issue(40)
     assert "close#40" not in gh.journal, gh.journal
     print("5. réécriture impossible : mère ouverte, issue non réécrite nommée ✓")
+
+
+def main() -> None:
+    reecriture_locale()
+
+    # les doublures prennent la place du kernel et du graph dans le canal
+    github_admission.graph, github_admission.kernel = FakeGraph(), FakeKernel()
+
+    gh, conn, said, pendant = decoupe_de_dix()
+    dependants_reportes(gh)
+    mere_fermee_en_dernier(gh, conn, said, pendant)
+    mere_sans_dependant()
+    reecriture_impossible()
 
     print("\ndécoupe : OK — les dépendances suivent la dernière fille, "
           "et la mère ferme en dernier")

@@ -21,6 +21,7 @@ import { X } from "lucide-react";
 
 import type {
   BundleAgent,
+  BundleConfig,
   BundleExecution,
   BundleFanout,
   BundleNode,
@@ -165,6 +166,165 @@ function VariantConfig({
   );
 }
 
+/** Ce qui exécute le nœud, lu dans sa config : l'agent, l'exécution déclarée, la commande. */
+function executor(config: BundleConfig) {
+  const agent = config.agent;
+  const declared = config.execution;
+  const effective =
+    declared === undefined && typeof config.harness_cmd === "string"
+      ? { cmd: config.harness_cmd }
+      : agent;
+  return { agent, declared, effective, command: declared?.cmd ?? effective?.cmd };
+}
+
+/** L'en-tête du panneau : le nom du nœud, sa nature, et de quoi le fermer. */
+function Heading({
+  name,
+  node,
+  onClose,
+}: {
+  name: string;
+  node: BundleNode;
+  onClose: () => void;
+}) {
+  return (
+    <CardHeader className="flex-row items-start justify-between gap-2">
+      <CardTitle className="flex items-center gap-2">
+        {name}
+        <Badge variant={node.terminal ? "terminal" : "default"}>
+          {node.terminal ? "terminal" : (node.block ?? "?")}
+        </Badge>
+        {node.escalade && <Badge variant="warn">escalade</Badge>}
+      </CardTitle>
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-7 w-7 p-0"
+        aria-label="fermer la config"
+        title="fermer la config"
+        onClick={onClose}
+      >
+        <X className="h-4 w-4" aria-hidden />
+      </Button>
+    </CardHeader>
+  );
+}
+
+/** Les champs en ligne : le bloc, ce qui l'exécute, ses bornes, sa nature. */
+function Summary({
+  node,
+  graphAgent,
+}: {
+  node: BundleNode;
+  graphAgent: BundleAgent | undefined;
+}) {
+  const config = node.config ?? {};
+  const { agent, declared, effective } = executor(config);
+  const fanout = config.fanout;
+  const repeat = fanout?.repeat ?? 1;
+  const timeout = declared?.timeout_s ?? agent?.timeout_s;
+  return (
+    <p className="flex flex-wrap gap-x-4 gap-y-1">
+      <Field name="bloc" value={node.block ?? "—"} />
+      {/* un nœud en fan-out n'a pas d'exécutant unique : il a K candidats
+          et une réduction qui les départage, et c'est cela que son en-tête
+          doit dire */}
+      {fanout ? (
+        <>
+          <Field name="candidats" value={fanout.variants.length * repeat} />
+          <Field name="réduction" value={reduction(fanout)} />
+          {repeat > 1 && <Field name="répétition" value={repeat} />}
+        </>
+      ) : (
+        execField(
+          effective === undefined ? undefined : graphAgent,
+          effective,
+          undefined,
+          declared,
+        )
+      )}
+      {config.lease_s !== undefined && (
+        <Field name="lease_s" value={`${config.lease_s} s`} />
+      )}
+      {timeout !== undefined && (
+        <Field name="timeout_s" value={`${timeout} s`} />
+      )}
+      <Field name="escalade" value={node.escalade ? "oui" : "non"} />
+      <Field name="terminal" value={node.terminal ? "oui" : "non"} />
+    </p>
+  );
+}
+
+/** Les arêtes du nœud : chaque issue, et le nœud où elle mène. */
+function Edges({ edges }: { edges: [string, string][] }) {
+  return (
+    <Block title="arêtes">
+      <ul className="flex flex-col gap-0.5">
+        {edges.map(([outcome, target]) => (
+          <li key={outcome}>
+            <code className="text-xs">{outcome}</code> → {target}
+          </li>
+        ))}
+      </ul>
+    </Block>
+  );
+}
+
+/** Les variantes d'un fan-out, chacune avec ce qui l'exécute. */
+function Variants({
+  fanout,
+  graphAgent,
+  nodeAgent,
+  declaredExecution,
+}: {
+  fanout: BundleFanout;
+  graphAgent: BundleAgent | undefined;
+  nodeAgent: BundleAgent | undefined;
+  declaredExecution: BundleExecution | undefined;
+}) {
+  return (
+    <Block title={`variantes (${fanout.variants.length})`}>
+      <ul className="flex flex-col gap-2">
+        {fanout.variants.map((variant, index) => (
+          <li key={index} className="flex flex-col gap-1 border-l pl-2">
+            <VariantConfig
+              variant={variant}
+              index={index}
+              graphAgent={graphAgent}
+              nodeAgent={nodeAgent}
+              declaredExecution={declaredExecution}
+            />
+          </li>
+        ))}
+      </ul>
+    </Block>
+  );
+}
+
+/** La question d'un nœud WAIT : son texte, son propriétaire, ses options. */
+function QuestionBlock({ config }: { config: BundleConfig }) {
+  return (
+    <Block title="question">
+      <p className="whitespace-pre-wrap">{config.question}</p>
+      <p className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
+        <Field name="owner" value={config.owner ?? "—"} />
+        <Field
+          name="deadline_minutes"
+          value={config.deadline_minutes ?? "—"}
+        />
+      </p>
+      {config.options && (
+        <p className="mt-1 flex flex-wrap items-center gap-1">
+          <span className="text-muted-foreground">options</span>
+          {config.options.map((option) => (
+            <Badge key={option}>{option}</Badge>
+          ))}
+        </p>
+      )}
+    </Block>
+  );
+}
+
 export function NodeConfig({
   name,
   node,
@@ -177,121 +337,29 @@ export function NodeConfig({
   onClose: () => void;
 }) {
   const config = node.config ?? {};
-  const agent = config.agent;
-  const effectiveAgent = config.execution === undefined && typeof config.harness_cmd === "string"
-    ? { cmd: config.harness_cmd }
-    : agent;
-  const declaredExecution = config.execution;
-  const command = declaredExecution?.cmd ?? effectiveAgent?.cmd;
+  const { agent, declared, command } = executor(config);
   const fanout = config.fanout;
-  const repeat = fanout?.repeat ?? 1;
   const edges = Object.entries(node.edges ?? {});
   const rest = Object.entries(config).filter(([key]) => !KNOWN.has(key));
 
   return (
     <Card>
-      <CardHeader className="flex-row items-start justify-between gap-2">
-        <CardTitle className="flex items-center gap-2">
-          {name}
-          <Badge variant={node.terminal ? "terminal" : "default"}>
-            {node.terminal ? "terminal" : (node.block ?? "?")}
-          </Badge>
-          {node.escalade && <Badge variant="warn">escalade</Badge>}
-        </CardTitle>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-7 w-7 p-0"
-          aria-label="fermer la config"
-          title="fermer la config"
-          onClick={onClose}
-        >
-          <X className="h-4 w-4" aria-hidden />
-        </Button>
-      </CardHeader>
+      <Heading name={name} node={node} onClose={onClose} />
       <CardContent className="flex flex-col gap-4 text-sm">
-        <p className="flex flex-wrap gap-x-4 gap-y-1">
-          <Field name="bloc" value={node.block ?? "—"} />
-          {/* un nœud en fan-out n'a pas d'exécutant unique : il a K
-              candidats et une réduction qui les départage, et c'est cela
-              que son en-tête doit dire */}
-          {fanout ? (
-            <>
-              <Field name="candidats" value={fanout.variants.length * repeat} />
-              <Field name="réduction" value={reduction(fanout)} />
-              {repeat > 1 && <Field name="répétition" value={repeat} />}
-            </>
-          ) : (
-            execField(
-              effectiveAgent === undefined ? undefined : graphAgent,
-              effectiveAgent,
-              undefined,
-              declaredExecution,
-            )
-          )}
-          {config.lease_s !== undefined && (
-            <Field name="lease_s" value={`${config.lease_s} s`} />
-          )}
-          {(declaredExecution?.timeout_s ?? agent?.timeout_s) !== undefined && (
-            <Field
-              name="timeout_s"
-              value={`${declaredExecution?.timeout_s ?? agent?.timeout_s} s`}
-            />
-          )}
-          <Field name="escalade" value={node.escalade ? "oui" : "non"} />
-          <Field name="terminal" value={node.terminal ? "oui" : "non"} />
-        </p>
+        <Summary node={node} graphAgent={graphAgent} />
 
-        {edges.length > 0 && (
-          <Block title="arêtes">
-            <ul className="flex flex-col gap-0.5">
-              {edges.map(([outcome, target]) => (
-                <li key={outcome}>
-                  <code className="text-xs">{outcome}</code> → {target}
-                </li>
-              ))}
-            </ul>
-          </Block>
-        )}
+        {edges.length > 0 && <Edges edges={edges} />}
 
         {fanout && (
-          <Block title={`variantes (${fanout.variants.length})`}>
-            <ul className="flex flex-col gap-2">
-              {fanout.variants.map((variant, index) => (
-                <li key={index} className="flex flex-col gap-1 border-l pl-2">
-                  <VariantConfig
-                    variant={variant}
-                    index={index}
-                    graphAgent={graphAgent}
-                    nodeAgent={agent}
-                    declaredExecution={declaredExecution}
-                  />
-                </li>
-              ))}
-            </ul>
-          </Block>
+          <Variants
+            fanout={fanout}
+            graphAgent={graphAgent}
+            nodeAgent={agent}
+            declaredExecution={declared}
+          />
         )}
 
-        {config.question !== undefined && (
-          <Block title="question">
-            <p className="whitespace-pre-wrap">{config.question}</p>
-            <p className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
-              <Field name="owner" value={config.owner ?? "—"} />
-              <Field
-                name="deadline_minutes"
-                value={config.deadline_minutes ?? "—"}
-              />
-            </p>
-            {config.options && (
-              <p className="mt-1 flex flex-wrap items-center gap-1">
-                <span className="text-muted-foreground">options</span>
-                {config.options.map((option) => (
-                  <Badge key={option}>{option}</Badge>
-                ))}
-              </p>
-            )}
-          </Block>
-        )}
+        {config.question !== undefined && <QuestionBlock config={config} />}
 
         {command && (
           <Block title="cmd">

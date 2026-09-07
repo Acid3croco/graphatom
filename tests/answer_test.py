@@ -24,7 +24,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import github_sync as gs  # noqa: E402
 from graphatom import github_questions  # noqa: E402
 
 ITEM_ID = 56
@@ -78,7 +77,7 @@ class FakeConn:
     def __enter__(self):
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *_exc):
         return False
 
     def execute(self, sql: str, params: tuple = ()):
@@ -136,9 +135,9 @@ PROSE = ("/answer 9 merger\n"
          "Je merge : les critères sont tenus et la CI est verte.")
 
 
-def main() -> None:
-    # 1. la commande sur la première ligne, l'explication en dessous
-    gh, conn, q = sync([comment(PROSE)])
+def premiere_ligne_valide() -> None:
+    """1. La commande sur la première ligne, l'explication en dessous."""
+    gh, _, q = sync([comment(PROSE)])
     assert q["state"] == "answered", q
     assert q["answer"] == "merger", q
     assert q["answered_by"] == "Acid3croco", q
@@ -149,9 +148,11 @@ def main() -> None:
     assert "Réponse `merger` enregistrée (par @Acid3croco) — le rail reprend." in body
     print("1. première ligne valide + prose : réponse prise, reçu posté ✓")
 
-    # 2. une option inconnue, sur cette question : les options valides, et
-    #    la question reste ouverte
-    gh, conn, q = sync([comment("/answer 9 plop")])
+
+def option_inconnue() -> None:
+    """2. Une option inconnue, sur cette question : les options valides, et
+    la question reste ouverte."""
+    gh, _, q = sync([comment("/answer 9 plop")])
     assert q["state"] == "open", q
     assert len(gh.posted) == 1, gh.posted
     body = gh.posted[0][1]
@@ -160,14 +161,18 @@ def main() -> None:
         assert option in body, body
     print("2. option inconnue : les options valides dites, question ouverte ✓")
 
-    # 3. une commande pour une autre question : silence complet
-    gh, conn, q = sync([comment("/answer 77 merger")])
+
+def autre_question() -> None:
+    """3. Une commande pour une autre question : silence complet."""
+    gh, _, q = sync([comment("/answer 77 merger")])
     assert gh.posted == [], gh.posted
     assert q["state"] == "open", q
     print("3. commande pour une autre question : aucun bruit croisé ✓")
 
-    # 4. aucun id lisible : une seule réponse, qui donne la forme
-    gh, conn, q = sync([comment("/answer plop merger")])
+
+def aucun_id_lisible() -> None:
+    """4. Aucun id lisible : une seule réponse, qui donne la forme."""
+    gh, _, q = sync([comment("/answer plop merger")])
     assert len(gh.posted) == 1, gh.posted
     body = gh.posted[0][1]
     assert f"`/answer {QUESTION_ID} <option>`" in body, body
@@ -181,13 +186,17 @@ def main() -> None:
     assert "commande non prise" in gh.posted[0][1], gh.posted
     assert q["state"] == "open", q
 
-    # 5. le reproche n'est posté qu'une fois, quel que soit le nombre de tours
-    gh, conn, q = sync([comment("/answer plop merger")], tours=3)
+
+def un_seul_reproche() -> None:
+    """5. Le reproche n'est posté qu'une fois, quel que soit le nombre de tours."""
+    gh, conn, _ = sync([comment("/answer plop merger")], tours=3)
     assert len(gh.posted) == 1, gh.posted
     assert ("gh:o/r#87", "reply-1001") in conn.effects, conn.effects
     print("5. trois tours de sync, un seul reproche ✓")
 
-    # 6. les garde-fous : autorisation, fenêtre d'armement, première réponse
+
+def garde_fous() -> None:
+    """6. Les garde-fous : autorisation, fenêtre d'armement, première réponse."""
     gh, _, q = sync([comment(PROSE, author="passant")])
     assert q["state"] == "open", q
     assert len(gh.posted) == 1, gh.posted
@@ -203,6 +212,14 @@ def main() -> None:
     assert len(gh.posted) == 1, gh.posted
     print("6. autorisation, fenêtre d'armement, première réponse : inchangés ✓")
 
+
+def main() -> None:
+    premiere_ligne_valide()
+    option_inconnue()
+    autre_question()
+    aucun_id_lisible()
+    un_seul_reproche()
+    garde_fous()
     print("\n/answer : OK — la prose passe, le raté parle, le reste se tait")
 
 

@@ -24,10 +24,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import github_sync as gs  # noqa: E402
 from graphatom import github_client, github_sync  # noqa: E402
 from graphatom import api, pages  # noqa: E402
-from graphatom import heartbeat, web  # noqa: E402
+from graphatom import heartbeat  # noqa: E402
 from graphatom.policy import now  # noqa: E402
 
 
@@ -93,8 +92,8 @@ class RecordingGitHub(github_client.GitHub):
         return None
 
 
-def main() -> None:
-    # 1. tamponner : une ligne par batteur, un UPSERT sur son identité
+def tamponner() -> None:
+    """1. Tamponner : une ligne par batteur, un UPSERT sur son identité."""
     conn = FakeConn()
     started = now()
     heartbeat.beat(conn, heartbeat.RAIL, "abc1234", started)
@@ -114,7 +113,9 @@ def main() -> None:
     assert heartbeat.last(conn, heartbeat.GITHUB_SYNC) is None, "le canal n'a pas battu"
     print("1. un UPSERT par batteur, une lecture d'une ligne ✓")
 
-    # 2. l'âge décide, et lui seul
+
+def vieillir() -> tuple[dt.datetime, dt.datetime]:
+    """2. L'âge décide, et lui seul. Rend un battement frais et un vieux."""
     fresh = now() - dt.timedelta(seconds=3)
     old = now() - dt.timedelta(seconds=heartbeat.STALE_S + 1)
     assert round(heartbeat.age_s(fresh)) == 3, heartbeat.age_s(fresh)
@@ -122,8 +123,11 @@ def main() -> None:
     assert not heartbeat.stalled(fresh)
     assert heartbeat.stalled(old) and heartbeat.stalled(None)
     print("2. vivant à 3 s, à l'arrêt à 2 min, à l'arrêt sans battement ✓")
+    return fresh, old
 
-    # 3. la route : un objet par batteur, trois champs chacun
+
+def route_api(fresh: dt.datetime, old: dt.datetime) -> None:
+    """3. La route : un objet par batteur, trois champs chacun."""
     payload = api.beats(fresh, old)
     assert set(payload) == {heartbeat.RAIL, heartbeat.GITHUB_SYNC}, payload
     rail, sync = payload[heartbeat.RAIL], payload[heartbeat.GITHUB_SYNC]
@@ -133,7 +137,9 @@ def main() -> None:
     assert api.beats(None, None)[heartbeat.GITHUB_SYNC] == jamais_battu
     print("3. /api/heartbeat : les deux battements, horodatage, âge, périmé ✓")
 
-    # 4. l'en-tête commun du frontend
+
+def en_tete(fresh: dt.datetime, old: dt.datetime) -> None:
+    """4. L'en-tête commun du frontend."""
     assert pages.ago(3) == "3 s" and pages.ago(200) == "3 min"
     vivant = pages.beat(fresh)
     assert "class='beat'" in vivant and "rail vivant il y a 3 s" in vivant, vivant
@@ -144,45 +150,63 @@ def main() -> None:
     assert "class='stalled'" in jamais and "jamais tamponné" in jamais, jamais
     print("4. en-tête : rail vivant, ou bandeau — les états sont figés ✓")
 
-    # 5. le label posé par le sync, sur l'issue d'un item actif
-    items = [{"id": 1, "subject_key": "gh:o/r#7", "state": "implement", "graph": "code-task"}]
+
+ITEMS = [{"id": 1, "subject_key": "gh:o/r#7", "state": "implement", "graph": "code-task"}]
+
+
+def label_stalled() -> None:
+    """5. Le label posé par le sync, sur l'issue d'un item actif."""
     issues = [{"number": 7, "labels": [{"name": "rail:implement"}]},
               {"number": 8, "labels": []}]   # #8 : admission différée, pas d'item
 
     gh = FakeGitHub(issues)
-    github_sync.paint_states(FakeConn(items=items), gh, blocked={8}, queued=set(),
-                     stalled=True)
+    github_sync.paint_states(FakeConn(items=ITEMS), gh, blocked={8}, queued=set(),
+                             stalled=True)
     assert gh.labels == [("+", 7, github_client.STALLED), ("+", 8, github_client.BLOCKED)], gh.labels
 
     gh = FakeGitHub(issues)   # le worker ne bat toujours pas : rien à repeindre
     issues[0]["labels"].append({"name": github_client.STALLED})
     issues[1]["labels"].append({"name": github_client.BLOCKED})
-    github_sync.paint_states(FakeConn(items=items), gh, blocked={8}, queued=set(),
-                     stalled=True)
+    github_sync.paint_states(FakeConn(items=ITEMS), gh, blocked={8}, queued=set(),
+                             stalled=True)
     assert gh.labels == [], gh.labels
 
     gh = FakeGitHub(issues)   # le battement revient : seul `rail:stalled` part
-    github_sync.paint_states(FakeConn(items=items), gh, blocked={8}, queued=set(),
-                     stalled=False)
+    github_sync.paint_states(FakeConn(items=ITEMS), gh, blocked={8}, queued=set(),
+                             stalled=False)
     assert gh.labels == [("-", 7, github_client.STALLED)], gh.labels
     print("5. `rail:stalled` posé à côté de l'état, retiré au retour du battement ✓")
 
-    # Deux processus de sync peuvent voir la voie libre. Le perdant reçoit
-    # « voie occupée » après l'admission du gagnant et classe brièvement le
-    # même numéro en file. La vérité active de la base doit gagner.
+
+def course_de_deux_syncs() -> None:
+    """6. Deux processus de sync peuvent voir la voie libre. Le perdant reçoit
+    « voie occupée » après l'admission du gagnant et classe brièvement le
+    même numéro en file. La vérité active de la base doit gagner."""
     issues = [{"number": 7, "labels": [{"name": github_client.QUEUED}]}]
     gh = FakeGitHub(issues)
-    github_sync.paint_states(FakeConn(items=items), gh, blocked=set(), queued={7},
-                     stalled=False)
+    github_sync.paint_states(FakeConn(items=ITEMS), gh, blocked=set(), queued={7},
+                             stalled=False)
     assert gh.labels == [("+", 7, "rail:implement"),
                          ("-", 7, github_client.QUEUED)], gh.labels
     print("6. course de deux syncs : l'état actif gagne sur `rail:queued` ✓")
 
-    # le rouge de l'alarme : la seule exception à la couleur unie des labels
+
+def rouge_de_l_alarme() -> None:
+    """Le rouge de l'alarme : la seule exception à la couleur unie des labels."""
     gh = RecordingGitHub()
     gh.create_label(github_client.STALLED)
     gh.create_label("rail:implement")
     assert [body["color"] for _, _, body in gh.calls] == [github_client.STALLED_COLOR, github_client.RAIL_COLOR]
+
+
+def main() -> None:
+    tamponner()
+    fresh, old = vieillir()
+    route_api(fresh, old)
+    en_tete(fresh, old)
+    label_stalled()
+    course_de_deux_syncs()
+    rouge_de_l_alarme()
 
     print("\nbattement : OK — le silence de chaque processus se voit")
 

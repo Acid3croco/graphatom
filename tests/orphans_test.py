@@ -57,23 +57,24 @@ ITEM_ID = 7  # l'item du contexte de test : son workspace porte la trace
 RUN_ID = 1  # le run du contexte de test : la trace lui appartient
 CYCLE = 1  # le passage du contexte de test : il nomme les traces de l'agent
 NODE = "travail"  # le nœud du contexte de test : il les nomme aussi
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class FakeConn:
     """Le bloc interroge la base pour la clé du sujet, et pour la tentative
     antérieure dont il reprendrait le travail — ici, il n'y en a aucune."""
 
-    def execute(self, sql, *args):
+    def execute(self, sql, *_args):  # noqa — le contrat de la base, lu par le bloc
         self.sql = sql
         return self
 
-    def fetchone(self) -> dict | None:
+    def fetchone(self) -> dict | None:  # noqa — idem
         return {"subject_key": "orphelins:test"} if "FROM subject" in self.sql else None
 
 
 def context(workdir: Path, cmd: str, attempt: int,
             timeout_s: float = TIMEOUT_S) -> contexte.Context:
-    workspace.DATA_DIR = workdir
+    workspace.DATA_DIR = workdir  # noqa — les workspaces du test
     node = {"block": "ACT", "edges": {"ok": "done"},
             "config": {"execution": {"kind": "agent", "cmd": cmd,
                                      "timeout_s": timeout_s},
@@ -108,6 +109,21 @@ def wait_dead(pgid: int, seconds: float = 2.0) -> list[int]:
     return group_alive(pgid)
 
 
+def exige_groupe_mort(pgid: int, echec: str) -> None:
+    """Le groupe doit être vide ; sinon on achève ses survivants et on sort."""
+    survivants = wait_dead(pgid)
+    if survivants:
+        for pid in survivants:
+            os.kill(pid, 9)
+        sys.exit(f"ÉCHEC : {echec} : {survivants}")
+
+
+def attendre_fichier(path: Path, seconds: float, pas: float) -> None:
+    deadline = time.time() + seconds
+    while time.time() < deadline and not path.exists():
+        time.sleep(pas)
+
+
 def worker(workdir: Path) -> None:
     """Le bloc agent dans un processus jetable — le test tue ce worker-là."""
     blocks.act(context(workdir, FACTICE, attempt=4, timeout_s=300))
@@ -123,10 +139,11 @@ def foreign(pgid: int) -> bool:
     return pgid != os.getpgid(0)
 
 
-def main() -> None:
-    workdir = Path(tempfile.mkdtemp(prefix="graphatom-orphans-"))
+# -------------------------------------------------------------------- preuves
 
-    # 1. l'agent factice est fauché au timeout, et rend son autopsie
+
+def preuve_timeout(workdir: Path) -> contexte.Context:
+    """1. l'agent factice est fauché au timeout, et rend son autopsie."""
     ctx = context(workdir, FACTICE, attempt=1)
     started = time.time()
     result = blocks.act(ctx)
@@ -137,18 +154,19 @@ def main() -> None:
     assert "TimeoutExpired" in result["error"], result
     print(f"1. agent fauché au timeout après {time.time() - started:.1f}s, "
           f"autopsie {result['exit_code']} ✓")
+    return ctx
 
-    # 2. le groupe entier est révoqué, descendants compris
+
+def preuve_groupe_revoque(ctx: contexte.Context) -> None:
+    """2. le groupe entier est révoqué, descendants compris."""
     pgid = int((ctx.workspace / "pgid.txt").read_text())
     assert foreign(pgid), "l'agent doit avoir sa propre session, pas celle du test"
-    survivants = wait_dead(pgid)
-    if survivants:
-        for pid in survivants:
-            os.kill(pid, 9)
-        sys.exit(f"ÉCHEC : survivants du groupe {pgid} : {survivants}")
+    exige_groupe_mort(pgid, f"survivants du groupe {pgid}")
     print(f"2. groupe {pgid} entièrement révoqué ✓")
 
-    # 3. les traces de la tentative portent son nom, et rien n'est écrasé
+
+def preuve_traces(ctx: contexte.Context) -> None:
+    """3. les traces de la tentative portent son nom, et rien n'est écrasé."""
     log = ctx.workspace / f"agent-{NODE}-{CYCLE}-1.log"
     prompt = ctx.workspace / f"prompt-{NODE}-{CYCLE}-1.md"
     assert log.exists(), log
@@ -156,12 +174,13 @@ def main() -> None:
     assert not (ctx.workspace / workspace.PROMPT_NAME).exists(), "prompt.md doit être rangé"
     print(f"3. traces {log.name} et {prompt.name} écrites ✓")
 
-    # 4. non-régression : un agent qui répond passe toujours, et son usage suit
+
+def preuve_nominal(workdir: Path, ctx: contexte.Context, trace_path: Path) -> None:
+    """4. non-régression : un agent qui répond passe toujours, et son usage suit."""
     result = blocks.act(context(workdir, REPOND, attempt=2))
     assert result == {"outcome": "ok", "summary": "fait", "usage": USAGE}, result
     assert json.loads(
         (ctx.workspace / f"usage-{NODE}-{CYCLE}-2.json").read_text()) == USAGE
-    trace_path = ctx.workspace / workspace.PGID_FILE
     assert not trace_path.exists(), "une exécution collectée n'a plus de trace"
     print(f"4. agent nominal appliqué, usage fusionné : {result} ✓")
 
@@ -170,7 +189,9 @@ def main() -> None:
     assert result == {"outcome": "ok", "summary": "fait"}, result
     print("4 bis. agent sans usage.json : résultat inchangé ✓")
 
-    # 5. l'agent qui sort en erreur rend son autopsie, sans flag timeout
+
+def preuve_crash(workdir: Path) -> None:
+    """5. l'agent qui sort en erreur rend son autopsie, sans flag timeout."""
     result = blocks.act(context(workdir, ECHOUE, attempt=3))
     assert result["outcome"] == "crashed", result
     assert result["exit_code"] == 42, result
@@ -179,14 +200,14 @@ def main() -> None:
     print(f"5. autopsie du crash : sortie {result['exit_code']}, "
           f"queue « {result['log_tail'].strip()} » ✓")
 
-    # 6. le worker meurt en plein vol : l'agent et sa trace lui survivent
+
+def preuve_orphelin(workdir: Path, trace_path: Path) -> dict:
+    """6. le worker meurt en plein vol : l'agent et sa trace lui survivent."""
     # session dédiée pour le cobaye : ni lui ni son agent ne partagent le
     # groupe du test, que la révocation de l'étape 7 balaiera
     proc = subprocess.Popen([sys.executable, __file__, "--worker", str(workdir)],
                             stdout=subprocess.DEVNULL, start_new_session=True)
-    deadline = time.time() + 10
-    while time.time() < deadline and not trace_path.exists():
-        time.sleep(0.1)
+    attendre_fichier(trace_path, 10, 0.1)
     proc.kill()  # SIGKILL du seul worker : l'agent, lui, a sa propre session
     proc.wait()
     if not trace_path.exists():
@@ -197,19 +218,20 @@ def main() -> None:
     if not group_alive(trace["pgid"]):
         sys.exit("ÉCHEC : l'agent n'a pas survécu à son worker — rien à révoquer")
     print(f"6. worker tué, agent orphelin toujours vivant : groupe {trace['pgid']} ✓")
+    return trace
 
-    # 7. le faucheur révoque l'orphelin à partir de la seule trace
+
+def preuve_faucheur(trace: dict, trace_path: Path) -> None:
+    """7. le faucheur révoque l'orphelin à partir de la seule trace."""
     tue = processus.revoke_orphan(ITEM_ID, RUN_ID)
     assert tue == trace["pgid"], tue
-    survivants = wait_dead(trace["pgid"])
-    if survivants:
-        for pid in survivants:
-            os.kill(pid, 9)
-        sys.exit(f"ÉCHEC : l'orphelin a survécu au faucheur : {survivants}")
+    exige_groupe_mort(trace["pgid"], "l'orphelin a survécu au faucheur")
     assert not trace_path.exists(), "la trace consommée doit disparaître"
     print("7. orphelin révoqué par le faucheur, trace effacée ✓")
 
-    # 8. garde-fou : la trace d'une autre tentative ne regarde pas ce run
+
+def preuve_autre_tentative(trace_path: Path) -> tuple[subprocess.Popen, dict]:
+    """8. garde-fou : la trace d'une autre tentative ne regarde pas ce run."""
     innocent = subprocess.Popen(["sleep", "300"], start_new_session=True)
     identite = processus.identity(innocent.pid)
     vivant = {"run": RUN_ID + 1, "pgid": innocent.pid, "cmd": "sleep 300",
@@ -220,8 +242,13 @@ def main() -> None:
     assert innocent.poll() is None, "l'agent d'une autre tentative doit vivre"
     assert trace_path.exists(), "sa trace doit rester armée pour son propre run"
     print("8. trace d'une autre tentative : ni suivie ni effacée ✓")
+    return innocent, vivant
 
-    # 9. garde-fou : une identité qui ne colle plus ne tue personne
+
+def preuve_identite_perimee(trace_path: Path, innocent: subprocess.Popen,
+                            vivant: dict) -> None:
+    """9. garde-fou : une identité qui ne colle plus ne tue personne."""
+    identite = vivant["identity"]
     for faux in (identite | {"starttime": -1}, identite | {"boot": "un-autre-boot"}):
         trace_path.write_text(json.dumps(vivant | {"run": RUN_ID, "identity": faux}))
         assert processus.agent_state(ITEM_ID, RUN_ID) == processus.AGENT_DEAD
@@ -235,18 +262,21 @@ def main() -> None:
     trace_path.unlink()
     print("9. identité périmée (naissance, boot) : le faucheur ne tue personne ✓")
 
-    # 10. une trace abîmée ne fait pas tomber le tick du faucheur
+
+def preuve_trace_abimee(trace_path: Path) -> None:
+    """10. une trace abîmée ne fait pas tomber le tick du faucheur."""
     for abime in ("{ceci n'est pas du json", json.dumps({"run": RUN_ID})):
         trace_path.write_text(abime)
         assert processus.agent_state(ITEM_ID, RUN_ID) == processus.AGENT_UNKNOWN
         assert processus.revoke_orphan(ITEM_ID, RUN_ID) is None
     print("10. trace illisible ou amputée : le faucheur passe son chemin ✓")
 
-    # 11. GNU timeout crée sinon un groupe enfant que la trace agent.pgid ne
-    # voit pas. --foreground garde la CLI dans le groupe suivi et révoqué.
-    root = Path(__file__).resolve().parents[1]
+
+def preuve_timeout_foreground(workdir: Path) -> Path:
+    """11. GNU timeout crée sinon un groupe enfant que la trace agent.pgid ne
+    voit pas. --foreground garde la CLI dans le groupe suivi et révoqué."""
     for name in ("agent-claude.sh", "agent-codex.sh", "agent-opencode.sh"):
-        script = (root / "scripts" / name).read_text()
+        script = (ROOT / "scripts" / name).read_text()
         assert "timeout --foreground -k 5" in script, name
     probe = workdir / "timeout-foreground"
     probe.mkdir()
@@ -257,18 +287,19 @@ def main() -> None:
     )
     process = subprocess.Popen(["bash", "-c", command], cwd=probe,
                                start_new_session=True)
-    deadline = time.time() + 5
-    while time.time() < deadline and not child_pgid.exists():
-        time.sleep(0.05)
+    attendre_fichier(child_pgid, 5, 0.05)
     assert child_pgid.exists(), "la CLI factice n'a pas écrit son groupe"
     assert int(child_pgid.read_text().strip()) == os.getpgid(process.pid)
     os.killpg(process.pid, signal.SIGTERM)
     process.wait(timeout=5)
     print("11. timeout --foreground : la CLI reste dans le groupe suivi ✓")
+    return probe
 
-    # 12. Le vrai adaptateur codex laisse GNU timeout atteindre sa borne.
-    # La CLI factice lance un enfant long : après le retour du bloc, le
-    # groupe doit être vide et la trace déjà désarmée.
+
+def preuve_timeout_codex(workdir: Path, probe: Path, trace_path: Path) -> None:
+    """12. Le vrai adaptateur codex laisse GNU timeout atteindre sa borne.
+    La CLI factice lance un enfant long : après le retour du bloc, le
+    groupe doit être vide et la trace déjà désarmée."""
     fake = probe / "codex-factice"
     fake.write_text(
         "#!/bin/sh\n"
@@ -278,7 +309,7 @@ def main() -> None:
     )
     fake.chmod(0o755)
     fake_pgid = probe / "codex-timeout.pgid"
-    adapter = root / "scripts" / "agent-codex.sh"
+    adapter = ROOT / "scripts" / "agent-codex.sh"
     command = (
         f'CODEX_BIN="{fake}" CODEX_FAKE_PGID="{fake_pgid}" '
         f'CODEX_TIMEOUT_S=0.3 bash "{adapter}"'
@@ -288,13 +319,27 @@ def main() -> None:
     assert result["exit_code"] == 4, result
     assert fake_pgid.exists(), "la CLI codex factice n'a pas écrit son groupe"
     pgid = int(fake_pgid.read_text().strip())
-    survivants = wait_dead(pgid)
-    if survivants:
-        for pid in survivants:
-            os.kill(pid, 9)
-        sys.exit(f"ÉCHEC : enfants après le timeout codex : {survivants}")
+    exige_groupe_mort(pgid, "enfants après le timeout codex")
     assert not trace_path.exists(), "le timeout codex laisse une trace désarmée"
     print("12. timeout interne codex : aucun descendant ne survit ✓")
+
+
+def main() -> None:
+    workdir = Path(tempfile.mkdtemp(prefix="graphatom-orphans-"))
+
+    ctx = preuve_timeout(workdir)
+    preuve_groupe_revoque(ctx)
+    preuve_traces(ctx)
+    trace_path = ctx.workspace / workspace.PGID_FILE
+    preuve_nominal(workdir, ctx, trace_path)
+    preuve_crash(workdir)
+    trace = preuve_orphelin(workdir, trace_path)
+    preuve_faucheur(trace, trace_path)
+    innocent, vivant = preuve_autre_tentative(trace_path)
+    preuve_identite_perimee(trace_path, innocent, vivant)
+    preuve_trace_abimee(trace_path)
+    probe = preuve_timeout_foreground(workdir)
+    preuve_timeout_codex(workdir, probe, trace_path)
 
     shutil.rmtree(workdir, ignore_errors=True)
     print("\norphelins : OK — ni le bail ni la mort du worker ne laissent d'agent")

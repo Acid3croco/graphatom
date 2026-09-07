@@ -29,7 +29,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from graphatom import blocks  # noqa: E402
 from graphatom import github_questions  # noqa: E402
 from graphatom import context, workspace as bureau  # noqa: E402
-from graphatom import github_sync as gs  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 ITEM_ID = 14
@@ -65,10 +64,10 @@ class FakeConn:
     def __enter__(self):
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *_exc):
         return False
 
-    def execute(self, sql: str, params: tuple = ()):
+    def execute(self, sql: str, _params: tuple = ()):
         if "FROM question q JOIN work_item" in sql:
             return FakeCursor([self.question])
         if "FROM subject" in sql:
@@ -81,16 +80,18 @@ class FakeConn:
 
 
 class FakeGitHub:
+    """GitHub : il retient ce que le canal poste, et le relit à la demande."""
+
     repo = "o/r"
 
     def __init__(self):
         self.posted: list[tuple[int, str]] = []
 
-    def comments(self, number: int) -> list[dict]:
-        return [{"body": body} for n, body in self.posted if n == number]
-
     def post_comment(self, number: int, body: str) -> None:
         self.posted.append((number, body))
+
+    def comments(self, number: int) -> list[dict]:
+        return [{"body": body} for n, body in self.posted if n == number]
 
 
 def question_body() -> str:
@@ -105,6 +106,65 @@ def question_body() -> str:
     github_questions.publish_questions(FakeConn(question), gh)
     assert len(gh.posted) == 1, gh.posted
     return gh.posted[0][1]
+
+
+def review_obligatoire(bundle: dict) -> None:
+    """1. Le graph : les tests passent par validate, qui coche puis route."""
+    nodes = bundle["nodes"]
+    assert nodes["test_frontend"]["edges"]["pass"] == "validate"
+    assert nodes["validate"]["block"] == "JUDGE", nodes["validate"]["block"]
+    assert nodes["validate"]["edges"] == {"pass": "review", "fail": "implement"}
+    assert nodes["review"]["edges"]["merger"] == "release"
+    # Si la review est une coupure, le terminal de succès doit être
+    # inatteignable. Cette propriété couvre aussi les futures arêtes ajoutées
+    # ailleurs dans le graph.
+    seen: set[str] = set()
+    pending = [bundle["entry"]]
+    while pending:
+        node = pending.pop()
+        if node in seen or node == "review":
+            continue
+        seen.add(node)
+        pending.extend(nodes[node].get("edges", {}).values())
+    assert "close" not in seen, "un chemin de succès contourne la review"
+    # l'arête `fail` referme un cycle : sans `escalade`, rien ne le bornerait
+    assert nodes["validate"].get("escalade") is True
+    assert bundle["budgets"]["escalations"] >= 5, bundle["budgets"]
+    print("1. review obligatoire avant release et close ; cycle borné ✓")
+
+
+def sans_validate(workspace: Path) -> None:
+    """2. Pas de workspace, pas de validate.md : la question d'avant."""
+    nue = question_body()
+    assert "validate.md" not in nue, nue
+    assert "On garde ?\n\nOptions : `merger` / `abandonner`" in nue, nue
+    workspace.mkdir()
+    assert question_body() == nue, "un workspace vide ne change rien"
+    (workspace / "validate.md").write_text("")
+    assert question_body() == nue, "un validate.md vide ne cite rien"
+    print("2. sans validate.md : la question reste ce qu'elle était ✓")
+
+
+def checklist_citee(workspace: Path) -> None:
+    """3. Le validate.md du workspace part avec la question."""
+    (workspace / "validate.md").write_text(CHECKLIST)
+    body = question_body()
+    for line in CHECKLIST.splitlines():
+        assert f"> {line}".rstrip() in body, line
+    assert f"/item/{ITEM_ID}/file/validate.md" in body, body
+    assert "Options : `merger`" in body, body
+    print("3. la question embarque les critères cochés et leurs preuves ✓")
+
+
+def citation_bornee(workspace: Path) -> None:
+    """4. Un fichier long est cité borné, et le dit."""
+    long = "\n".join(f"- [x] {n}. critère — preuve" for n in range(100))
+    (workspace / "validate.md").write_text(long)
+    body = question_body()
+    assert "> - [x] 39. critère — preuve" in body, body
+    assert "40. critère" not in body, body
+    assert f"… {100 - github_questions.CHECKLIST_LINES} lignes de plus" in body, body
+    print(f"4. citation bornée à {github_questions.CHECKLIST_LINES} lignes, le reste compté ✓")
 
 
 def renoncement_force(bundle: dict, workspace: Path) -> None:
@@ -153,70 +213,27 @@ def renoncement_force(bundle: dict, workspace: Path) -> None:
     print("5. renoncement provoqué au critère 2 : case vide et issue fail ✓")
 
 
+def renoncement_hermetique(bundle: dict, workspace: Path) -> None:
+    """Ce cas est hermétique : aucun atelier réel ne doit être ouvert."""
+    repo = os.environ.pop("GRAPHATOM_REPO_DIR", None)
+    try:
+        renoncement_force(bundle, workspace)
+    finally:
+        if repo is not None:
+            os.environ["GRAPHATOM_REPO_DIR"] = repo
+
+
 def main() -> None:
-    # 1. le graph : les tests passent par validate, qui coche puis route
     bundle = json.loads((ROOT / "examples" / "code-task.json").read_text())
-    nodes = bundle["nodes"]
-    assert nodes["test_frontend"]["edges"]["pass"] == "validate"
-    assert nodes["validate"]["block"] == "JUDGE", nodes["validate"]["block"]
-    assert nodes["validate"]["edges"] == {"pass": "review", "fail": "implement"}
-    assert nodes["review"]["edges"]["merger"] == "release"
-    # Si la review est une coupure, le terminal de succès doit être
-    # inatteignable. Cette propriété couvre aussi les futures arêtes ajoutées
-    # ailleurs dans le graph.
-    seen: set[str] = set()
-    pending = [bundle["entry"]]
-    while pending:
-        node = pending.pop()
-        if node in seen or node == "review":
-            continue
-        seen.add(node)
-        pending.extend(nodes[node].get("edges", {}).values())
-    assert "close" not in seen, "un chemin de succès contourne la review"
-    # l'arête `fail` referme un cycle : sans `escalade`, rien ne le bornerait
-    assert nodes["validate"].get("escalade") is True
-    assert bundle["budgets"]["escalations"] >= 5, bundle["budgets"]
-    print("1. review obligatoire avant release et close ; cycle borné ✓")
+    review_obligatoire(bundle)
 
     with tempfile.TemporaryDirectory() as tmp:
         bureau.DATA_DIR = Path(tmp)
         workspace = bureau.item_workspace(ITEM_ID)
-
-        # 2. pas de workspace, pas de validate.md : la question d'avant
-        nue = question_body()
-        assert "validate.md" not in nue, nue
-        assert "On garde ?\n\nOptions : `merger` / `abandonner`" in nue, nue
-        workspace.mkdir()
-        assert question_body() == nue, "un workspace vide ne change rien"
-        (workspace / "validate.md").write_text("")
-        assert question_body() == nue, "un validate.md vide ne cite rien"
-        print("2. sans validate.md : la question reste ce qu'elle était ✓")
-
-        # 3. le validate.md du workspace part avec la question
-        (workspace / "validate.md").write_text(CHECKLIST)
-        body = question_body()
-        for line in CHECKLIST.splitlines():
-            assert f"> {line}".rstrip() in body, line
-        assert f"/item/{ITEM_ID}/file/validate.md" in body, body
-        assert "Options : `merger`" in body, body
-        print("3. la question embarque les critères cochés et leurs preuves ✓")
-
-        # 4. un fichier long est cité borné, et le dit
-        long = "\n".join(f"- [x] {n}. critère — preuve" for n in range(100))
-        (workspace / "validate.md").write_text(long)
-        body = question_body()
-        assert "> - [x] 39. critère — preuve" in body, body
-        assert "40. critère" not in body, body
-        assert f"… {100 - github_questions.CHECKLIST_LINES} lignes de plus" in body, body
-        print(f"4. citation bornée à {github_questions.CHECKLIST_LINES} lignes, le reste compté ✓")
-
-        # Ce cas est hermétique : aucun atelier réel ne doit être ouvert.
-        repo = os.environ.pop("GRAPHATOM_REPO_DIR", None)
-        try:
-            renoncement_force(bundle, workspace)
-        finally:
-            if repo is not None:
-                os.environ["GRAPHATOM_REPO_DIR"] = repo
+        sans_validate(workspace)
+        checklist_citee(workspace)
+        citation_bornee(workspace)
+        renoncement_hermetique(bundle, workspace)
 
     print("\nvalidate : OK — les critères sont cochés, puis lus par l'humain")
 

@@ -31,9 +31,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphatom import blocks, quota, scheduler, web  # noqa: E402
+from graphatom import quota, scheduler  # noqa: E402
 from graphatom import api, views  # noqa: E402
 from graphatom import agent, workspace as bureau  # noqa: E402
+
+from outils import FANOUT_VITRINE  # noqa: E402
 
 T0 = dt.datetime(2026, 8, 7, 10, 0, tzinfo=dt.timezone.utc)
 ISSUE = "gh:Acid3croco/graphatom#66"
@@ -58,22 +60,11 @@ BUNDLE = {
 }
 
 
-# un nœud en fan-out, tel qu'un graph le déclare : deux variantes jouées
-# deux fois, dont une qui surcharge le modèle structuré du nœud
+# un nœud en fan-out, tel qu'un graph le déclare : la vitrine partagée, deux
+# variantes jouées deux fois, dont une qui surcharge le modèle structuré du nœud
 FANOUT_NODE = {
     "block": "ACT",
-    "config": {
-        "agent": {"prompt": "le prompt du nœud"},
-        "fanout": {
-            "variants": [
-                {"label": "opus", "strategy": "raisonne longtemps"},
-                {"label": "haiku", "strategy": "va droit au but",
-                 "agent": {"model": "haiku"}},
-            ],
-            "repeat": 2,
-            "reduce": "first_pass",
-        },
-    },
+    "config": {"agent": {"prompt": "le prompt du nœud"}, "fanout": FANOUT_VITRINE},
     "edges": {"ok": "closed"},
 }
 
@@ -82,10 +73,10 @@ class FakeCursor:
     def __init__(self, rows: list):
         self.rows = rows
 
-    def fetchall(self):
+    def fetchall(self):  # noqa — le contrat du curseur, lu par api
         return self.rows
 
-    def fetchone(self):
+    def fetchone(self):  # noqa — idem
         return self.rows[0] if self.rows else None
 
     def __iter__(self):  # `open_questions` fait un `list(...)` du curseur
@@ -102,7 +93,7 @@ class FakeConn:
     def __init__(self, **tables):
         self.tables = tables
 
-    def execute(self, sql: str, params: tuple = ()):
+    def execute(self, sql: str, _params: tuple = ()):  # noqa — le contrat de la base
         for name, rows in self.tables.items():
             if f"FROM {name}" in sql:
                 return FakeCursor(rows)
@@ -119,7 +110,7 @@ class CountConn:
         self.solo_running = solo_running
         self.solo_waiting = solo_waiting
 
-    def execute(self, sql: str, params: tuple = ()):
+    def execute(self, sql: str, _params: tuple = ()):  # noqa — le contrat de la base
         if "FROM work_item" in sql:
             return FakeCursor([
                 {"id": i, "state": "travail", "revision": "solo-rev"}
@@ -179,260 +170,304 @@ def open_conn(item_id: int) -> FakeConn:
     return FakeConn(question=[question])
 
 
+def preuve_items() -> None:
+    """1. la liste : les clés du contrat, et les deux liens."""
+    items = api.items(conn_of(14))
+    assert len(items) == 1, items
+    item = items[0]
+    for key in ("id", "subject_key", "title", "state", "status", "issue_url",
+                "pr_url", "updated_at"):
+        assert key in item, key
+    assert item["state"] == "closed" and item["status"] == "terminal", item
+    assert item["issue_url"] == ISSUE_URL and item["pr_url"] == PR_URL, item
+    assert item["total_cost_usd"] == 0, item
+    print("1. /api/items : id, titre, état, status, issue, PR ✓")
+
+
+def preuve_couts() -> None:
+    """Tous les runs comptent, y compris les candidats et ceux que le rail
+    n'a pas retenus ; chaque item garde son propre total."""
+    costs = FakeConn(
+        work_item=[item_row(14, ISSUE, True),
+                   item_row(15, "pipeline-x:sans-coût", False)],
+        node_run=[
+            {"item_id": 14, "status": "applied", "candidate": None,
+             "result": {"usage": {"total_cost_usd": 0.0123}}},
+            {"item_id": 14, "status": "superseded", "candidate": 0,
+             "result": {"usage": {"total_cost_usd": 0.0045}}},
+            {"item_id": 14, "status": "faulted", "candidate": 1,
+             "result": {"usage": {"total_cost_usd": "inconnu"}}},
+            {"item_id": 15, "status": "applied", "candidate": None,
+             "result": {"usage": {"input_tokens": 9}}},
+            {"item_id": 15, "status": "superseded", "candidate": 0,
+             "result": None},
+        ],
+    )
+    totals = {entry["id"]: entry["total_cost_usd"]
+              for entry in api.items(costs)}
+    assert totals == {14: 0.0168, 15: 0}, totals
+    print("   coûts : tous les runs, usages absents ignorés, items séparés ✓")
+
+
+def preuve_autre_canal() -> None:
+    """Un sujet d'un autre canal n'a ni issue ni PR inventées."""
+    plain = api.items(conn_of(99, "pipeline-x:oom", terminal=False))[0]
+    assert plain["issue_url"] is None and plain["pr_url"] is None, plain
+    assert plain["status"] == "active" and plain["state"] == "decide", plain
+    print("2. autre canal, item actif : aucun lien inventé, status actif ✓")
+
+
+def preuve_item() -> dict:
+    """2. l'item entier : les sept clés de la page, et l'item inconnu."""
+    payload = api.item(conn_of(14), 14)
+    for key in ("item", "graph", "journal", "runs", "questions", "criteria",
+                "files"):
+        assert key in payload, key
+    assert api.item(FakeConn(work_item=[]), 999999) is None
+    print("3. /api/item/14 : les sept clés, et l'inconnu rend None ✓")
+    return payload
+
+
+def preuve_graph(payload: dict) -> dict:
+    """3. de quoi redessiner sans la base, et de quoi chiffrer le cycle."""
+    graph = payload["graph"]
+    assert graph["current"] == "closed", graph
+    assert {n["name"] for n in graph["nodes"]} == set(BUNDLE["nodes"]), graph
+    assert {"from": "decide", "outcome": "raise", "to": "escalate"} in graph["edges"]
+    assert graph["entry"] == "ingest" and graph["on_kernel"], graph
+    run = payload["runs"][0]
+    assert run["node"] == "ingest" and run["attempt"] == 1, run
+    assert run["duration_s"] == 10.0, run  # l'écart des deux transitions
+    assert run["usage"] == {"input_tokens": 120, "output_tokens": 30}, run
+    assert payload["item"]["usage"]["input_tokens"] == 120, payload["item"]
+    assert payload["item"]["duration_s"] == 30.0, payload["item"]
+    assert payload["journal"][1]["duration_s"] == 10.0, payload["journal"]
+    # un candidat qui a perdu n'a produit aucune transition, donc aucune
+    # durée : `finished_at` est la seule date qui le situe
+    assert run["candidate"] is None and run["finished_at"] is not None, run
+    print("4. graph redessinable, runs chiffrés, journal daté ✓")
+    return graph
+
+
+def preuve_fanout(graph: dict) -> None:
+    """Le fan-out d'un nœud, un candidat par entrée : sans lui, le client
+    ne saurait pas nommer les candidats qu'il déplie."""
+    assert all("fanout" not in n for n in graph["nodes"]), graph["nodes"]
+    fanout = api.fanout(BUNDLE, FANOUT_NODE)
+    assert fanout["reduce"] == "first_pass" and fanout["repeat"] == 2, fanout
+    # variantes × répétition : chaque variante deux fois, dans l'ordre
+    labels = [c["variant"]["label"] for c in fanout["candidates"]]
+    assert labels == ["opus", "opus", "haiku", "haiku"], labels
+    # la variante surcharge le modèle, les deux héritent la CLI du graph
+    agents = [c["agent"] for c in fanout["candidates"]]
+    assert agents[0] == {"cli": "claude", "model": "opus", "effort": "high"}, agents
+    assert agents[3] == {"cli": "claude", "model": "haiku", "effort": "high"}, agents
+    assert all(c["cmd"] is None for c in fanout["candidates"]), fanout
+    assert api.fanout(BUNDLE, {"block": "ACT", "config": {}}) is None
+    print("   fanout projeté : 4 agents structurés effectifs ✓")
+
+
+def preuve_files(payload: dict) -> None:
+    """Les fichiers du workspace, avec l'URL qui les sert."""
+    names = {f["name"]: f["href"] for f in payload["files"]}
+    assert names["criteria.md"] == "/item/14/file/criteria.md", names
+    assert set(names) == {"criteria.md", "release.json"}, names
+    assert payload["criteria"].startswith("1. ça marche"), payload["criteria"]
+    print("5. files : nom + href, et criteria.md servi tel quel ✓")
+
+
+def preuve_decision() -> None:
+    """La décision historique donne la correspondance explicite, dans le
+    même ordre que le dossier anonyme du juge : fin, puis id."""
+    decision_bundle = {
+        "agent": {"cli": "codex", "model": "luna", "effort": "low"},
+        "nodes": {
+            "implement": FANOUT_NODE,
+            "judge": {"block": "JUDGE", "config": {
+                "finalists_from": "implement",
+                "agent": {"model": "sol", "effort": "high"},
+            }},
+        },
+    }
+    chosen_runs = [
+        {"id": 18, "node": "implement", "cycle": 1, "attempt": 1,
+         "candidate": 2, "status": "applied", "outcome": "timed_out",
+         "finished_at": T0},
+        {"id": 20, "node": "implement", "cycle": 1, "attempt": 1,
+         "candidate": 1, "status": "applied", "outcome": "done",
+         "finished_at": T0 + dt.timedelta(seconds=2)},
+        {"id": 19, "node": "implement", "cycle": 1, "attempt": 1,
+         "candidate": 0, "status": "applied", "outcome": "done",
+         "finished_at": T0 + dt.timedelta(seconds=1)},
+        {"id": 21, "node": "judge", "cycle": 1, "attempt": 1,
+         "candidate": None, "status": "applied", "outcome": "chosen",
+         "finished_at": T0 + dt.timedelta(seconds=3),
+         "result": {"elu": "B", "summary": "B couvre les preuves"}},
+    ]
+    item115 = bureau.item_workspace(115)
+    item115.mkdir()
+    (item115 / "verdict.md").write_text("comparaison complète\n")
+    decision = views.decision(115, decision_bundle, chosen_runs)
+    assert decision["finalists"] == [
+        {"letter": "A", "candidate": 0},
+        {"letter": "B", "candidate": 1},
+    ], decision
+    assert decision["selected"] == {"letter": "B", "candidate": 1}, decision
+    assert decision["summary"] == "B couvre les preuves", decision
+    assert decision["verdict"] == "comparaison complète\n", decision
+    assert decision["judge"] == {
+        "cli": "codex", "model": "sol", "effort": "high",
+    }, decision
+
+    sole = views.decision(116, decision_bundle, [chosen_runs[2],
+        chosen_runs[3] | {"outcome": "sole", "result": {
+            "summary": "finaliste unique — traversé sans appel de modèle"}}])
+    assert sole["selected"] == {"letter": "A", "candidate": 0}, sole
+    assert sole["judge"] is None, sole
+    none = views.decision(117, decision_bundle, [
+        chosen_runs[2] | {"status": "superseded"},
+        chosen_runs[3] | {"outcome": "none", "result": {
+            "summary": "aucun finaliste — retour en amont sans jugement"}},
+    ])
+    assert none["finalists"] == [] and none["selected"] is None, none
+    print("   décision : B → c1, finaliste unique et aucun finaliste ✓")
+
+
+def preuve_questions() -> None:
+    """4. les questions ouvertes, avec le jeton de POST /answer."""
+    answers = api.questions(open_conn(14), token="jeton-secret")
+    assert answers["token"] == "jeton-secret", answers
+    q = answers["questions"][0]
+    assert q["question_id"] == 5 and q["item_id"] == 14, q
+    assert q["options"] == ["merger", "abandonner"] and q["text"] == "On garde ?", q
+    # la question ouverte porte son item avec elle — le client n'a rien à joindre
+    assert q["issue_url"] == ISSUE_URL and q["item_state"] == "escalate", q
+    print("6. /api/questions : le jeton sort du HTML, les options avec ✓")
+
+
+def preuve_battement(payload: dict) -> None:
+    """5. le battement, et tout le reste sérialisable tel quel."""
+    beat = api.beats(None, None)
+    assert set(beat) == {"rail", "github-sync"}, beat
+    assert beat["rail"] == {"at": None, "ago_s": None, "stale": True,
+                            "sha": None, "started_at": None}, beat
+    old = api.beats(T0, T0)
+    assert old["rail"]["stale"] is True, "un vieux battement est à l'arrêt"
+    assert old["github-sync"]["stale"] is True, "et celui du canal aussi"
+    body = json.dumps(payload, default=api.jsonable, ensure_ascii=False)
+    assert T0.isoformat() in body, "les horodatages sortent en ISO 8601"
+    assert json.loads(body)["item"]["id"] == 14
+    print("7. /api/heartbeat, et le payload sérialisable en ISO 8601 ✓")
+
+
+def preuve_charge() -> None:
+    """La charge du rail : les runs en vol, et les plafonds qui les bornent."""
+    charge = api.load(CountConn(
+        4, builds=1, solo_running=1, solo_waiting=2))
+    assert charge == {"running": 4, "max_runs": scheduler.MAX_RUNS,
+                       "max_runs_per_item": scheduler.MAX_RUNS_PER_ITEM,
+                      "max_active_items": scheduler.MAX_ACTIVE_ITEMS,
+                      "solo": {"running": 1, "waiting": 2},
+                      "builds": 1, "max_builds": quota.MAX_BUILDS}, charge
+    # Le plafond par item reste sous le global dès que la machine a de
+    # quoi. Sur une petite machine les deux tombent sur le plancher de
+    # `FANOUT_MAX_CANDIDATES` : une course se réserve entière, donc
+    # interdire à un item d'atteindre la largeur maximale reviendrait à
+    # interdire la course elle-même.
+    assert charge["max_runs_per_item"] <= charge["max_runs"], \
+        "un item pourrait dépasser la capacité globale"
+    print(f"7b. /api/load : {charge['running']} runs et {charge['builds']} "
+          f"construction en vol ; plafonds {charge['max_runs']} et "
+          f"{charge['max_builds']} ✓")
+
+
+def preuve_graphs() -> None:
+    """6. les graphs publiés : la liste des révisions, avec leurs items."""
+    published = [
+        {"id": "rev-neuve", "name": "code-task", "published_at": T0, "items": 2},
+        {"id": "rev-vieille", "name": "code-task",
+         "published_at": T0 - dt.timedelta(days=1), "items": 7},
+    ]
+    graphs = api.graphs(FakeConn(graph_revision=published))
+    # la fonction ne retrie rien : l'ordre est celui de la requête — par
+    # nom, puis date décroissante, donc la plus récente en tête
+    assert [g["id"] for g in graphs] == ["rev-neuve", "rev-vieille"], graphs
+    assert graphs[0]["name"] == "code-task" and graphs[0]["items"] == 2, graphs
+    assert graphs[0]["published_at"] == T0, graphs
+    print("8. /api/graphs : nom, révision, date, items qui la portent ✓")
+
+
+def preuve_revision() -> None:
+    """Le bundle d'une révision, tel qu'il a été publié — rien de résumé."""
+    revision = FakeConn(graph_revision=[{"id": "rev-neuve", "bundle": BUNDLE,
+                                         "published_at": T0, "items": 2}])
+    one = api.graph_revision(revision, "rev-neuve")
+    assert one["revision"] == "rev-neuve" and one["items"] == 2, one
+    assert one["nodes"] == BUNDLE["nodes"], one
+    assert one["nodes"]["decide"]["config"]["agent"]["prompt"] == "le prompt entier"
+    assert one["entry"] == "ingest" and one["on_kernel"], one
+    assert api.graph_revision(FakeConn(graph_revision=[]), "inconnue") is None
+    print("9. /api/graph/<rév> : le bundle entier, l'inconnue rend None ✓")
+
+
+def preuve_trace(workspace: Path) -> None:
+    """La trace d'un run vient de son identité en base, jamais d'un chemin."""
+    run = {"id": 31, "item_id": 14, "node": "implement", "cycle": 2,
+           "attempt": 1, "candidate": None, "status": "running"}
+    traces = FakeConn(work_item=[{"id": 14}], node_run=[run])
+    (workspace / "codex.jsonl").write_text('{"type":"start"}\n')
+    bureau.attempt_log(workspace, run).write_text("début\n")
+    bureau.attempt_command(workspace, run).write_text('{"kind":"model"}\n')
+    first = api.run_trace(traces, 14, 31)
+    assert first["events"]["type"] == "codex", first
+    assert first["events"]["state"] == "available", first
+    assert first["log"]["type"] == "log" and first["command"]["type"] == "command"
+    with (workspace / "codex.jsonl").open("a") as stream:
+        stream.write('{"type":"done"}\n')
+    second = api.run_trace(traces, 14, 31, first["cursor"])
+    assert second["events"]["content"] == '{"type":"done"}\n', second
+    assert second["log"]["content"] == second["command"]["content"] == "", second
+
+    candidate = run | {"id": 32, "candidate": 2, "status": "applied"}
+    candidate_workspace = bureau.run_workspace(14, candidate)
+    candidate_workspace.mkdir()
+    (candidate_workspace / "opencode-events.jsonl").write_text('{"type":"text"}\n')
+    agent.archive(candidate_workspace, bureau.attempt_name(candidate))
+    bureau.attempt_command(candidate_workspace, candidate).write_text("")
+    terminal = api.run_trace(
+        FakeConn(work_item=[{"id": 14}], node_run=[candidate]), 14, 32)
+    assert terminal["events"]["type"] == "opencode", terminal
+    assert terminal["command"]["state"] == "empty", terminal
+    assert terminal["log"]["state"] == "missing", terminal
+    assert api.run_trace(FakeConn(work_item=[]), 14, 31) is None
+    assert api.run_trace(FakeConn(work_item=[{"id": 14}], node_run=[]), 14, 999) is None
+    other = run | {"item_id": 15}
+    assert api.run_trace(
+        FakeConn(work_item=[{"id": 14}], node_run=[other]), 14, 31) is None
+    print("10. /api/item/<item>/run/<run>/trace : identité, sources et curseur ✓")
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        bureau.DATA_DIR = Path(tmp)  # le seul répertoire de données, celui des blocs
+        bureau.DATA_DIR = Path(tmp)  # noqa — le seul répertoire de données, celui des blocs
         workspace = bureau.item_workspace(14)
         workspace.mkdir()
         (workspace / "criteria.md").write_text("1. ça marche — preuve : ce test\n")
         (workspace / "release.json").write_text(json.dumps({"pr_url": PR_URL}))
 
-        # 1. la liste : les clés du contrat, et les deux liens
-        items = api.items(conn_of(14))
-        assert len(items) == 1, items
-        item = items[0]
-        for key in ("id", "subject_key", "title", "state", "status", "issue_url",
-                    "pr_url", "updated_at"):
-            assert key in item, key
-        assert item["state"] == "closed" and item["status"] == "terminal", item
-        assert item["issue_url"] == ISSUE_URL and item["pr_url"] == PR_URL, item
-        assert item["total_cost_usd"] == 0, item
-        print("1. /api/items : id, titre, état, status, issue, PR ✓")
-
-        # tous les runs comptent, y compris les candidats et ceux que le rail
-        # n'a pas retenus ; chaque item garde son propre total
-        costs = FakeConn(
-            work_item=[item_row(14, ISSUE, True),
-                       item_row(15, "pipeline-x:sans-coût", False)],
-            node_run=[
-                {"item_id": 14, "status": "applied", "candidate": None,
-                 "result": {"usage": {"total_cost_usd": 0.0123}}},
-                {"item_id": 14, "status": "superseded", "candidate": 0,
-                 "result": {"usage": {"total_cost_usd": 0.0045}}},
-                {"item_id": 14, "status": "faulted", "candidate": 1,
-                 "result": {"usage": {"total_cost_usd": "inconnu"}}},
-                {"item_id": 15, "status": "applied", "candidate": None,
-                 "result": {"usage": {"input_tokens": 9}}},
-                {"item_id": 15, "status": "superseded", "candidate": 0,
-                 "result": None},
-            ],
-        )
-        totals = {entry["id"]: entry["total_cost_usd"]
-                  for entry in api.items(costs)}
-        assert totals == {14: 0.0168, 15: 0}, totals
-        print("   coûts : tous les runs, usages absents ignorés, items séparés ✓")
-
-        # un sujet d'un autre canal n'a ni issue ni PR inventées
-        plain = api.items(conn_of(99, "pipeline-x:oom", terminal=False))[0]
-        assert plain["issue_url"] is None and plain["pr_url"] is None, plain
-        assert plain["status"] == "active" and plain["state"] == "decide", plain
-        print("2. autre canal, item actif : aucun lien inventé, status actif ✓")
-
-        # 2. l'item entier : les sept clés de la page, et l'item inconnu
-        payload = api.item(conn_of(14), 14)
-        for key in ("item", "graph", "journal", "runs", "questions", "criteria",
-                    "files"):
-            assert key in payload, key
-        assert api.item(FakeConn(work_item=[]), 999999) is None
-        print("3. /api/item/14 : les sept clés, et l'inconnu rend None ✓")
-
-        # 3. de quoi redessiner sans la base, et de quoi chiffrer le cycle
-        graph = payload["graph"]
-        assert graph["current"] == "closed", graph
-        assert {n["name"] for n in graph["nodes"]} == set(BUNDLE["nodes"]), graph
-        assert {"from": "decide", "outcome": "raise", "to": "escalate"} in graph["edges"]
-        assert graph["entry"] == "ingest" and graph["on_kernel"], graph
-        run = payload["runs"][0]
-        assert run["node"] == "ingest" and run["attempt"] == 1, run
-        assert run["duration_s"] == 10.0, run  # l'écart des deux transitions
-        assert run["usage"] == {"input_tokens": 120, "output_tokens": 30}, run
-        assert payload["item"]["usage"]["input_tokens"] == 120, payload["item"]
-        assert payload["item"]["duration_s"] == 30.0, payload["item"]
-        assert payload["journal"][1]["duration_s"] == 10.0, payload["journal"]
-        # un candidat qui a perdu n'a produit aucune transition, donc aucune
-        # durée : `finished_at` est la seule date qui le situe
-        assert run["candidate"] is None and run["finished_at"] is not None, run
-        print("4. graph redessinable, runs chiffrés, journal daté ✓")
-
-        # le fan-out d'un nœud, un candidat par entrée : sans lui, le client
-        # ne saurait pas nommer les candidats qu'il déplie
-        assert all("fanout" not in n for n in graph["nodes"]), graph["nodes"]
-        fanout = api.fanout(BUNDLE, FANOUT_NODE)
-        assert fanout["reduce"] == "first_pass" and fanout["repeat"] == 2, fanout
-        # variantes × répétition : chaque variante deux fois, dans l'ordre
-        labels = [c["variant"]["label"] for c in fanout["candidates"]]
-        assert labels == ["opus", "opus", "haiku", "haiku"], labels
-        # la variante surcharge le modèle, les deux héritent la CLI du graph
-        agents = [c["agent"] for c in fanout["candidates"]]
-        assert agents[0] == {"cli": "claude", "model": "opus", "effort": "high"}, agents
-        assert agents[3] == {"cli": "claude", "model": "haiku", "effort": "high"}, agents
-        assert all(c["cmd"] is None for c in fanout["candidates"]), fanout
-        assert api.fanout(BUNDLE, {"block": "ACT", "config": {}}) is None
-        print("   fanout projeté : 4 agents structurés effectifs ✓")
-
-        # les fichiers du workspace, avec l'URL qui les sert
-        names = {f["name"]: f["href"] for f in payload["files"]}
-        assert names["criteria.md"] == "/item/14/file/criteria.md", names
-        assert set(names) == {"criteria.md", "release.json"}, names
-        assert payload["criteria"].startswith("1. ça marche"), payload["criteria"]
-        print("5. files : nom + href, et criteria.md servi tel quel ✓")
-
-        # La décision historique donne la correspondance explicite, dans le
-        # même ordre que le dossier anonyme du juge : fin, puis id.
-        decision_bundle = {
-            "agent": {"cli": "codex", "model": "luna", "effort": "low"},
-            "nodes": {
-                "implement": FANOUT_NODE,
-                "judge": {"block": "JUDGE", "config": {
-                    "finalists_from": "implement",
-                    "agent": {"model": "sol", "effort": "high"},
-                }},
-            },
-        }
-        chosen_runs = [
-            {"id": 18, "node": "implement", "cycle": 1, "attempt": 1,
-             "candidate": 2, "status": "applied", "outcome": "timed_out",
-             "finished_at": T0},
-            {"id": 20, "node": "implement", "cycle": 1, "attempt": 1,
-             "candidate": 1, "status": "applied", "outcome": "done",
-             "finished_at": T0 + dt.timedelta(seconds=2)},
-            {"id": 19, "node": "implement", "cycle": 1, "attempt": 1,
-             "candidate": 0, "status": "applied", "outcome": "done",
-             "finished_at": T0 + dt.timedelta(seconds=1)},
-            {"id": 21, "node": "judge", "cycle": 1, "attempt": 1,
-             "candidate": None, "status": "applied", "outcome": "chosen",
-             "finished_at": T0 + dt.timedelta(seconds=3),
-             "result": {"elu": "B", "summary": "B couvre les preuves"}},
-        ]
-        item115 = bureau.item_workspace(115)
-        item115.mkdir()
-        (item115 / "verdict.md").write_text("comparaison complète\n")
-        decision = views.decision(115, decision_bundle, chosen_runs)
-        assert decision["finalists"] == [
-            {"letter": "A", "candidate": 0},
-            {"letter": "B", "candidate": 1},
-        ], decision
-        assert decision["selected"] == {"letter": "B", "candidate": 1}, decision
-        assert decision["summary"] == "B couvre les preuves", decision
-        assert decision["verdict"] == "comparaison complète\n", decision
-        assert decision["judge"] == {
-            "cli": "codex", "model": "sol", "effort": "high",
-        }, decision
-
-        sole = views.decision(116, decision_bundle, [chosen_runs[2],
-            chosen_runs[3] | {"outcome": "sole", "result": {
-                "summary": "finaliste unique — traversé sans appel de modèle"}}])
-        assert sole["selected"] == {"letter": "A", "candidate": 0}, sole
-        assert sole["judge"] is None, sole
-        none = views.decision(117, decision_bundle, [
-            chosen_runs[2] | {"status": "superseded"},
-            chosen_runs[3] | {"outcome": "none", "result": {
-                "summary": "aucun finaliste — retour en amont sans jugement"}},
-        ])
-        assert none["finalists"] == [] and none["selected"] is None, none
-        print("   décision : B → c1, finaliste unique et aucun finaliste ✓")
-
-        # 4. les questions ouvertes, avec le jeton de POST /answer
-        answers = api.questions(open_conn(14), token="jeton-secret")
-        assert answers["token"] == "jeton-secret", answers
-        q = answers["questions"][0]
-        assert q["question_id"] == 5 and q["item_id"] == 14, q
-        assert q["options"] == ["merger", "abandonner"] and q["text"] == "On garde ?", q
-        # la question ouverte porte son item avec elle — le client n'a rien à joindre
-        assert q["issue_url"] == ISSUE_URL and q["item_state"] == "escalate", q
-        print("6. /api/questions : le jeton sort du HTML, les options avec ✓")
-
-        # 5. le battement, et tout le reste sérialisable tel quel
-        beat = api.beats(None, None)
-        assert set(beat) == {"rail", "github-sync"}, beat
-        assert beat["rail"] == {"at": None, "ago_s": None, "stale": True,
-                                "sha": None, "started_at": None}, beat
-        old = api.beats(T0, T0)
-        assert old["rail"]["stale"] is True, "un vieux battement est à l'arrêt"
-        assert old["github-sync"]["stale"] is True, "et celui du canal aussi"
-        body = json.dumps(payload, default=api.jsonable, ensure_ascii=False)
-        assert T0.isoformat() in body, "les horodatages sortent en ISO 8601"
-        assert json.loads(body)["item"]["id"] == 14
-        print("7. /api/heartbeat, et le payload sérialisable en ISO 8601 ✓")
-
-        # la charge du rail : les runs en vol, et les plafonds qui les bornent
-        charge = api.load(CountConn(
-            4, builds=1, solo_running=1, solo_waiting=2))
-        assert charge == {"running": 4, "max_runs": scheduler.MAX_RUNS,
-                           "max_runs_per_item": scheduler.MAX_RUNS_PER_ITEM,
-                          "max_active_items": scheduler.MAX_ACTIVE_ITEMS,
-                          "solo": {"running": 1, "waiting": 2},
-                          "builds": 1, "max_builds": quota.MAX_BUILDS}, charge
-        # Le plafond par item reste sous le global dès que la machine a de
-        # quoi. Sur une petite machine les deux tombent sur le plancher de
-        # `FANOUT_MAX_CANDIDATES` : une course se réserve entière, donc
-        # interdire à un item d'atteindre la largeur maximale reviendrait à
-        # interdire la course elle-même.
-        assert charge["max_runs_per_item"] <= charge["max_runs"], \
-            "un item pourrait dépasser la capacité globale"
-        print(f"7b. /api/load : {charge['running']} runs et {charge['builds']} "
-              f"construction en vol ; plafonds {charge['max_runs']} et "
-              f"{charge['max_builds']} ✓")
-
-        # 6. les graphs publiés : la liste des révisions, avec leurs items
-        published = [
-            {"id": "rev-neuve", "name": "code-task", "published_at": T0, "items": 2},
-            {"id": "rev-vieille", "name": "code-task",
-             "published_at": T0 - dt.timedelta(days=1), "items": 7},
-        ]
-        graphs = api.graphs(FakeConn(graph_revision=published))
-        # la fonction ne retrie rien : l'ordre est celui de la requête — par
-        # nom, puis date décroissante, donc la plus récente en tête
-        assert [g["id"] for g in graphs] == ["rev-neuve", "rev-vieille"], graphs
-        assert graphs[0]["name"] == "code-task" and graphs[0]["items"] == 2, graphs
-        assert graphs[0]["published_at"] == T0, graphs
-        print("8. /api/graphs : nom, révision, date, items qui la portent ✓")
-
-        # le bundle d'une révision, tel qu'il a été publié — rien de résumé
-        revision = FakeConn(graph_revision=[{"id": "rev-neuve", "bundle": BUNDLE,
-                                             "published_at": T0, "items": 2}])
-        one = api.graph_revision(revision, "rev-neuve")
-        assert one["revision"] == "rev-neuve" and one["items"] == 2, one
-        assert one["nodes"] == BUNDLE["nodes"], one
-        assert one["nodes"]["decide"]["config"]["agent"]["prompt"] == "le prompt entier"
-        assert one["entry"] == "ingest" and one["on_kernel"], one
-        assert api.graph_revision(FakeConn(graph_revision=[]), "inconnue") is None
-        print("9. /api/graph/<rév> : le bundle entier, l'inconnue rend None ✓")
-
-        # la trace d'un run vient de son identité en base, jamais d'un chemin
-        run = {"id": 31, "item_id": 14, "node": "implement", "cycle": 2,
-               "attempt": 1, "candidate": None, "status": "running"}
-        traces = FakeConn(work_item=[{"id": 14}], node_run=[run])
-        (workspace / "codex.jsonl").write_text('{"type":"start"}\n')
-        bureau.attempt_log(workspace, run).write_text("début\n")
-        bureau.attempt_command(workspace, run).write_text('{"kind":"model"}\n')
-        first = api.run_trace(traces, 14, 31)
-        assert first["events"]["type"] == "codex", first
-        assert first["events"]["state"] == "available", first
-        assert first["log"]["type"] == "log" and first["command"]["type"] == "command"
-        with (workspace / "codex.jsonl").open("a") as stream:
-            stream.write('{"type":"done"}\n')
-        second = api.run_trace(traces, 14, 31, first["cursor"])
-        assert second["events"]["content"] == '{"type":"done"}\n', second
-        assert second["log"]["content"] == second["command"]["content"] == "", second
-
-        candidate = run | {"id": 32, "candidate": 2, "status": "applied"}
-        candidate_workspace = bureau.run_workspace(14, candidate)
-        candidate_workspace.mkdir()
-        (candidate_workspace / "opencode-events.jsonl").write_text('{"type":"text"}\n')
-        agent.archive(candidate_workspace, bureau.attempt_name(candidate))
-        bureau.attempt_command(candidate_workspace, candidate).write_text("")
-        terminal = api.run_trace(
-            FakeConn(work_item=[{"id": 14}], node_run=[candidate]), 14, 32)
-        assert terminal["events"]["type"] == "opencode", terminal
-        assert terminal["command"]["state"] == "empty", terminal
-        assert terminal["log"]["state"] == "missing", terminal
-        assert api.run_trace(FakeConn(work_item=[]), 14, 31) is None
-        assert api.run_trace(FakeConn(work_item=[{"id": 14}], node_run=[]), 14, 999) is None
-        other = run | {"item_id": 15}
-        assert api.run_trace(
-            FakeConn(work_item=[{"id": 14}], node_run=[other]), 14, 31) is None
-        print("10. /api/item/<item>/run/<run>/trace : identité, sources et curseur ✓")
+        preuve_items()
+        preuve_couts()
+        preuve_autre_canal()
+        payload = preuve_item()
+        preuve_fanout(preuve_graph(payload))
+        preuve_files(payload)
+        preuve_decision()
+        preuve_questions()
+        preuve_battement(payload)
+        preuve_charge()
+        preuve_graphs()
+        preuve_revision()
+        preuve_trace(workspace)
 
     print("\napi : OK — les pages se lisent en JSON, sans dépendance ni écriture")
 
