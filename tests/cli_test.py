@@ -16,6 +16,7 @@ Ce que la ligne de commande promet, code de sortie et message compris :
      effet ; `build-quota` sans commande est une erreur d'usage, avec une
      commande rend son code de sortie
   6. `serve` écoute où on lui dit, signe du nom donné ; `run` bat en base
+  7. sans commande, l'usage en code 2 ; les défauts de `serve` : 127.0.0.1:8848, jack
 
 Usage : uv run python tests/cli_test.py
 """
@@ -38,7 +39,7 @@ from web_outils import (  # noqa: E402
 )
 from outils import attendre, etat  # noqa: E402
 
-from graphatom import db, heartbeat  # noqa: E402
+from graphatom import cli as commande, db, heartbeat  # noqa: E402
 
 # ni jeton GitHub ni instance jetable : chaque preuve pose ce qu'elle veut
 ENV = {k: v for k, v in os.environ.items()
@@ -227,8 +228,22 @@ def preuve_demons(conn) -> None:
     print("6. serve écoute sur --port et signe --by ; run bat en base ✓")
 
 
+def preuve_usage() -> None:
+    """7. sans commande : l'usage en code 2, jamais une trace ; `serve` sans
+    option écoute sur 127.0.0.1:8848 et signe « jack » — les défauts qu'un
+    humain tape de tête."""
+    rien = cli()
+    assert rien.returncode == 2 and "the following arguments are required: cmd" in rien.stderr, \
+        (rien.returncode, rien.stderr)
+    defauts = commande._parser().parse_args(["serve"])
+    assert (defauts.port, defauts.host, defauts.by, defauts.notify_cmd) == \
+        (8848, "127.0.0.1", "jack", None), vars(defauts)
+    print("7. sans commande → usage en 2 ; serve par défaut : 127.0.0.1:8848, signé jack ✓")
+
+
 def main() -> None:
     preuve_init_db()
+    preuve_usage()
     with db.connect() as conn:
         item_id, _rev = preuve_lecture(conn)
         preuve_reponse(conn, item_id)
