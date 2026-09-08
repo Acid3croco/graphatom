@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GraphAtom — pourquoi pas un moteur existant ?</title>
+<title>GraphAtom — Les choix et les limites</title>
 <style>
   :root {
     --bg: #EDEFF1; --surface: #FBFCFC; --sunk: #E3E7EA;
@@ -71,62 +71,37 @@
   }
   footer { border-top: 1.5px solid var(--rule); padding-top: 1.4rem; font-family: var(--mono); font-size: 0.74rem; color: var(--muted); }
   @media (max-width: 600px) { body { font-size: 16px; } }
+  a { color: var(--accent); }
+  nav { font-family: var(--display); font-size: 0.9rem; display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+  .wrap, section { min-width: 0; }
 </style>
 </head>
 <body>
-<div class="wrap">
-
+<main class="wrap">
 <header class="masthead">
-  <div class="eyebrow">GraphAtom · positionnement</div>
-  <h1>Pourquoi pas un moteur existant ?</h1>
-  <p class="standfirst">Temporal, Restate, DBOS, Inngest font déjà de l'exécution durable, mieux que nous ne la ferons jamais. Si GraphAtom n'apporte rien qu'eux n'ont pas, il ne doit pas exister. Cette page est le test de survie du projet.</p>
+<div class="eyebrow">GraphAtom · état du dépôt · 8 septembre 2026</div>
+<h1>Les choix et les limites</h1>
+<p class="standfirst">GraphAtom associe une machine à états durable à des règles de travail pour les agents. Cette page décrit les choix du dépôt ; elle ne prétend pas établir une comparaison exhaustive des moteurs disponibles.</p>
+<nav aria-label="Documentation"><a href="index.html">Le système</a><a href="cas-usage.html">Le cycle GitHub</a><a href="pourquoi.html">Les choix et limites</a><a href="https://github.com/Acid3croco/graphatom/blob/main/README.md">Guide détaillé</a></nav>
 </header>
-
-<section>
-  <h2>Ce qu'ils font mieux — et pour toujours</h2>
-  <p>Rejouer du code après un crash, tenir des timers pendant des mois, retenter avec backoff, monter en charge : les moteurs de workflow durables font ça depuis des années, en production, chez des milliers d'équipes. GraphAtom ne les rattrapera jamais sur la robustesse du <em>moteur</em>, et n'essaiera pas. Ce n'est pas là que se joue le projet.</p>
+<section id="choix">
+<h2>Ce que le projet choisit de fixer</h2>
+<div class="tablewrap"><table><thead><tr><th scope="col">Choix</th><th scope="col">Mise en œuvre</th></tr></thead><tbody><tr><td>Configuration étroite</td><td>Un graph JSON, des blocs connus et des issues déclarées ; pas d’expressions arbitraires dans les arêtes.</td></tr><tr><td>Un état par item</td><td>Les candidats partagent un nœud logique et sont réduits avant la transition.</td></tr><tr><td>Attentes explicites</td><td>Questions fermées avec responsable, options et expiration routée.</td></tr><tr><td>Travail borné</td><td>Tentatives par passage, budget d’escalades, budget de sujet et deadline globale.</td></tr><tr><td>Preuves visibles</td><td>Journal des transitions, résultats, commandes et traces par tentative.</td></tr><tr><td>Charge limitée</td><td>Une seule occurrence active, plafonds de runs et quota des opérations lourdes.</td></tr></tbody></table></div><p><a href="https://github.com/Acid3croco/graphatom/blob/main/src/graphatom/validation.py">Validation</a> · <a href="https://github.com/Acid3croco/graphatom/blob/main/src/graphatom/routing.py">Routage</a> · <a href="https://github.com/Acid3croco/graphatom/blob/main/src/graphatom/quota.py">Quota</a>.</p>
 </section>
-
-<section>
-  <h2>Les cinq choses qu'aucun d'eux ne fait</h2>
-  <p>Leur modèle a un angle mort commun : le workflow est du <strong>code arbitraire de confiance</strong>. Or notre exécutant est un agent LLM — compétent, non fiable, et qui optimise ce qu'on le laisse optimiser. Cinq garanties manquent, et ce sont précisément celles qui comptent :</p>
-
-  <div class="tablewrap">
-    <table>
-      <thead><tr><th>Garantie</th><th>Chez eux</th><th>Chez GraphAtom</th></tr></thead>
-      <tbody>
-        <tr><td><strong>issues fermées</strong></td><td>une fonction retourne ce qu'elle veut ; aucune structure imposée aux sorties</td><td>un nœud ne peut sortir que par une issue déclarée, chacune routée ; vérifié avant exécution</td></tr>
-        <tr><td><strong>terminaison</strong></td><td>politiques de retry — un agent peut boucler indéfiniment en les respectant toutes</td><td>budget fini que rien ne régénère, y compris la ré-admission du même sujet ; l'épuisement est une fin explicite</td></tr>
-        <tr><td><strong>humains typés</strong></td><td>signaux et waitpoints : un canal, pas un contrat — réponse libre, deadline optionnelle</td><td>question fermée obligatoire, responsable nommé, deadline routée, réponse signée et journalisée</td></tr>
-        <tr><td><strong>« incertain » assumé</strong></td><td>at-least-once, idempotence à ta charge ; l'ambiguïté d'un effet est ton problème</td><td>état <code>uncertain</code> de première classe, réconcilié en interrogeant la cible ou par constat d'opérateur signé</td></tr>
-        <tr><td><strong>le journal comme produit</strong></td><td>l'historique d'événements sert au replay ; illisible comme compte rendu</td><td>la trajectoire est le livrable : qui a décidé quoi, sur quelles preuves, quand</td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <p>Le fil commun : chez eux, la garantie est « ton code re-tournera ». Chez GraphAtom, la garantie est « <strong>l'agent ne peut pas sortir du rail</strong> » — et elle est appliquée par le noyau, pas demandée dans un prompt.</p>
+<section id="moteur">
+<h2>Pourquoi PostgreSQL dans cette implémentation</h2>
+<p>PostgreSQL porte les révisions, items, runs, questions, effets et transitions. Ses transactions et verrous permettent de réserver et d’appliquer sous contrôle de version. Le worker exécute les blocs hors transaction et reprend après une reconnexion.</p><p>Le dépôt n’utilise pas Temporal, Restate, DBOS, Inngest ou LangGraph. Construire les mêmes règles au-dessus d’un autre moteur serait un autre choix d’architecture. Le code actuel ne démontre pas que ces outils seraient incapables de les porter.</p><p><a href="https://github.com/Acid3croco/graphatom/blob/main/schema.sql">Schéma réel</a> · <a href="https://github.com/Acid3croco/graphatom/blob/main/src/graphatom/scheduler.py">Ordonnanceur</a> · <a href="https://github.com/Acid3croco/graphatom/blob/main/tests/train_test.py">Preuve du train</a>.</p>
 </section>
-
-<section>
-  <h2>Et les frameworks d'agents ?</h2>
-  <p>LangGraph, Mastra et consorts partent de l'autre bout : ils orchestrent des agents mais reposent sur du snapshot-replay et des conventions — rien n'<em>empêche</em> un agent de contourner une étape. Ils sont un bon outillage d'agent, pas une fondation d'exécution : exactement l'inverse de notre problème. Un tableau de suivi contournable, c'est pire que pas de système, parce que ça donne un vernis officiel à un agent non surveillé.</p>
+<section id="garanties">
+<h2>Ne pas confondre routage et sécurité</h2>
+<p>Le fence et la version empêchent un run révoqué de déplacer l’item. Cela ne prouve pas qu’une commande ne peut pas toucher un système extérieur. Les agents utilisent des processus et des worktrees ; les accès du worker et des CLI restent une responsabilité d’exploitation.</p><p>Les intentions en base et la réconciliation des commentaires GitHub rendent certains effets rejouables. Le bloc EFFECT fourni reste une démonstration avec une outbox locale. Les scripts de livraison font aussi des appels directs. Le système ne promet pas l’exactement-une-fois pour une cible quelconque.</p><p>La freshness après WAIT, le If-Match générique, la réservation d’une équipe humaine et le constat d’opérateur universel décrits dans les premières notes ne sont pas des gardes livrées. Le budget de lignée, lui, est contrôlé à l’admission.</p>
 </section>
-
-<section>
-  <h2>La réponse honnête</h2>
-  <div class="callout">
-    <span class="tag">GraphAtom n'est pas un concurrent de Temporal</span>
-    <p>C'est une <strong>couche d'opinions</strong> — issues fermées, budgets structurels, portes humaines typées, effets réconciliables, journal lisible — qui pourrait en théorie se construire au-dessus de n'importe quel moteur durable. Le pari du projet est que ces opinions valent plus que le moteur.</p>
-    <p>Décision assumée : le prototype est Postgres-natif, parce que sept tables suffisent à valider les opinions et qu'un moteur externe ajouterait une dépendance avant d'avoir prouvé quoi que ce soit. Si les opinions tiennent, le moteur en dessous devient un détail interchangeable. Si elles ne tiennent pas, aucun moteur ne les aurait sauvées.</p>
-  </div>
+<section id="perimetre">
+<h2>Ce qui reste hors du produit livré</h2>
+<ul class="plain"><li>Pas de chemins concurrents à joindre dans un item. Le fan-out sélectionne des candidats d’un même nœud.</li><li>Pas de conversation entre candidats comme mécanisme de coordination.</li><li>Pas de plateforme multi-organisation ni de gouverneur de flotte.</li><li>Pas de module EVAL ou de distillation livré.</li><li>Pas de connecteur Notion ou Coolify livré.</li></ul><p>La découpe générale de tâches reste documentée dans <a href="https://github.com/Acid3croco/graphatom/blob/main/DECOUPE.md">DECOUPE.md</a>. Le canal GitHub dispose déjà des dépendances d’admission et de la fermeture d’une mère découpée. Les notes historiques servent à comprendre l’intention ; le code, les bundles et les preuves définissent l’état actuel.</p>
 </section>
-
-<div class="axiom">Le moteur est une commodité. Les portes sont le produit.</div>
-
-<footer>
-  <a href="index.html">← le noyau</a> · <a href="cas-usage.html">cas d'usage pilote</a> · positionnement
-</footer>
-
-</div>
+<footer>Documentation vérifiée sur <a href="https://github.com/Acid3croco/graphatom/tree/411a709a9a86d2660347bc4eefea3d39fab8f33a">la révision 411a709</a>. Les liens de code suivent main. <a href="archive/graph-runner-original.html">Dérivation v1, historique</a>.</footer>
+</main>
 </body>
 </html>

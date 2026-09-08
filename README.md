@@ -1,6 +1,6 @@
 # GraphAtom
 
-**📄 Spec rendue : [acid3croco.github.io/graphatom](https://acid3croco.github.io/graphatom/)** · [dérivation v1](https://acid3croco.github.io/graphatom/archive/graph-runner-original.html)
+**📄 Documentation : [acid3croco.github.io/graphatom](https://acid3croco.github.io/graphatom/)** · [dérivation v1](https://acid3croco.github.io/graphatom/archive/graph-runner-original.html)
 
 Un noyau d'exécution durable pour orchestrer des agents LLM : une machine à états persistante qui exécute des tâches isolées et externalise les effets de façon réconciliable.
 
@@ -8,9 +8,9 @@ L'idée : des portes successives dont l'exécution est certaine — du code atom
 
 ## Documents
 
-- [`index.html`](index.html) — **le noyau** (v2, simplifié) : six pièces, sept concepts utilisateur, quatre gardes de frontière, sept tables.
-- [`cas-usage.html`](cas-usage.html) — **le cas d'usage pilote** : d'une carte Notion à la prod. Trois gestes humains, le reste est le rail. C'est ce scénario qui pilote les choix.
-- [`pourquoi.html`](pourquoi.html) — **pourquoi pas Temporal/Restate/LangGraph** : les cinq garanties qu'aucun moteur existant ne donne. Le moteur est une commodité, les portes sont le produit.
+- [`index.html`](index.html) — **le système actuel** : démarrage, format JSON, noyau, agents, persistance, API, exploitation, preuves et limites.
+- [`cas-usage.html`](cas-usage.html) — **le cycle GitHub livré** : admission, candidats, contrôles, review, livraison et déploiement.
+- [`pourquoi.html`](pourquoi.html) — **les choix et les limites** : ce que le noyau impose, les responsabilités d’exploitation et ce qui reste une intention de conception.
 - [`DECOUPE.md`](DECOUPE.md) — **découper un travail en N morceaux différents, et le recoller** : la forme de configuration, les agrégations retenues bloc par bloc, le sort d'un morceau en échec, et pourquoi l'invariant d'état unique tient. Conception seule — rien n'en est encore exécutable.
 - [`archive/graph-runner-original.html`](archive/graph-runner-original.html) — la dérivation complète (v1) : algèbre de capacités, particules élémentaires, forces d'interaction, les douze trous de frontière. Le raisonnement, pas la spécification.
 

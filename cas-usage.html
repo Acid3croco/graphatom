@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GraphAtom — le premier cas d'usage</title>
+<title>GraphAtom — D’une issue GitHub au déploiement</title>
 <style>
   :root {
     --bg: #EDEFF1; --surface: #FBFCFC; --sunk: #E3E7EA;
@@ -71,79 +71,41 @@
   }
   footer { border-top: 1.5px solid var(--rule); padding-top: 1.4rem; font-family: var(--mono); font-size: 0.74rem; color: var(--muted); }
   @media (max-width: 600px) { body { font-size: 16px; } }
+  a { color: var(--accent); }
+  nav { font-family: var(--display); font-size: 0.9rem; display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+  .wrap, section { min-width: 0; }
 </style>
 </head>
 <body>
-<div class="wrap">
-
+<main class="wrap">
 <header class="masthead">
-  <div class="eyebrow">GraphAtom · cas d'usage pilote</div>
-  <h1>D'une carte Notion à la prod</h1>
-  <p class="standfirst">Le cas d'usage qui pilote GraphAtom : une tâche écrite dans un board Notion traverse le rail jusqu'au déploiement, et chaque statut de la carte reflète la réalité — jamais l'inverse. C'est ce scénario qui décide de tout : quels blocs existent, à quoi ressemble une question, et ce que « fini » veut dire.</p>
+<div class="eyebrow">GraphAtom · état du dépôt · 8 septembre 2026</div>
+<h1>D’une issue GitHub au déploiement</h1>
+<p class="standfirst">Le cas livré utilise GitHub, des worktrees, des candidats vérifiés et Docker Compose. Les étapes et leurs issues viennent de examples/code-task.json.</p>
+<nav aria-label="Documentation"><a href="index.html">Le système</a><a href="cas-usage.html">Le cycle GitHub</a><a href="pourquoi.html">Les choix et limites</a><a href="https://github.com/Acid3croco/graphatom/blob/main/README.md">Guide détaillé</a></nav>
 </header>
-
-<section>
-  <h2>L'histoire heureuse</h2>
-  <div class="tablewrap">
-    <table>
-      <thead><tr><th>#</th><th>Qui</th><th>Ce qui se passe</th><th>La carte Notion affiche</th></tr></thead>
-      <tbody>
-        <tr><td>1</td><td>toi</td><td>tu écris une carte : cible, comportement actuel, comportement voulu, comment vérifier</td><td>Backlog</td></tr>
-        <tr><td>2</td><td>le rail</td><td>il admet la carte — ou te la renvoie avec un gabarit à trous précis, pas un « peux-tu préciser ? »</td><td>Admitted / Needs&nbsp;info</td></tr>
-        <tr><td>3</td><td>un agent</td><td>il produit le changement dans un espace isolé, vérifié par les checks avant d'aller plus loin</td><td>In&nbsp;progress</td></tr>
-        <tr><td>4</td><td>le rail</td><td>il ouvre la PR GitHub — c'est la PR qui fait foi, la carte n'est qu'un reflet</td><td>In&nbsp;review</td></tr>
-        <tr><td>5</td><td>toi</td><td>tu review sur GitHub, comme d'habitude — approve ou request changes</td><td>In&nbsp;review</td></tr>
-        <tr><td>6</td><td>le rail</td><td>merge ; Coolify déploie le commit ; le rail attend le verdict du déploiement — pas un « ça devrait être bon »</td><td>Deploying</td></tr>
-        <tr><td>7</td><td>le rail</td><td>il observe la prod, rejoue la vérification écrite à l'étape 1, puis ferme</td><td>Done</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p>Toi, tu fais trois choses : écrire la carte, répondre aux questions, review la PR. Tout le reste est le rail — et chaque passage d'étape est une porte enregistrée : qui a décidé quoi, sur quelles preuves, quand.</p>
+<section id="admission">
+<h2>Admettre une tâche</h2>
+<p>Le canal <code>graphatom github-sync --repo owner/repo --graph examples/code-task.json</code> publie le graph et surveille les issues portant le label <code>graphatom</code>. <code>GRAPHATOM_TAKE_ALL</code> permet de prendre toutes les issues ouvertes. Le canal demande un accès GitHub configuré.</p><p>La plus ancienne issue admissible entre seule dans le rail. Les suivantes portent <code>rail:queued</code> et restent hors de PostgreSQL, sans bail ni deadline. L’item actif conserve la voie pendant la review.</p><p><code>Depends-on: #29</code> diffère l’admission jusqu’à la fermeture de la dépendance ; le label est <code>rail:blocked</code>. <code>Retry-of: #172</code> peut reprendre les fichiers de critères, validation et échec d’un item terminal. Ce sont des règles du canal, pas une jointure entre items. <a href="https://github.com/Acid3croco/graphatom/blob/main/src/graphatom/github_admission.py">Admission GitHub</a>.</p>
 </section>
-
-<section>
-  <h2>Quand ça ne se passe pas comme prévu</h2>
-  <p>C'est là que le rail se distingue d'un script. Quatre scénarios, tous vécus d'avance :</p>
-  <ul class="plain">
-    <li><strong>La review dort trois jours.</strong> L'attente a une deadline. À l'expiration, la carte revient avec une question fermée — « on abandonne, on relance, ou tu review maintenant ? » — pas un ping vague qui redort trois jours.</li>
-    <li><strong>Coolify ne répond plus pendant le déploiement.</strong> Le rail ne devine pas. L'état devient « incertain », il vérifie ce que la prod dit vraiment, et si c'est indécidable, il te demande de constater — ta réponse est enregistrée comme une décision, avec ton nom.</li>
-    <li><strong>Le monde a bougé pendant l'attente.</strong> Quelqu'un a mergé autre chose entre la décision et le déploiement ? Le rail re-vérifie ses hypothèses avant d'agir. Une décision prise lundi ne s'exécute jamais aveuglément vendredi.</li>
-    <li><strong>La tâche tourne en rond.</strong> Chaque relance consomme un budget fini que rien ne régénère. Épuisé : clôture explicite, avec la trajectoire complète pour comprendre. Et rouvrir la même tâche n'offre pas un budget neuf.</li>
-  </ul>
+<section id="cycle">
+<h2>Le chemin nominal</h2>
+<div class="tablewrap"><table><thead><tr><th scope="col">Nœud</th><th scope="col">Travail et sortie</th></tr></thead><tbody><tr><td>ingest → worktree</td><td>Matérialiser l’entrée puis créer le worktree de l’item.</td></tr><tr><td>scope</td><td>Écrire les critères ; ready → implement, unclear → clarify, split → cleanup_split.</td></tr><tr><td>implement → judge</td><td>Trois candidats, portes propres à chaque candidat, keep_n avec n = 2, puis un élu.</td></tr><tr><td>test_backend → test_frontend</td><td>Commandes de contrôle sur le travail retenu.</td></tr><tr><td>validate → review</td><td>Vérifier les critères et préparer la checklist ; pass ouvre la question humaine.</td></tr><tr><td>review → release</td><td>L’option merger autorise la livraison ; abandonner mène au nettoyage non résolu.</td></tr><tr><td>release → deploy</td><td>Livrer le changement ; rebased retourne aux tests, conflict escalade.</td></tr><tr><td>deploy → verify_deploy</td><td>Déploiement sérialisé ; waiting revient sur deploy, puis vérification du résultat.</td></tr><tr><td>cleanup → close</td><td>Retirer les ressources de travail, puis terminer.</td></tr></tbody></table></div><p>Le budget du profil est de cinq escalades et sa deadline globale de 72 heures. Les branches terminales sont <code>close</code>, <code>close_unresolved</code> et <code>close_split</code>. <a href="https://github.com/Acid3croco/graphatom/blob/main/examples/code-task.json">Toutes les commandes, prompts et arêtes</a>.</p>
 </section>
-
-<section>
-  <h2>Les règles du jeu</h2>
-  <ul class="plain">
-    <li><strong>La carte ne commande pas, elle reflète.</strong> Déplacer une carte à la main ne déclenche rien et ne trompe personne : la vérité vit dans le rail, la carte est une projection.</li>
-    <li><strong>La review se fait où elle a toujours eu lieu</strong> — sur GitHub. Le rail ne réinvente pas ton outil de review, il l'attend.</li>
-    <li><strong>Jamais de question ouverte.</strong> Toute question du rail est fermée, avec des options — parce qu'une question ouverte dort trois semaines et qu'un choix se fait en cinq secondes.</li>
-    <li><strong>Toute intervention manuelle est une décision signée.</strong> Débloquer, constater, abandonner : des verbes officiels, tracés. Rien ne se règle « à la main » en douce.</li>
-  </ul>
+<section id="humain">
+<h2>Répondre à une question</h2>
+<p>La question est publiée sur l’issue avec ses options et son identifiant. Une personne autorisée par <code>GRAPHATOM_ANSWERERS</code> répond dans un commentaire dont la première ligne suit la forme <code>/answer &lt;id&gt; &lt;option&gt;</code>. Une explication peut suivre. Le serveur web et la CLI peuvent aussi enregistrer la réponse.</p><p>La review du rail propose <code>merger</code> ou <code>abandonner</code>. Une approbation de PR GitHub seule ne remplace pas cette réponse. La réponse est attribuée et stockée ; le worker effectue la transition. L’expiration de la review mène à l’escalade.</p><p>Le front présente le graph, les tentatives, la commande effective, les traces, les critères, la checklist et les liens vers l’issue et la PR lorsqu’elle existe. <a href="https://github.com/Acid3croco/graphatom/blob/main/src/graphatom/github_questions.py">Réponses GitHub</a>.</p>
 </section>
-
-<section>
-  <h2>Ce que « ça marche » veut dire</h2>
-  <div class="callout">
-    <span class="tag">Critères de succès — figés avant de construire</span>
-    <p><strong>1.</strong> Une tâche réelle traverse de bout en bout sans autre intervention que les trois prévues (écrire, répondre, review).</p>
-    <p><strong>2.</strong> Zéro correction hors des verbes officiels : si un incident exige de toucher l'état autrement, c'est un échec du modèle, pas un dépannage.</p>
-    <p><strong>3.</strong> Chaque statut Notion est exact à tout moment — on doit pouvoir faire confiance au board sans jamais vérifier derrière.</p>
-    <p><strong>4.</strong> Quand quelque chose d'anormal arrive, la trajectoire enregistrée suffit à comprendre <em>quoi</em> et <em>pourquoi</em> — sans archéologie.</p>
-  </div>
+<section id="incidents">
+<h2>Quand une étape échoue</h2>
+<ul class="plain"><li><strong>Critères incomplets :</strong> <code>clarify</code> propose <code>go</code> ou <code>reformuler</code>.</li><li><strong>Aucun finaliste :</strong> <code>judge</code> revient à <code>implement</code>. Un échec de validation y revient aussi.</li><li><strong>Échec de contrôle ou livraison en conflit :</strong> le graph ouvre <code>escalate</code>, avec <code>retry</code> ou <code>abandon</code>.</li><li><strong>Déploiement occupé :</strong> <code>deploy</code> attend sur sa file ; l’attente n’est pas un échec.</li><li><strong>Worker arrêté :</strong> les battements signalent l’arrêt. Les pages peuvent rester disponibles alors que les items ne progressent plus.</li></ul><p>Les reprises restent bornées par le budget et la deadline. La trace d’échec conserve les informations de la tentative. <a href="https://github.com/Acid3croco/graphatom/blob/main/src/graphatom/failure.py">Trace d’échec</a>.</p>
 </section>
-
-<section>
-  <h2>Ce que ce cas ne couvre pas</h2>
-  <p>Assumé et volontaire : une seule personne (toi) à toutes les portes humaines ; un seul repo cible à la fois ; pas d'orchestration multi-tâches coordonnées ; pas d'auto-amélioration. Chaque extension viendra quand ce scénario tournera pour de vrai — pas avant.</p>
+<section id="livraison">
+<h2>Le déploiement a deux périmètres</h2>
+<p>Le profil livre les services avec les scripts du dépôt et contrôle le déploiement. Le worker d’agents tourne sur l’hôte : un changement de son code demande une activation distincte, après le terminal de l’item. Le guide décrit l’arrêt de l’admission, l’alignement du checkout, le redémarrage du service et le contrôle de son battement.</p><p>Le scénario Notion → PR → Coolify de la première note était une cible de conception. Le dépôt actuel ne livre ni canal Notion ni adaptateur Coolify. <a href="https://github.com/Acid3croco/graphatom/blob/main/scripts/release.sh">Livraison</a> · <a href="https://github.com/Acid3croco/graphatom/blob/main/README.md">Procédure d’exploitation</a>.</p>
 </section>
-
-<div class="axiom">Trois gestes humains — écrire, répondre, review. Tout le reste est le rail, et tout le rail se voit.</div>
-
-<footer>
-  <a href="index.html">← le noyau</a> · cas d'usage pilote : Notion → PR → déploiement
-</footer>
-
-</div>
+<footer>Documentation vérifiée sur <a href="https://github.com/Acid3croco/graphatom/tree/411a709a9a86d2660347bc4eefea3d39fab8f33a">la révision 411a709</a>. Les liens de code suivent main. <a href="archive/graph-runner-original.html">Dérivation v1, historique</a>.</footer>
+</main>
 </body>
 </html>

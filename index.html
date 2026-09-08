@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GraphAtom — le noyau</title>
+<title>GraphAtom — Le système actuel</title>
 <style>
   :root {
     --bg: #EDEFF1; --surface: #FBFCFC; --sunk: #E3E7EA;
@@ -101,202 +101,156 @@
   }
   footer { border-top: 1.5px solid var(--rule); padding-top: 1.4rem; font-family: var(--mono); font-size: 0.74rem; color: var(--muted); }
   @media (max-width: 600px) { body { font-size: 16px; } }
+  a { color: var(--accent); }
+  nav { font-family: var(--display); font-size: 0.9rem; display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+  .wrap, section { min-width: 0; }
 </style>
 </head>
 <body>
-<div class="wrap">
-
+<main class="wrap">
 <header class="masthead">
-  <div class="eyebrow">GraphAtom · note de conception · v2</div>
-  <h1>Le noyau</h1>
-  <p class="standfirst">Une machine à états persistante qui exécute des tâches isolées et externalise les effets de façon réconciliable. Six pièces, sept concepts pour l'utilisateur, et rien d'autre dans le noyau.</p>
+<div class="eyebrow">GraphAtom · état du dépôt · 8 septembre 2026</div>
+<h1>Le système actuel</h1>
+<p class="standfirst">Un noyau Python et PostgreSQL pour exécuter des tâches d’agents, conserver leurs résultats et attendre des décisions humaines. Le dépôt fournit aussi un cycle GitHub de développement, une API et un front Next.js.</p>
+<nav aria-label="Documentation"><a href="index.html">Le système</a><a href="cas-usage.html">Le cycle GitHub</a><a href="pourquoi.html">Les choix et limites</a><a href="https://github.com/Acid3croco/graphatom/blob/main/README.md">Guide détaillé</a></nav>
 </header>
-
-<section>
-  <h2>Ce qu'un utilisateur doit savoir</h2>
-  <p>Sept concepts suffisent pour écrire et exécuter un premier graph :</p>
-  <div class="tablewrap">
-    <table>
-      <thead><tr><th>Concept</th><th>Définition</th></tr></thead>
-      <tbody>
-        <tr><td><strong>nœud</strong></td><td>une étape typée : observer, juger, produire, agir sur le monde, attendre</td></tr>
-        <tr><td><strong>entrée</strong></td><td>les artefacts qu'un nœud reçoit, référencés depuis un nœud précédent</td></tr>
-        <tr><td><strong>issue</strong></td><td>ce qu'un nœud peut répondre — un énuméré fermé, déclaré</td></tr>
-        <tr><td><strong>arête</strong></td><td>issue → nœud suivant ; chaque issue a exactement une arête</td></tr>
-        <tr><td><strong>retry</strong></td><td>rejouer coûte un budget fini que rien ne régénère</td></tr>
-        <tr><td><strong>deadline</strong></td><td>toute attente est bornée ; l'expiration est une issue comme une autre</td></tr>
-        <tr><td><strong>effet</strong></td><td>toute action sur le monde extérieur passe par la passerelle, jamais en direct</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p>Tout le reste — fencing, baux, réconciliation, gardes de frontière — est le travail du noyau, invisible tant qu'il ne se passe rien d'anormal.</p>
+<section id="etat">
+<h2>Ce qui fonctionne aujourd’hui</h2>
+<p>GraphAtom exécute un graph JSON publié sous une révision immuable. Un item garde un seul état ; plusieurs candidats peuvent travailler sur le même nœud. Le cycle fourni va d’une issue GitHub à la vérification du déploiement.</p>
+<p>Le site que vous lisez est une documentation statique. Les vues des items, les questions et les traces sont dans l’application lancée avec le dépôt.</p>
+<nav aria-label="Sur cette page"><a href="#demarrer">Démarrer</a><a href="#configuration">Configuration</a><a href="#noyau">Noyau</a><a href="#agents">Agents</a><a href="#exploitation">Exploitation</a><a href="#preuves">Vérification</a><a href="#limites">Limites</a></nav>
 </section>
-
-<section>
-  <h2>Les six blocs livrés</h2>
-  <p>Un bloc est du code qui implémente l'interface d'exécution du noyau ; le catalogue est ouvert. Six blocs sont livrés, et couvrent l'essentiel :</p>
-  <div class="tablewrap">
-    <table>
-      <thead><tr><th>Bloc</th><th>Ce qu'il fait</th><th>Ce qu'il n'a pas le droit de faire</th></tr></thead>
-      <tbody>
-        <tr><td><strong>FETCH</strong></td><td>lit le monde extérieur, matérialise des preuves (logs, pages, diffs) sur l'item</td><td>modifier quoi que ce soit</td></tr>
-        <tr><td><strong>JUDGE</strong></td><td>appel modèle : lit le contenu, répond dans l'énuméré fermé de son schéma</td><td>modifier le contenu ; rejouable sans danger</td></tr>
-        <tr><td><strong>ACT</strong></td><td>appel modèle : travaille dans un workspace isolé, publie un checkpoint validé</td><td>toucher le monde extérieur ou son propre harnais (budgets, checks)</td></tr>
-        <tr><td><strong>CHECK</strong></td><td>vérification déterministe — tests, lint, règles — verdict <code>pass / fail</code></td><td>appeler un modèle ; c'est une porte, pas un avis</td></tr>
-        <tr><td><strong>EFFECT</strong></td><td>remet une intention à la passerelle : ouvrir une PR, déployer, notifier</td><td>agir lui-même ; seule la passerelle touche le monde</td></tr>
-        <tr><td><strong>WAIT</strong></td><td>attend une réponse humaine typée — responsable nommé, deadline obligatoire</td><td>poser une question ouverte ; l'expiration est une issue routée</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p>La colonne de droite n'est pas une consigne : elle est appliquée par l'isolement et la passerelle. Un <code>ACT</code> ne <em>peut pas</em> déployer, même si son modèle le veut.</p>
+<section id="demarrer">
+<h2>Démarrer avec un graph de démonstration</h2>
+<p>Prérequis : Git, Python 3.12 ou plus, uv et Docker. Depuis un clone du dépôt, lancer un PostgreSQL local dédié, puis publier l’exemple fourni. Cet exemple utilise des blocs simulés ; il ne demande aucun modèle.</p>
+<pre><code>git clone https://github.com/Acid3croco/graphatom.git
+cd graphatom
+docker run -d --name graphatom-docs-pg \
+  -e POSTGRES_USER=graphatom -e POSTGRES_PASSWORD=graphatom \
+  -e POSTGRES_DB=graphatom -p 127.0.0.1:54321:5432 postgres:17
+# Attendre que cette commande indique que PostgreSQL accepte les connexions.
+docker exec graphatom-docs-pg pg_isready -U graphatom
+export GRAPHATOM_DSN=postgresql://graphatom:graphatom@127.0.0.1:54321/graphatom
+uv run graphatom init-db
+REV=$(uv run graphatom publish examples/supervision.json)
+uv run graphatom admit "$REV" "demo:premier-essai"
+uv run graphatom run</code></pre>
+<p>Dans un autre terminal du même clone, avec le même <code>GRAPHATOM_DSN</code>, lancer <code>uv run graphatom serve</code>, puis ouvrir <code>http://127.0.0.1:8848</code>. Le worker doit rester actif pour faire avancer les items.</p>
+<pre><code>uv run graphatom items
+uv run graphatom questions
+uv run graphatom journal &lt;item_id&gt;
+uv run graphatom answer &lt;question_id&gt; retry</code></pre>
+<p>Remplacer les identifiants par ceux affichés. Répondre seulement avec une option de la question ouverte. Arrêter le worker et le serveur avec Ctrl-C. <a href="https://github.com/Acid3croco/graphatom/blob/main/examples/supervision.json">Exemple complet</a> · <a href="https://github.com/Acid3croco/graphatom/blob/main/src/graphatom/cli.py">Commandes CLI</a>.</p>
 </section>
-
-<section>
-  <h2>Un exemple complet</h2>
-  <pre><code>graph supervision @rev 7c1f…            <span class="cm">— immuable, adressée par contenu</span>
-  source      = failed_runs
-  subject_key = [pipeline, error_class]
-  budgets: escalations = 4, wall_deadline = 7d
-
-  node ingest   : FETCH { materialize: [logs] }
-      ok → diagnose
-  node diagnose : JUDGE { schema: cause_v1 }
-      → decide
-  node decide   : JUDGE { schema: verdict_v1 }
-      fix   → produce
-      raise → escalate
-      known → close
-  node produce  : ACT   { workspace: isolated }
-      ok → verify
-  node verify   : CHECK { manifest: checks@3 }
-      pass → commit
-      fail → escalate
-  node commit   : EFFECT { intent: open_change }
-      applied   → close
-      uncertain → escalate
-  node escalate : WAIT  { owner: oncall, deadline: 4h }
-      answered → decide
-      expired  → close_unresolved
-  node close, close_unresolved : terminal</code></pre>
-  <p>Les issues mécaniques — <code>crashed</code>, <code>timed_out</code>, <code>invalid_result</code>, <code>budget_exhausted</code> — ont des <strong>défauts centralisés</strong> (réessayer, puis escalader ; épuisement → <code>close_unresolved</code>). Un graph ne les redéclare que pour les surcharger. Les références d'artefacts sont résolues par le runtime depuis le prédécesseur réel, puis enregistrées explicitement — l'auteur n'écrit jamais de qualificatif de tentative.</p>
+<section id="configuration">
+<h2>La déclaration est du JSON</h2>
+<p>Le format lu par <code>graphatom publish</code> contient <code>name</code>, <code>entry</code>, <code>budgets</code>, <code>on_kernel</code> et <code>nodes</code>. Les clés de <code>edges</code> définissent les issues du domaine. Un terminal porte <code>terminal: true</code>.</p>
+<pre><code class="language-json">{
+  &quot;name&quot;: &quot;premier-graph&quot;,
+  &quot;entry&quot;: &quot;verify&quot;,
+  &quot;budgets&quot;: {
+    &quot;escalations&quot;: 2,
+    &quot;wall_deadline_hours&quot;: 1
+  },
+  &quot;on_kernel&quot;: {
+    &quot;escalate_to&quot;: &quot;ask&quot;,
+    &quot;exhausted_to&quot;: &quot;unresolved&quot;
+  },
+  &quot;nodes&quot;: {
+    &quot;verify&quot;: {
+      &quot;block&quot;: &quot;CHECK&quot;,
+      &quot;edges&quot;: {
+        &quot;pass&quot;: &quot;done&quot;,
+        &quot;fail&quot;: &quot;ask&quot;
+      }
+    },
+    &quot;ask&quot;: {
+      &quot;block&quot;: &quot;WAIT&quot;,
+      &quot;escalade&quot;: true,
+      &quot;config&quot;: {
+        &quot;question&quot;: &quot;Retenter ou abandonner ?&quot;,
+        &quot;options&quot;: [
+          &quot;retry&quot;,
+          &quot;abandon&quot;
+        ],
+        &quot;owner&quot;: &quot;operator&quot;,
+        &quot;deadline_minutes&quot;: 10
+      },
+      &quot;edges&quot;: {
+        &quot;retry&quot;: &quot;verify&quot;,
+        &quot;abandon&quot;: &quot;unresolved&quot;,
+        &quot;expired&quot;: &quot;unresolved&quot;
+      }
+    },
+    &quot;done&quot;: {
+      &quot;terminal&quot;: true
+    },
+    &quot;unresolved&quot;: {
+      &quot;terminal&quot;: true
+    }
+  }
+}</code></pre>
+<p>Enregistrer ce JSON dans un fichier, puis le publier avec <code>uv run graphatom publish &lt;fichier.json&gt;</code>. Ce CHECK sans exécution configurée est une simulation qui répond <code>pass</code>. Un contrôle réel déclare <code>config.execution</code>.</p>
+<p>La publication refuse notamment les cibles absentes, les nœuds inatteignables, les cycles hors escalade et les WAIT sans options ou arête <code>expired</code>. Une file déclarée par <code>file: true</code> peut avoir une arête vers elle-même. <a href="https://github.com/Acid3croco/graphatom/blob/main/src/graphatom/validation.py">Validation</a>.</p>
 </section>
-
-<section>
-  <h2>Les six pièces</h2>
-
-  <div class="grid2">
-    <div class="card"><h4>1 · révision immuable</h4><p>Un graph publié est une donnée adressée par contenu : nœuds, schémas, issues, arêtes. Item et run épinglent leur révision ; un résultat n'est jamais interprété par une autre.</p></div>
-    <div class="card"><h4>2 · apply() unique</h4><p>Toute mutation d'état d'un item passe par une seule fonction transactionnelle. L'identité vient de la ligne chargée, jamais de l'appelant ; un rejet (<code>stale</code>, <code>superseded</code>) est lui-même une transition durable.</p></div>
-    <div class="card"><h4>3 · issues fermées</h4><p>Chaque nœud déclare son énuméré ; chaque issue a exactement une arête ; une issue non mappée est une faute. Rien d'autre ne route — pas de conversation, pas d'exception.</p></div>
-    <div class="card"><h4>4 · passerelle d'effets</h4><p>Intention et clé logique commises <em>avant</em> tout accès au monde. États : <code>applied / rejected / uncertain / possibly_sent</code>. « Inconnu » est un état de première classe, réconcilié en interrogeant la cible.</p></div>
-    <div class="card"><h4>5 · baux et fencing</h4><p>Chaque run tient un bail ; l'expiration révoque l'<em>autorité</em> (annulation, terminaison, quarantaine du workspace), pas seulement l'acceptation du résultat. Le jeton se compare par égalité.</p></div>
-    <div class="card"><h4>6 · terminaison</h4><p>Sous-graph non-escalade acyclique + budget d'escalade fini que rien ne régénère + deadlines partout ⇒ tout item termine. C'est la garantie qui distingue un rail d'un tableau de suivi. Les tentatives par nœud sont un autre compteur : un amortisseur local, remis à zéro pour le passage qu'ouvre un <code>retry</code> humain — jamais le budget d'escalade.</p></div>
-  </div>
-
-  <pre><code>apply(run_id, submitted):
-  atomically:
-    run  ← node_run[run_id] FOR UPDATE       <span class="cm">— l'identité vient de la ligne</span>
-    item ← work_item[run.item_id] FOR UPDATE
-    if run.fence ≠ item.fence                → record(superseded); return
-    if run.expected_version ≠ item.version   → record(stale); return
-    outcome ← validate(submitted, run.schema) or KERNEL(invalid_result)
-    edge ← transitions[item.revision, item.state, run.node, outcome]
-    guard_boundaries(edge)                    <span class="cm">— voir les quatre gardes</span>
-    append_event ; item.state ← edge.target ; item.version += 1
-    enqueue_intents(edge.effects)             <span class="cm">— exécutés hors txn, par la passerelle</span></code></pre>
+<section id="blocs">
+<h2>Les six types de blocs</h2>
+<div class="tablewrap"><table><thead><tr><th scope="col">Type</th><th scope="col">Implémentation actuelle</th></tr></thead><tbody><tr><td>FETCH</td><td>Matérialisation simulée de preuves dans le workspace.</td></tr><tr><td>JUDGE</td><td>Réponse simulée, exécution configurée, ou sélection de finalistes.</td></tr><tr><td>ACT</td><td>Checkpoint simulé ou exécution configurée dans le workspace.</td></tr><tr><td>CHECK</td><td>Verdict simulé ou exécution configurée pour produire une issue de contrôle.</td></tr><tr><td>EFFECT</td><td>Démonstration de réconciliation avec une outbox locale et une intention en base.</td></tr><tr><td>WAIT</td><td>Question durable armée par le noyau ; réponse ou expiration traitée par le worker.</td></tr></tbody></table></div><p>ACT, CHECK et JUDGE acceptent une exécution <code>agent</code> ou <code>command</code>. Le type du bloc ne constitue pas une sandbox de sécurité. <a href="https://github.com/Acid3croco/graphatom/blob/main/src/graphatom/blocks.py">Blocs livrés</a>.</p>
 </section>
-
-<section>
-  <h2>Le cycle de vie d'un nœud</h2>
-  <p>Comment un item change de nœud — validé par le crash-test du milestone 1. Trois temps, dont un seul hors transaction :</p>
-
-  <div class="tablewrap">
-    <table>
-      <thead><tr><th>Temps</th><th>Transactionnel ?</th><th>Ce qui se passe</th></tr></thead>
-      <tbody>
-        <tr><td><code>claim()</code></td><td>oui</td><td>Réservation : un run est créé, le fence de l'item est incrémenté, la version courante est épinglée (<code>expected_version</code>), un bail est posé. Refusé si l'item est terminal, en WAIT, ou déjà réservé.</td></tr>
-        <tr><td>exécution du bloc</td><td><strong>non</strong></td><td>Le bloc travaille dans son workspace, aussi longtemps que le bail tient. Il peut crasher, ralentir, être tué : rien de ce qu'il fait n'engage l'item.</td></tr>
-        <tr><td><code>apply(résultat)</code></td><td>oui</td><td>Validation de l'issue, comparaison fence/version, routage par l'arête déclarée, <code>version += 1</code>, événement journalisé. Un rejet (<code>superseded</code>, <code>stale</code>) est classé sur le run, l'item n'a pas bougé.</td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <p>Trois déclencheurs, et seulement trois, font bouger un item : le <strong>résultat d'un run</strong> (apply), une <strong>réponse humaine ou une deadline</strong> (apply_item — transition sans run), et le <strong>faucheur</strong> (bail expiré → fence incrémenté, run classé <code>faulted</code>, issue <code>crashed</code> routée comme n'importe quelle autre). Une question de WAIT est armée <em>dans la même transaction</em> que l'entrée dans l'état WAIT — pas de réveil perdu possible. Tuer l'ordonnanceur en plein vol traverse ce cycle sans le casser : c'est un cas nominal, pas une panne.</p>
+<section id="noyau">
+<h2>Les règles du noyau</h2>
+<ul class="plain">
+<li><strong>Révision immuable.</strong> Le SHA-256 du bundle canonique identifie le graph publié. L’item reste sur sa révision.</li>
+<li><strong>Transitions transactionnelles.</strong> Le noyau réserve un run, exécute hors transaction, puis contrôle son fence, sa version et son résultat. Résultats, réponses et expirations utilisent le routage commun et le journal.</li>
+<li><strong>Issues fermées.</strong> Le résultat doit nommer une issue déclarée. Les erreurs mécaniques suivent <code>on_kernel</code>.</li>
+<li><strong>Baux.</strong> Un résultat révoqué ne peut plus déplacer l’item. Le faucheur et les groupes de processus prennent en charge les runs orphelins.</li>
+<li><strong>Budgets distincts.</strong> Le défaut est de trois tentatives par nœud et passage. Une réponse humaine sur un nœud d’escalade ouvre un nouveau passage. Le budget d’escalades ne se régénère pas ; une re-entrée le consomme, pas la première visite du passage. La deadline globale reste fixe.</li>
+<li><strong>Erreurs classées.</strong> <code>crashed</code>, <code>invalid_result</code> et <code>stalled</code> peuvent être retentés ; une panne déterministe répétée peut supprimer cette relance. <code>timed_out</code> et <code>starved</code> escaladent immédiatement.</li>
+</ul><p>La boucle d’une file, comme <code>deploy</code>, attend une ressource sans consommer d’escalade ; elle reste bornée par la deadline globale. Ces bornes sont traitées quand le worker tourne. <a href="https://github.com/Acid3croco/graphatom/blob/main/src/graphatom/kernel.py">Noyau</a> · <a href="https://github.com/Acid3croco/graphatom/blob/main/src/graphatom/routing.py">Routage</a> · <a href="https://github.com/Acid3croco/graphatom/blob/main/src/graphatom/reaper.py">Faucheur</a>.</p>
 </section>
-
-<section>
-  <h2>Les quatre gardes de frontière</h2>
-  <p>Un item est étanche à l'intérieur ; les incidents réels arrivent aux frontières — le temps, les autres items, les gens, sa propre lignée. Quatre gardes, chacune rangée là où elle s'exécute :</p>
-
-  <div class="tablewrap">
-    <table>
-      <thead><tr><th>Garde</th><th>Où elle s'exécute</th><th>Violation</th><th>Le bug évité</th></tr></thead>
-      <tbody>
-        <tr><td>fraîcheur</td><td><code>apply()</code>, à la reprise après un WAIT</td><td><code>stale</code></td><td>décision prise lundi sur la v42, exécutée vendredi alors que le monde est en v45</td></tr>
-        <tr><td>version de cible (If-Match)</td><td>passerelle d'effets, à l'émission</td><td><code>conflict</code></td><td>deux items écrivent la même cible, deux « applied ✓ », l'un a écrasé l'autre en silence</td></tr>
-        <tr><td>capacité humaine</td><td>publication du graph</td><td><code>unbacked</code></td><td>un graph réserve l'équipe sécurité sans son accord → rubber-stamp ou expiration de masse</td></tr>
-        <tr><td>budget de lignée</td><td>admission d'une occurrence</td><td><code>exhausted</code></td><td>item épuisé → clôture → ré-admission du même sujet avec un budget neuf, à l'infini</td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <p>Deux règles complètent les gardes. Un <strong>constat d'opérateur</strong> — « j'ai vérifié la cible, voici son état » — est un événement journalisé de première classe, jamais un UPDATE direct : c'est la seule façon de lever un <code>uncertain</code>. Et aucun nœud d'observation ne peut lire la base du runner lui-même — c'est une jointure déguisée, refusée à la validation.</p>
+<section id="agents">
+<h2>Agents, commandes et candidats</h2>
+<p>Le contrat explicite est <code>config.execution.kind</code> : <code>agent</code> pour une CLI de modèle, <code>command</code> pour du shell. Une commande déclare <code>execution.cmd</code>. Un agent déclare <code>config.agent.prompt</code> et hérite séparément de la CLI, du modèle et de l’effort du graph. Les adaptateurs livrés sont Claude, Codex et OpenCode.</p>
+<p>L’agent reçoit <code>prompt.md</code>. Toute exécution produit <code>outcome.json</code> dans son workspace ; c’est son issue qui route, pas le code de sortie shell. <code>usage.json</code> est facultatif. Les agents laissent une passation, sauf désactivation explicite. La commande effective, les logs et les événements restent consultables par tentative.</p>
+<p>Le fan-out multiplie les candidats d’un même nœud, sans créer plusieurs états d’item. La borne est de huit candidats. Dans <code>code-task</code>, trois variantes courent : Luna medium, Sol high et OpenCode avec le modèle gratuit configuré. <code>keep_n</code> garde au plus deux finalistes ; <code>judge</code> choisit un élu. Un seul finaliste ne demande pas d’appel de jugement.</p>
+<p>Les candidats ont leurs worktrees et leurs preuves. Leurs résultats sont réduits avant le passage au nœud suivant. Les CLI et leurs accès doivent être installés sur l’hôte du worker ; les noms de modèles sont des réglages du bundle. <a href="https://github.com/Acid3croco/graphatom/blob/main/examples/code-task.json">Profil actuel</a> · <a href="https://github.com/Acid3croco/graphatom/blob/main/src/graphatom/executors.py">Exécuteurs</a> · <a href="https://github.com/Acid3croco/graphatom/blob/main/src/graphatom/reduction.py">Réduction</a>.</p>
 </section>
-
-<section>
-  <h2>La persistance</h2>
-  <pre><code>graph_revision(id, content_hash, bundle)
-subject(id, graph, subject_key, lineage_budget, UNIQUE(graph, subject_key))
-work_item(id, subject_id, generation, revision, state, version, fence,
-          cycle, UNIQUE(subject_id, generation))
-node_run(id, item_id, node, cycle, attempt, status, fence, expected_version,
-         lease_expires_at, outcome, result_ref,
-         UNIQUE(item_id, node, cycle, attempt))
-event(item_id, item_version, edge, run_id, PRIMARY KEY(item_id, item_version))
-effect(op_id, item_id, logical_key, target_uri, expected_target_version,
-       intent_hash, observation, UNIQUE(target_uri, logical_key))
-artifact(id, sha256, bytes, media_type)</code></pre>
-  <p>Sept tables. Le <code>subject</code> est durable, le <code>work_item</code> en est une occurrence numérotée — la déduplication est une politique explicite, pas un effet de bord d'un index. Rien de volumineux en base : les artefacts vivent dans un magasin adressé par contenu.</p>
+<section id="persistance">
+<h2>La persistance réelle</h2>
+<div class="tablewrap"><table><thead><tr><th scope="col">Table</th><th scope="col">Rôle</th></tr></thead><tbody><tr><td>graph_revision</td><td>Bundle JSON et date de publication.</td></tr><tr><td>subject</td><td>Sujet durable, titre et budget de ré-admission.</td></tr><tr><td>work_item</td><td>Occurrence : état, révision, version, fence, passage et budgets.</td></tr><tr><td>node_run</td><td>Tentative et candidat, bail, résultat JSON et statut.</td></tr><tr><td>event</td><td>Transitions ordonnées par version de l’item.</td></tr><tr><td>effect</td><td>Intention, clé logique, cible et observation.</td></tr><tr><td>question</td><td>Options, responsable, deadline et réponse attribuée.</td></tr><tr><td>heartbeat</td><td>Battements du worker et du canal GitHub, identité du worker.</td></tr></tbody></table></div><p>À ces huit tables durables s’ajoute <code>database_incarnation</code>, une table <code>UNLOGGED</code> qui aide à détecter une reprise PostgreSQL après crash. Les fichiers vivent dans <code>data/item-&lt;id&gt;/</code> et les worktrees ; il n’y a pas de table <code>artifact</code> ni de magasin générique adressé par contenu. <a href="https://github.com/Acid3croco/graphatom/blob/main/schema.sql">Schéma complet</a>.</p>
 </section>
-
-<section>
-  <h2>Honnêteté sur la garantie</h2>
-  <div class="callout warn">
-    <span class="tag">Pas d'exactement-une-fois</span>
-    <p>La passerelle fournit l'au-moins-une-fois avec réconciliation, et l'idempotence effective seulement quand la cible sait dédupliquer par clé. Là où elle ne le sait pas, la réponse honnête est un état ambigu visible et une reprise en main humaine — pas une promesse.</p>
-  </div>
-  <div class="callout">
-    <span class="tag">Ce que la déclaration est vraiment</span>
-    <p>Ce n'est pas un langage de workflow : le comportement vit dans les blocs, les schémas et les gestionnaires d'effets — du code. La déclaration est de la configuration au-dessus d'une interface de blocs typée. Elle reste défendable à une condition : rester étroite. Le jour où on y ajoute expressions et conditions arbitraires, un vrai programme typé aurait été supérieur.</p>
-  </div>
-  <div class="callout">
-    <span class="tag">Fan-out de candidats, jamais de jointure</span>
-    <p>Un item n'est jamais sur deux nœuds à la fois : un seul état, une seule révision, une seule issue de nœud, et deux prédécesseurs actifs ne se rejoignent nulle part — la jointure reste refusée pour toujours. Ce qui peut se multiplier, ce sont les <em>runs</em> d'un même nœud : des candidats concurrents, qui ne se voient jamais, dont un seul survit. La réduction produit une seule issue avant que l'item n'avance — vu du noyau, un nœud en fan-out se comporte comme un nœud ordinaire.</p>
-  </div>
-  <div class="callout">
-    <span class="tag">Périmètre d'apply()</span>
-    <p>L'unicité d'<code>apply()</code> porte sur les mutations d'état d'un item. La réservation d'un run et la réconciliation d'un effet sont des transactions périphériques — mais toutes aboutissent à une transition <code>apply()</code>, et aucune ne route un item par un autre chemin.</p>
-  </div>
+<section id="exploitation">
+<h2>Application et limites de charge</h2>
+<p>Le Compose fournit PostgreSQL 17, la migration <code>init</code>, <code>github-sync</code>, le serveur <code>web</code> et le front Next.js. Le worker de vrais agents tourne sur l’hôte ; le scheduler conteneurisé est réservé au profil <code>stub</code>. Le front est accessible localement sur 8851, le canal web de secours sur 8850 et PostgreSQL sur 54322.</p>
+<p>Pour les agents, configurer <code>GRAPHATOM_AGENT_DSN</code> vers une instance où le rôle peut créer les bases jetables par item, et <code>GRAPHATOM_REPO_DIR</code> vers le clone de référence. Le guide détaille aussi le jeton GitHub, <code>GRAPHATOM_ANSWERERS</code>, le proxy et l’activation du worker. Reconstruire les conteneurs ne recharge pas le Python du worker hôte. <a href="https://github.com/Acid3croco/graphatom/blob/main/docker-compose.yml">Compose</a> · <a href="https://github.com/Acid3croco/graphatom/blob/main/README.md">Guide d’exploitation</a>.</p>
+<p>Une seule occurrence non terminale occupe la voie, y compris pendant la review. Les autres issues admissibles attendent sur GitHub. Les plafonds des runs valent par défaut <code>max(8, cœurs // 2)</code> au total et <code>max(8, plafond // 2)</code> par item ; <code>GRAPHATOM_MAX_RUNS</code> et <code>GRAPHATOM_MAX_RUNS_PER_ITEM</code> les remplacent. Une course est réservée entière ou attend.</p>
+<p>Les commandes lourdes utilisent <code>graphatom build-quota -- &lt;commande&gt;</code> : <code>max(1, cœurs // 6)</code> places par défaut, réglables par <code>GRAPHATOM_MAX_BUILDS</code>. Les verrous PostgreSQL de session rendent les places à la déconnexion ; l’attente conserve le bail.</p>
 </section>
-
-<section>
-  <h2>Hors du noyau — les modules</h2>
-  <p>Quatre sous-systèmes utiles, volontairement exclus du noyau. Chacun se branche sur le journal et les issues fermées ; aucun n'ajoute de concept au chemin d'entrée.</p>
-  <ul class="plain">
-    <li><strong>EVAL</strong> — mesure comparative, registre champion/challenger, distillation d'un juge coûteux en check déterministe.</li>
-    <li><strong>ADMIT</strong> — la porte d'admission pour le travail formulé par un humain : faits vérifiables plutôt que score de clarté.</li>
-    <li><strong>Dialogue durable</strong> — questions adressables, réponses typées, révisions immuables.</li>
-    <li><strong>Gouverneur de flotte</strong> — contre-pression, jitter sur les échéances, garde-fou du reaper : la congestion est un état de flotte, pas un échec d'item.</li>
-  </ul>
-  <p>Le raisonnement qui a conduit à cette forme — particules, forces d'interaction, douze trous de frontière — vit dans <code>archive/graph-runner-original.html</code>. C'est la dérivation, pas la spécification.</p>
+<section id="api">
+<h2>Les vues et l’API</h2>
+<div class="tablewrap"><table><thead><tr><th scope="col">Lecture</th><th scope="col">Contenu</th></tr></thead><tbody><tr><td>/api/items</td><td>Liste des items et liens GitHub.</td></tr><tr><td>/api/item/&lt;id&gt;</td><td>Item, graph, journal, runs, effets, questions, critères et fichiers.</td></tr><tr><td>/api/item/&lt;id&gt;/run/&lt;run&gt;/trace</td><td>Lecture incrémentale des événements, logs et commandes.</td></tr><tr><td>/api/questions</td><td>Questions ouvertes et jeton de réponse.</td></tr><tr><td>/api/heartbeat</td><td>Battements du rail et du canal GitHub.</td></tr><tr><td>/api/load</td><td>Runs et builds actifs, plafonds, max_active_items.</td></tr><tr><td>/api/graphs</td><td>Révisions publiées.</td></tr><tr><td>/api/graph/&lt;révision&gt;</td><td>Bundle complet de la révision.</td></tr></tbody></table></div><p><code>POST /answer</code> reçoit <code>question_id</code>, <code>option</code> et <code>token</code>. Il enregistre la réponse ; le worker route au tick suivant. Les vues affichent le battement pour signaler un rail arrêté. <a href="https://github.com/Acid3croco/graphatom/blob/main/src/graphatom/api.py">Routes et contrat JSON</a>.</p>
 </section>
-
-<div class="axiom">Généraliser le noyau, garder chaque graph — et ce document — petit et concret.</div>
-
-<footer>
-  révision immuable · apply() unique · issues fermées · passerelle d'effets · baux et fencing · terminaison structurelle · <a href="cas-usage.html">cas d'usage pilote</a> · <a href="pourquoi.html">pourquoi pas Temporal</a>
-</footer>
-
-</div>
+<section id="preuves">
+<h2>Vérifier le dépôt</h2>
+<pre><code>uv run python scripts/check.py        # train + core
+uv run python scripts/check.py train  # noyau, pannes et cycle complet
+uv run python scripts/check.py core   # preuves sans service partagé
+uv run python scripts/check.py ui     # build Next.js et portes DOM
+uv run python scripts/check.py full   # base, crash, concurrence, Docker
+uv run python scripts/check.py live   # vraie CLI OpenCode et réseau
+uv run python scripts/check.py rules  # qualité et couverture</code></pre>
+<p>Le runner vérifie que chaque test est classé et s’arrête au premier échec. <code>train</code> utilise un PostgreSQL Docker jetable. <code>ui</code> demande Node.js et npm ; la CI utilise Node 22. <code>full</code> ne remplace pas les autres groupes : les arguments sont composables. GitHub Actions lance <code>train</code>, <code>core</code>, <code>ui</code> et <code>rules</code> séparément.</p>
+<p><code>rules</code> exige notamment 100 % de couverture des lignes et branches Python, des fichiers de moins de 500 lignes, des complexités cyclomatique et cognitive inférieures à 22, et un CRAP inférieur à 25. Ce sont des seuils à mesurer, pas une preuve de réussite de chaque révision.</p>
+<p><a href="https://github.com/Acid3croco/graphatom/blob/main/scripts/check.py">Inventaire des preuves</a> · <a href="https://github.com/Acid3croco/graphatom/blob/main/scripts/rules.py">Seuils</a> · <a href="https://github.com/Acid3croco/graphatom/blob/main/.github/workflows/check.yml">CI</a> · <a href="https://github.com/Acid3croco/graphatom/blob/main/README.md">Compte rendu daté de la campagne de mutants</a>.</p>
+</section>
+<section id="limites">
+<h2>Ce qui reste une intention de conception</h2>
+<p>Le noyau contrôle les transitions. Il ne fournit pas une sandbox qui interdit à toute commande d’agir sur le réseau ou le dépôt. La livraison GitHub et le déploiement utilisent aussi des scripts spécialisés ; toute action externe ne passe donc pas par un gestionnaire EFFECT universel.</p>
+<p>Le schéma permet <code>uncertain</code> et le canal GitHub réconcilie ses commentaires. Il n’existe pas encore de contrat général If-Match, de contrôle générique de fraîcheur après WAIT, de réservation de capacité humaine, ni de commande universelle de constat d’opérateur.</p>
+<p>Notion, Coolify, EVAL, la distillation et un gouverneur de flotte ne sont pas des intégrations livrées. <a href="https://github.com/Acid3croco/graphatom/blob/main/DECOUPE.md">La découpe générale</a> reste une conception ; le cycle GitHub dispose déjà de <code>Depends-on:</code> et <code>split-close</code>. <a href="pourquoi.html">Lire les choix et limites</a>.</p>
+</section>
+<footer>Documentation vérifiée sur <a href="https://github.com/Acid3croco/graphatom/tree/411a709a9a86d2660347bc4eefea3d39fab8f33a">la révision 411a709</a>. Les liens de code suivent main. <a href="archive/graph-runner-original.html">Dérivation v1, historique</a>.</footer>
+</main>
 </body>
 </html>
